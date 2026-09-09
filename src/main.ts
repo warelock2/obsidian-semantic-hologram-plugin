@@ -1,114 +1,151 @@
-import {
-	Editor,
-	MarkdownView,
-	MarkdownFileInfo,
-	Modal,
-	Notice,
-	Plugin,
-} from 'obsidian';
-import {
-	DEFAULT_SETTINGS,
-	MyPluginSettings,
-	SampleSettingTab,
-} from './settings';
+import { ItemView, Notice, Plugin, WorkspaceLeaf } from 'obsidian';
+import { DEFAULT_SETTINGS, HologramMode, SemanticHologramSettings, SemanticHologramSettingTab } from './settings';
+import { SemanticHologramControlsView, VIEW_TYPE_HOLOGRAM_CONTROLS } from './controlsView';
+import { SemanticHologramView, VIEW_TYPE_HOLOGRAM } from './view';
 
-// Remember to rename these classes and interfaces!
-
-export default class MyPlugin extends Plugin {
-	settings!: MyPluginSettings;
+export default class SemanticHologramPlugin extends Plugin {
+	settings!: SemanticHologramSettings;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (_evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
-
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			},
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (
-				editor: Editor,
-				_ctx: MarkdownView | MarkdownFileInfo,
-			) => {
-				editor.replaceSelection('Sample editor command');
-			},
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView =
-					this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			},
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(activeDocument, 'click', (_evt: MouseEvent) => {
-			new Notice('Click');
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(
-			window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000),
+		this.registerView(
+			VIEW_TYPE_HOLOGRAM,
+			(leaf: WorkspaceLeaf) => new SemanticHologramView(leaf, this),
 		);
+		this.registerView(
+			VIEW_TYPE_HOLOGRAM_CONTROLS,
+			(leaf: WorkspaceLeaf) => new SemanticHologramControlsView(leaf, this),
+		);
+
+		this.addRibbonIcon('waypoints', 'Semantic Hologram', () => {
+			void this.activateView();
+		});
+
+		this.addCommand({
+			id: 'open-semantic-hologram',
+			name: 'Open Semantic Hologram graph',
+			callback: () => {
+				void this.activateView();
+			},
+		});
+
+		this.addCommand({
+			id: 'dump-graph-state',
+			name: 'Dump graph state (debug)',
+			callback: () => {
+				void this.dumpGraphState();
+			},
+		});
+
+		this.addCommand({
+			id: 'open-hologram-controls',
+			name: 'Show Hologram controls',
+			callback: () => {
+				void this.activateControlsView();
+			},
+		});
+
+		this.addSettingTab(new SemanticHologramSettingTab(this.app, this));
+
+		this.app.workspace.onLayoutReady(() => {
+			void this.activateControlsView();
+		});
+	}
+
+	getMode(): HologramMode {
+		return this.settings.hologramMode;
+	}
+
+	async setMode(mode: HologramMode): Promise<void> {
+		this.settings.hologramMode = mode;
+		await this.saveSettings();
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramView) {
+				v.setMode(mode);
+			}
+		}
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramControlsView) {
+				v.render();
+			}
+		}
+	}
+
+	async activateControlsView(): Promise<void> {
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS);
+		if (existing.length > 0) {
+			workspace.revealLeaf(existing[0]!);
+			return;
+		}
+		const leaf = workspace.getRightLeaf(false);
+		if (!leaf) {
+			return;
+		}
+		await leaf.setViewState({ type: VIEW_TYPE_HOLOGRAM_CONTROLS, active: true });
+		workspace.revealLeaf(leaf);
 	}
 
 	onunload() {}
+
+	private async dumpGraphState(): Promise<void> {
+		const view = this.app.workspace
+			.getLeavesOfType(VIEW_TYPE_HOLOGRAM)
+			.map((leaf) => leaf.view)
+			.find((v): v is SemanticHologramView => v instanceof SemanticHologramView);
+		if (!view) {
+			new Notice('Semantic Hologram: open the graph view first.');
+			return;
+		}
+		const path = await view.dumpGraphState();
+		new Notice(`Graph state written to ${path}`);
+	}
+
+	async activateView() {
+		const { workspace } = this.app;
+
+		// Reuse an existing hologram view, but only if it lives in the main
+		// workspace area (not the right sidebar). Otherwise close stale sidebar
+		// copies and open a fresh pane split from the active note.
+		const leaves = workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM);
+		const mainLeaf = leaves.find(
+			(leaf) => leaf.view instanceof SemanticHologramView && leaf.getRoot() === workspace.rootSplit,
+		);
+		if (mainLeaf) {
+			workspace.revealLeaf(mainLeaf);
+			return;
+		}
+
+		for (const leaf of leaves) {
+			if (leaf.view instanceof SemanticHologramView) {
+				leaf.detach();
+			}
+		}
+
+		let leaf: WorkspaceLeaf | null = workspace.getLeaf('split');
+		if (leaf && leaf.getRoot() !== workspace.rootSplit) {
+			leaf.detach();
+			leaf = workspace.getLeaf('tab');
+		}
+
+		if (leaf) {
+			await leaf.setViewState({ type: VIEW_TYPE_HOLOGRAM, active: true });
+			workspace.revealLeaf(leaf);
+		}
+	}
 
 	async loadSettings() {
 		this.settings = Object.assign(
 			{},
 			DEFAULT_SETTINGS,
-			(await this.loadData()) as Partial<MyPluginSettings>,
+			(await this.loadData()) as Partial<SemanticHologramSettings>,
 		);
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
 	}
 }

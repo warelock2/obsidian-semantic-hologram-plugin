@@ -1,18 +1,20 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
-import MyPlugin from './main';
+import type SemanticHologramPlugin from './main';
 
-export interface MyPluginSettings {
-	mySetting: string;
+export type HologramMode = '2d' | '3d';
+
+export interface SemanticHologramSettings {
+	hologramMode: HologramMode;
 }
 
-export const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default',
+export const DEFAULT_SETTINGS: SemanticHologramSettings = {
+	hologramMode: '2d',
 };
 
-export class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+export class SemanticHologramSettingTab extends PluginSettingTab {
+	plugin: SemanticHologramPlugin;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: SemanticHologramPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -23,16 +25,7 @@ export class SampleSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Settings #1')
-			.setDesc("It's a secret")
-			.addText((text) =>
-				text
-					.setPlaceholder('Enter your secret')
-					.setValue(this.plugin.settings.mySetting)
-					.onChange(async (value) => {
-						this.plugin.settings.mySetting = value;
-						await this.plugin.saveSettings();
-					}),
-			);
+			.setName('Semantic Hologram')
+			.setDesc('Graph rendering and glossary configuration will appear here.');
 	}
 }

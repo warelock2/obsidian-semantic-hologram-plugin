@@ -1,8 +1,76 @@
-/*
+.sh-view {
+	width: 100%;
+	height: 100%;
+	position: relative;
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.sh-graph-canvas {
+	width: 100%;
+	height: 100%;
+	display: block;
+	touch-action: none;
+	cursor: default;
+}
 
-If your plugin does not need CSS, delete this file.
+.sh-mode-banner {
+	position: absolute;
+	top: 8px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 2;
+	font-size: 11px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	opacity: 0.7;
+	pointer-events: none;
+}
 
-*/
+.sh-mode-banner.is-3d {
+	opacity: 0.9;
+}
+
+.sh-controls {
+	padding: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.sh-controls-header h4 {
+	margin: 0;
+}
+
+.sh-controls-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.sh-controls-label {
+	opacity: 0.8;
+}
+
+.sh-mode-toggle {
+	min-width: 56px;
+}
+
+.sh-controls-hint {
+	font-size: 12px;
+	opacity: 0.7;
+	line-height: 1.4;
+}
+
+.sh-controls-actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.sh-controls-footer {
+	margin-top: 4px;
+}
+
+.sh-controls-meta {
+	font-size: 11px;
+	opacity: 0.6;
+}

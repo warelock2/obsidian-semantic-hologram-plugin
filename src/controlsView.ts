@@ -46,6 +46,9 @@ export class SemanticHologramControlsView extends ItemView {
 		const header = contentEl.createDiv({ cls: 'sh-controls-header' });
 		header.createEl('h4', { text: 'Semantic Hologram' });
 
+		const helpHint = contentEl.createDiv({ cls: 'sh-controls-help-hint' });
+		helpHint.setText("Press 'h' for help");
+
 		const mode = this.plugin.settings.hologramMode;
 
 		const modeRow = contentEl.createDiv({ cls: 'sh-controls-row' });
@@ -59,6 +62,14 @@ export class SemanticHologramControlsView extends ItemView {
 			const next = mode === '2d' ? '3d' : '2d';
 			void this.plugin.setMode(next);
 			this.render();
+		});
+
+		const centerRow = contentEl.createDiv({ cls: 'sh-controls-row' });
+		centerRow.createEl('span', { text: 'Show rotation center', cls: 'sh-controls-label' });
+		const centerCheckbox = centerRow.createEl('input', { type: 'checkbox' }) as HTMLInputElement;
+		centerCheckbox.checked = this.plugin.settings.showRotationCenter;
+		centerCheckbox.addEventListener('change', () => {
+			void this.plugin.setShowRotationCenter(centerCheckbox.checked);
 		});
 
 		const hint = contentEl.createDiv({ cls: 'sh-controls-hint' });

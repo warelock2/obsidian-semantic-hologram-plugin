@@ -120,6 +120,7 @@ export class SemanticHologramView extends ItemView {
 	private labelColor = 'rgba(180, 180, 180, 0.75)';
 	private hoverIndex = -1;
 	private resizeObserver: ResizeObserver | null = null;
+	private autoRotating: 'off' | 'cw' | 'ccw' = 'off';
 	private rotX = 0;
 	private rotY = 0;
 	private rotZ = -Math.PI / 2;
@@ -397,6 +398,13 @@ export class SemanticHologramView extends ItemView {
 		makeBtn('Reset', () => this.resetView());
 		makeBtn('Center', () => this.centerSelectedOnOrigin());
 		makeBtn('Help', () => this.toggleHelp());
+		makeBtn('Auto-rotate', () => {
+			const nextMode: 'off' | 'cw' | 'ccw' =
+				this.autoRotating === 'off' ? 'cw' : this.autoRotating === 'cw' ? 'ccw' : 'off';
+			this.autoRotating = nextMode;
+			const label = nextMode === 'off' ? 'Rotation off' : nextMode === 'cw' ? 'CW rotation' : 'CCW rotation';
+			this.showToast(label);
+		});
 	}
 
 	private updateToolDock(): void {
@@ -649,11 +657,13 @@ export class SemanticHologramView extends ItemView {
 
 		this.nodes = nodes;
 		this.links = links;
+		console.log(`[SH] buildGraph: nodes=${nodes.length} links=${links.length} settled=${this.settled}`);
 		if (!incremental) {
 			this.settled = false;
 			this.settleCount = 0;
 			this.layoutFrames = 0;
 			this.selected.clear();
+			this.fitToView();
 		}
 	}
 
@@ -755,6 +765,11 @@ export class SemanticHologramView extends ItemView {
 			energy += node.vx * node.vx + node.vy * node.vy + (is3D ? node.vz * node.vz : 0);
 		}
 
+		if (this.autoRotating === 'ccw' && this.nodes.length > 0) {
+			this.rotY -= 0.01;
+		} else if (this.autoRotating === 'cw' && this.nodes.length > 0) {
+			this.rotY += 0.01;
+		}
 		if (!this.settled) {
 			this.layoutFrames++;
 			const avg = energy / Math.max(1, nodes.length);
@@ -829,6 +844,22 @@ export class SemanticHologramView extends ItemView {
 		}
 		const w = canvas.clientWidth;
 		const h = canvas.clientHeight;
+		// Pin rotation center to the node centroid so it doesn't shift between
+		// fitToView and draw().  originFollowView=false prevents draw() from
+		// overwriting rotCx/rotCy/rotCz every frame.
+		let cx = 0;
+		let cy = 0;
+		for (const node of this.nodes) {
+			cx += node.x;
+			cy += node.y;
+		}
+		cx /= this.nodes.length;
+		cy /= this.nodes.length;
+		this.rotCx = cx;
+		this.rotCy = cy;
+		this.rotCz = 0;
+		this.originFollowView = false;
+		// Bounding box in rotated space — uses the same rotC* that draw() will use.
 		let minX = Infinity;
 		let minY = Infinity;
 		let maxX = -Infinity;
@@ -851,7 +882,6 @@ export class SemanticHologramView extends ItemView {
 		}
 		const spanX = Math.max(1, maxX - minX);
 		const spanY = Math.max(1, maxY - minY);
-		// 8% margin on background on every side.
 		const m = 0.08;
 		this.viewScale = Math.min(
 			PHYS.zoomMax,
@@ -860,16 +890,9 @@ export class SemanticHologramView extends ItemView {
 				Math.min((w * (1 - 2 * m)) / spanX, (h * (1 - 2 * m)) / spanY),
 			),
 		);
-		// Center the content in the viewport.
-		const cx = (minX + maxX) / 2;
-		const cy = (minY + maxY) / 2;
-		this.viewX = cx - w / (2 * this.viewScale);
-		this.viewY = cy - h / (2 * this.viewScale);
-		this.originFollowView = true;
-		const c = this.viewCenterWorld();
-		this.rotCx = c.x;
-		this.rotCy = c.y;
-		this.rotCz = 0;
+		this.viewX = (minX + maxX) / 2 - w / (2 * this.viewScale);
+		this.viewY = (minY + maxY) / 2 - h / (2 * this.viewScale);
+		console.log(`[SH] fitToView: nodes=${this.nodes.length} canvas=${w}x${h} rotC=(${this.rotCx.toFixed(1)},${this.rotCy.toFixed(1)},${this.rotCz.toFixed(1)}) view=(${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}) scale=${this.viewScale.toFixed(3)}`);
 	}
 
 	private resetView(): void {
@@ -2114,6 +2137,14 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		if (e.ctrlKey || e.metaKey || e.altKey) {
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !e.repeat) {
+				e.preventDefault();
+				for (let i = 0; i < this.nodes.length; i++) {
+					this.selected.add(i);
+				}
+				this.showToast(`Selected all ${this.nodes.length} nodes`);
+				return;
+			}
 			return;
 		}
 		const target = e.target as HTMLElement | null;
@@ -2134,8 +2165,14 @@ export class SemanticHologramView extends ItemView {
 			this.centerSelectedOnOrigin();
 		} else if (key === 'f') {
 			this.fitToView();
-		} else if (key === 'r') {
+		} else if (key === 'r' && e.shiftKey) {
 			this.resetView();
+		} else if (key === 'r' && !e.repeat) {
+			const nextMode: 'off' | 'cw' | 'ccw' =
+				this.autoRotating === 'off' ? 'cw' : this.autoRotating === 'cw' ? 'ccw' : 'off';
+			this.autoRotating = nextMode;
+			const label = nextMode === 'off' ? 'Rotation off' : nextMode === 'cw' ? 'CW rotation' : 'CCW rotation';
+			this.showToast(label);
 		} else if (key === 's' && !e.repeat) {
 			this.selectMode = true;
 			this.selectDragOccurred = false;
@@ -2198,6 +2235,7 @@ export class SemanticHologramView extends ItemView {
 		this.rotCx = tx;
 		this.rotCy = ty;
 		this.rotCz = tz;
+		console.log(`[SH] centerSelectedOnOrigin: rotC=(${tx.toFixed(1)},${ty.toFixed(1)},${tz.toFixed(1)}) view=(${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}) scale=${this.viewScale.toFixed(3)}`);
 		this.autoFitCooldown = PHYS.fitCooldown;
 	}
 
@@ -2268,8 +2306,10 @@ export class SemanticHologramView extends ItemView {
 			'<div class="sh-help-title">Semantic Hologram</div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">h</span><span class="sh-help-desc">show / hide help</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">c</span><span class="sh-help-desc">center hovered node on rotation origin</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+a</span><span class="sh-help-desc">select all nodes</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">f</span><span class="sh-help-desc">fit graph to view</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">r</span><span class="sh-help-desc">reset (fit to view, rotation to 0)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">r</span><span class="sh-help-desc">cycle rotation: off → clockwise → counter-clockwise</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Shift+r</span><span class="sh-help-desc">reset (fit to view, rotation to 0)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">s</span><span class="sh-help-desc">hold: box/lasso select, tap: select hovered node</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">PrtSc</span><span class="sh-help-desc">copy screenshot to clipboard</span></div>' +
 			'<div class="sh-help-section">Mouse</div>' +

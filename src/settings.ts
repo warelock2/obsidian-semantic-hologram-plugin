@@ -282,8 +282,11 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 				info.createDiv({ cls: 'sh-glossary-desc' }).setText(nt.description);
 			}
 			const controls = row.createDiv({ cls: 'sh-glossary-controls' });
+			const dot = controls.createDiv({ cls: 'sh-glossary-color-dot' });
+			dot.style.background = nt.color;
 			addColorControl(controls, nt.color, (hex) => {
 				nt.color = `#${hex}`;
+				dot.style.background = nt.color;
 				void this.persist();
 			});
 			const toggle = controls.createEl('button', {
@@ -343,8 +346,11 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 				info.createDiv({ cls: 'sh-glossary-desc' }).setText(rt.description);
 			}
 			const controls = row.createDiv({ cls: 'sh-glossary-controls' });
+			const dot = controls.createDiv({ cls: 'sh-glossary-color-dot' });
+			dot.style.background = rt.color;
 			addColorControl(controls, rt.color, (hex) => {
 				rt.color = `#${hex}`;
+				dot.style.background = rt.color;
 				void this.persist();
 			});
 			const toggle = controls.createEl('button', {

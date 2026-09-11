@@ -13,6 +13,7 @@ import { syncIncomingRelationships } from './incoming';
 import { inScopePath, scanRelations } from './relations';
 import { RelationSuggest, relationGhostExtension } from './relationSuggest';
 import { ImportNoteModal } from './importNote';
+import { FolderPickModal } from './review';
 
 export default class SemanticHologramPlugin extends Plugin {
 	settings!: SemanticHologramSettings;
@@ -59,6 +60,14 @@ export default class SemanticHologramPlugin extends Plugin {
 					return;
 				}
 				modal.open();
+			},
+		});
+
+		this.addCommand({
+			id: 'bulk-import-zk-notes',
+			name: 'Bulk import zk notes and review connections',
+			callback: () => {
+				new FolderPickModal(this.app, this).open();
 			},
 		});
 

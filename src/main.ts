@@ -13,7 +13,8 @@ import { syncIncomingRelationships } from './incoming';
 import { inScopePath, scanRelations } from './relations';
 import { RelationSuggest, relationGhostExtension } from './relationSuggest';
 import { ImportNoteModal } from './importNote';
-import { FolderPickModal } from './review';
+import { FolderPickModal, ReviewConnectionsModal } from './review';
+import { auditHologramNodes, HologramAuditModal } from './audit';
 
 export default class SemanticHologramPlugin extends Plugin {
 	settings!: SemanticHologramSettings;
@@ -72,10 +73,27 @@ export default class SemanticHologramPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'review-all-connections',
+			name: 'Review connections for all hologram notes',
+			callback: () => {
+				const files = this.app.vault.getMarkdownFiles().filter((f) => this.isInScope(f.path));
+				new ReviewConnectionsModal(this.app, this, files).open();
+			},
+		});
+
+		this.addCommand({
 			id: 'refresh-incoming-relationships',
 			name: 'Refresh incoming relationships',
 			callback: () => {
 				void this.refreshIncomingRelationships();
+			},
+		});
+
+		this.addCommand({
+			id: 'audit-hologram-nodes',
+			name: 'Audit and fix hologram nodes',
+			callback: () => {
+				void this.auditNodes();
 			},
 		});
 
@@ -198,6 +216,11 @@ export default class SemanticHologramPlugin extends Plugin {
 		}
 		new Notice(`Updated incoming relationships in ${result.updated.length} hologram note(s).`);
 		await this.refreshGraphs();
+	}
+
+	async auditNodes(): Promise<void> {
+		const results = await auditHologramNodes(this.app.vault);
+		new HologramAuditModal(this.app, this, results).open();
 	}
 
 	async scanForInvalidHolograms(): Promise<void> {

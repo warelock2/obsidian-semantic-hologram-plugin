@@ -2,7 +2,7 @@ import { App, ButtonComponent, FuzzySuggestModal, Modal, Notice, Setting, TFolde
 import type { RelationEdge } from './relations';
 import { findIncomingSection, findRelationsSection, formatStrength, scanRelations } from './relations';
 import { HOLOGRAM_FOLDER } from './settings';
-import { ensureHologramFrontmatter, nextAvailablePath } from './importNote';
+import { ensureHologramContent, nextAvailablePath } from './importNote';
 import { syncIncomingRelationships } from './incoming';
 import type SemanticHologramPlugin from './main';
 
@@ -41,11 +41,16 @@ export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFi
 			failed.push(source.path);
 			continue;
 		}
-		content = ensureHologramFrontmatter(content);
+		const defaultType = plugin.settings.nodeTypes[0]?.id ?? 'concept';
+		content = ensureHologramContent(content, defaultType);
 		try {
-			const f = await vault.create(nextAvailablePath(vault, source.basename), content);
+			const p = nextAvailablePath(vault, source.basename);
+			console.log('Importing to:', p);
+			const f = await vault.create(p, content);
 			imported.push(f);
-		} catch {
+			console.log('Imported:', f.path);
+		} catch (e) {
+			console.error('Import failed for:', source.path, e);
 			failed.push(source.path);
 		}
 	}
@@ -230,6 +235,7 @@ export class ReviewConnectionsModal extends Modal {
 	private pairs: ReviewPair[] = [];
 	private mode: 'all' | 'random' = 'all';
 	private sampleSize = 20;
+	private skippedPairs = new Set<string>();
 
 	constructor(
 		app: App,
@@ -243,6 +249,10 @@ export class ReviewConnectionsModal extends Modal {
 		await this.reload();
 	}
 
+	private getPairKey(p: ReviewPair): string {
+		return [p.source.path, p.target.path].sort().join('|');
+	}
+
 	private async reload(): Promise<void> {
 		const files = this.plugin.app.vault.getMarkdownFiles();
 		const scan = await scanRelations(
@@ -252,12 +262,24 @@ export class ReviewConnectionsModal extends Modal {
 			this.plugin.knownRelIds(),
 			(path) => this.plugin.isInScope(path),
 		);
-		this.others = files
-			.filter((f) => this.plugin.isInScope(f.path) && !this.sources.some((s) => s.path === f.path))
-			.sort((a, b) => a.basename.localeCompare(b.basename));
+		const allInScope = files.filter((f) => this.plugin.isInScope(f.path));
+		this.others = allInScope.filter((f) => !this.sources.some((s) => s.path === f.path));
+		
+		const targets = this.others.length > 0 ? this.others : allInScope;
 		this.pairs = [];
+		const seenPairs = new Set<string>();
+
 		for (const src of this.sources) {
-			for (const tgt of this.others) {
+			for (const tgt of targets) {
+				if (src.path === tgt.path) {
+					continue;
+				}
+				const pairKey = [src.path, tgt.path].sort().join('|');
+				if (seenPairs.has(pairKey)) {
+					continue;
+				}
+				seenPairs.add(pairKey);
+
 				const edges = scan.edges.filter(
 					(e) =>
 						(e.source === src.path && e.target === tgt.path) ||
@@ -296,7 +318,7 @@ export class ReviewConnectionsModal extends Modal {
 		contentEl.createEl('h4', { text: 'Review connections' });
 		contentEl.createDiv({
 			cls: 'sh-review-sub',
-			text: `${this.sources.length} imported note(s) × ${this.others.length} other concept(s) = ${this.pairs.length} pair(s).`,
+			text: `${this.pairs.length} pair(s) to review.`,
 		});
 
 		const toolbar = contentEl.createDiv({ cls: 'sh-review-toolbar' });
@@ -341,40 +363,71 @@ export class ReviewConnectionsModal extends Modal {
 
 	private renderPairRow(list: HTMLElement, p: ReviewPair): void {
 		const row = list.createDiv({ cls: 'sh-review-row' });
+		const pairKey = this.getPairKey(p);
+		row.toggleClass('is-skipped', this.skippedPairs.has(pairKey));
+
+		// Checkbox for skipping
+		const skipCheck = row.createEl('input', { type: 'checkbox', cls: 'sh-review-skip' });
+		skipCheck.checked = this.skippedPairs.has(pairKey);
+		skipCheck.addEventListener('change', () => {
+			if (skipCheck.checked) this.skippedPairs.add(pairKey);
+			else this.skippedPairs.delete(pairKey);
+			row.toggleClass('is-skipped', skipCheck.checked);
+		});
+
 		const names = row.createDiv({ cls: 'sh-review-names' });
 		names.createSpan({ cls: 'sh-review-name', text: p.source.basename });
-		names.createSpan({ cls: 'sh-review-arrow', text: '↔' });
+		
+		const swapBtn = names.createEl('button', { text: '↔', cls: 'sh-review-swap' });
+		swapBtn.addEventListener('click', () => {
+			const tmp = p.source;
+			p.source = p.target;
+			p.target = tmp;
+			this.render();
+		});
+		
 		names.createSpan({ cls: 'sh-review-name', text: p.target.basename });
 
-		const badges = row.createDiv({ cls: 'sh-review-badges' });
-		if (p.edges.length === 0) {
-			badges.createSpan({ cls: 'sh-review-badge is-none', text: 'not connected' });
-		} else {
-			for (const e of p.edges) {
-				const forward = e.source === p.source.path && e.target === p.target.path;
-				const color = this.plugin.settings.relTypes.find((t) => t.id === e.relId)?.color ?? '#C0C0C0';
-				const badge = badges.createSpan({ cls: 'sh-review-badge' });
-				badge.style.borderColor = color;
-				badge.style.color = color;
-				badge.setText(`${forward ? '→' : '←'} ${e.relId} (${formatStrength(e.strength)})`);
-				const tail = forward ? p.source.path : p.target.path;
-				if (e.authoredFrom !== tail) {
-					const host = e.authoredFrom === p.source.path ? p.source.basename : p.target.basename;
-					badge.appendText(` [in ${host}]`);
-				}
-			}
+		const relationsList = row.createDiv({ cls: 'sh-review-relations' });
+		for (const e of p.edges) {
+			const relRow = relationsList.createDiv({ cls: 'sh-review-rel' });
+			const color = this.plugin.settings.relTypes.find((t) => t.id === e.relId)?.color ?? '#C0C0C0';
+			relRow.style.borderColor = color;
+			const forward = e.source === p.source.path && e.target === p.target.path;
+			relRow.createSpan({ text: `${forward ? '→' : '←'} ${e.relId} (${formatStrength(e.strength)})` });
+			
+			const del = relRow.createEl('button', { text: '✕', cls: 'sh-review-del' });
+			del.addEventListener('click', () => {
+				void this.onDeleteEdge(e);
+			});
 		}
 
-		const actions = row.createDiv({ cls: 'sh-review-actions' });
-		const add = actions.createEl('button', { text: 'Add', cls: 'mod-cta' });
-		add.addEventListener('click', () => {
-			new RelationEditModal(this.app, this.plugin, p, (req) => this.onAdd(p, req)).open();
+		const addForm = row.createDiv({ cls: 'sh-review-add-form' });
+		const enabled = this.plugin.settings.relTypes.filter((t) => t.enabled);
+		const relTypes = enabled.length > 0 ? enabled : this.plugin.settings.relTypes;
+		
+		const dropdown = addForm.createEl('select');
+		for (const t of relTypes) dropdown.createEl('option', { value: t.id, text: t.id });
+		
+		const strength = addForm.createEl('input', { type: 'number', attr: { min: '0', max: '1', step: '0.1', value: '0.5' } });
+		
+		const addBtn = addForm.createEl('button', { text: 'Add' });
+		addBtn.addEventListener('click', () => {
+			const req: ReviewAddRequest = {
+				relId: dropdown.value,
+				strength: parseFloat(strength.value) || 0.5,
+				reversed: false // Simplified for now
+			};
+			void this.onAdd(p, req);
 		});
-		const del = actions.createEl('button', { text: 'Delete' });
-		del.disabled = p.edges.length === 0;
-		del.addEventListener('click', () => {
-			void this.onDelete(p);
-		});
+	}
+
+	private async onDeleteEdge(e: RelationEdge): Promise<void> {
+		const file = this.plugin.app.vault.getAbstractFileByPath(e.authoredFrom);
+		if (file instanceof TFile) {
+			await removeRelationFrom(this.plugin, file, e.raw);
+			await this.syncAndReload();
+		}
 	}
 
 	private async syncAndReload(): Promise<void> {
@@ -398,15 +451,6 @@ export class ReviewConnectionsModal extends Modal {
 		await this.syncAndReload();
 	}
 
-	private async onDelete(p: ReviewPair): Promise<void> {
-		for (const e of [...p.edges]) {
-			const file = this.plugin.app.vault.getAbstractFileByPath(e.authoredFrom);
-			if (file instanceof TFile) {
-				await removeRelationFrom(this.plugin, file, e.raw);
-			}
-		}
-		await this.syncAndReload();
-	}
 
 	onClose(): void {
 		this.contentEl.empty();

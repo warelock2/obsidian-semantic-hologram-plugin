@@ -4,7 +4,7 @@ import type SemanticHologramPlugin from './main';
 export type HologramMode = '2d' | '3d';
 export type HologramTool = 'navigate' | 'select' | 'rotate';
 
-export const HOLOGRAM_FOLDER = 'Holograms';
+export const HOLOGRAM_FOLDER = 'hologram';
 
 export interface NodeTypeEntry {
 	id: string;

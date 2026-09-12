@@ -3,16 +3,41 @@ import { HOLOGRAM_FOLDER } from './settings';
 import type SemanticHologramPlugin from './main';
 
 /** Ensure a note declares `hologram-node: true`, preserving existing frontmatter. */
-export function ensureHologramFrontmatter(content: string): string {
-	const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+export function ensureHologramContent(content: string, defaultNoteType = 'concept'): string {
+	const created = new Date().toISOString().slice(0, 10);
+	// 1. Ensure frontmatter
+	let res = content;
+	const m = res.match(/^---\r?\n([\s\S]*?)\r?\n---/);
 	if (m) {
-		const body = m[1]!;
-		if (/^hologram-node:\s*true/im.test(body)) {
-			return content;
+		let body = m[1]!;
+		let modified = false;
+		if (!/^hologram-node:\s*true/im.test(body)) {
+			body = `hologram-node: true\n${body}`;
+			modified = true;
 		}
-		return `---\nhologram-node: true\n${body}\n---${content.slice(m[0]!.length)}`;
+		if (!/^note-type:/im.test(body)) {
+			body = `${body}\nnote-type: ${defaultNoteType}`;
+			modified = true;
+		}
+		if (!/^created:/im.test(body)) {
+			body = `${body}\ncreated: ${created}`;
+			modified = true;
+		}
+		if (modified) {
+			res = `---\n${body.trim()}\n---${res.slice(m[0]!.length)}`;
+		}
+	} else {
+		res = `---\nhologram-node: true\nnote-type: ${defaultNoteType}\ncreated: ${created}\n---\n\n${res}`;
 	}
-	return `---\nhologram-node: true\n---\n\n${content}`;
+
+	// 2. Ensure sections
+	if (!/(^|\n)#{1,6}\s+Relations/i.test(res)) {
+		res = res.trimEnd() + '\n\n## Relations\n\n';
+	}
+	if (!/(^|\n)#{1,6}\s+Incoming\s+Relations/i.test(res)) {
+		res = res.trimEnd() + '\n\n## Incoming relationships\n\n';
+	}
+	return res;
 }
 
 /** Find a free `Holograms/<basename>.md` path, appending ` 2`, ` 3`, … on collision. */
@@ -75,7 +100,8 @@ export async function importNoteIntoHolograms(plugin: SemanticHologramPlugin, so
 		new Notice(`Could not read ${source.path}: ${String(e)}`);
 		return null;
 	}
-	content = ensureHologramFrontmatter(content);
+	const defaultType = plugin.settings.nodeTypes[0]?.id ?? 'concept';
+	content = ensureHologramContent(content, defaultType);
 	try {
 		const f = await vault.create(destPath, content);
 		await plugin.refreshGraphs();

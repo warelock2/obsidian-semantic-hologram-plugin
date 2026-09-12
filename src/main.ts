@@ -21,6 +21,7 @@ import { IncomingIndex } from './incomingIndex';
 export default class SemanticHologramPlugin extends Plugin {
 	settings!: SemanticHologramSettings;
 	incomingIndex!: IncomingIndex;
+	private ribbonIcon: HTMLElement | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -55,7 +56,7 @@ export default class SemanticHologramPlugin extends Plugin {
 			(leaf: WorkspaceLeaf) => new SemanticHologramControlsView(leaf, this),
 		);
 
-		this.addRibbonIcon('waypoints', 'Semantic Hologram', () => {
+		this.ribbonIcon = this.addRibbonIcon('waypoints', 'Semantic Hologram', () => {
 			void this.activateView();
 		});
 
@@ -189,6 +190,11 @@ export default class SemanticHologramPlugin extends Plugin {
 		await this.saveSettings();
 	}
 
+	async setHoverDepth(value: number): Promise<void> {
+		this.settings.hoverDepth = value;
+		await this.saveSettings();
+	}
+
 	async setMode(mode: HologramMode): Promise<void> {
 		this.settings.hologramMode = mode;
 		await this.saveSettings();
@@ -287,7 +293,14 @@ export default class SemanticHologramPlugin extends Plugin {
 		workspace.revealLeaf(leaf);
 	}
 
-	onunload() {}
+	onunload() {
+		this.app.workspace.detachLeavesOfType(VIEW_TYPE_HOLOGRAM);
+		this.app.workspace.detachLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS);
+		if (this.ribbonIcon) {
+			this.ribbonIcon.remove();
+			this.ribbonIcon = null;
+		}
+	}
 
 	private async dumpGraphState(): Promise<void> {
 		const view = this.app.workspace

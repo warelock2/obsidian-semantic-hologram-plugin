@@ -21,7 +21,7 @@ export class SemanticHologramControlsView extends ItemView {
 	}
 
 	getIcon(): string {
-		return 'waypoints';
+		return 'settings';
 	}
 
 	async onOpen(): Promise<void> {
@@ -70,6 +70,18 @@ export class SemanticHologramControlsView extends ItemView {
 		centerCheckbox.checked = this.plugin.settings.showRotationCenter;
 		centerCheckbox.addEventListener('change', () => {
 			void this.plugin.setShowRotationCenter(centerCheckbox.checked);
+		});
+
+		const depthRow = contentEl.createDiv({ cls: 'sh-controls-row' });
+		depthRow.createEl('span', { text: 'Hover depth', cls: 'sh-controls-label' });
+		const depthSlider = depthRow.createEl('input', {
+			type: 'range',
+			attr: { min: '0', max: '3', step: '1' },
+		}) as HTMLInputElement;
+		depthSlider.value = this.plugin.settings.hoverDepth.toString();
+		depthSlider.addEventListener('input', () => {
+			const depth = parseInt(depthSlider.value, 10);
+			void this.plugin.setHoverDepth(depth);
 		});
 
 		const hint = contentEl.createDiv({ cls: 'sh-controls-hint' });

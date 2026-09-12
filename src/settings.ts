@@ -29,6 +29,7 @@ export interface SemanticHologramSettings {
 	relTypes: RelTypeEntry[];
 	edgeMinLength: number;
 	edgeMaxLength: number;
+	hoverDepth: number;
 }
 
 export const PALETTE = [
@@ -56,6 +57,7 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	showRotationCenter: true,
 	edgeMinLength: 120,
 	edgeMaxLength: 280,
+	hoverDepth: 0,
 	nodeTypes: [
 		{ id: 'concept', name: 'Concept', color: '#7C6FF6', description: 'A single concept or idea.', enabled: true },
 		{ id: 'literature', name: 'Literature', color: '#4D9DE0', description: 'A note sourced from literature.', enabled: true },

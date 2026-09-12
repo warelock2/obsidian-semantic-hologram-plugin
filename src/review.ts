@@ -42,7 +42,7 @@ export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFi
 			continue;
 		}
 		const defaultType = plugin.settings.nodeTypes[0]?.id ?? 'concept';
-		content = ensureHologramContent(content, defaultType);
+		content = ensureHologramContent(content, defaultType, source, plugin);
 		try {
 			const p = nextAvailablePath(vault, source.basename);
 			console.log('Importing to:', p);
@@ -54,6 +54,7 @@ export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFi
 			failed.push(source.path);
 		}
 	}
+	await plugin.refreshIncomingRelationships();
 	await plugin.refreshGraphs();
 	if (imported.length > 0) {
 		new Notice(`Imported ${imported.length} note(s) into ${HOLOGRAM_FOLDER}/.`);
@@ -180,6 +181,13 @@ export class BulkImportModal extends Modal {
 			return;
 		}
 
+		this.contentEl.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				void this.runImport();
+			}
+		});
+
 		const list = contentEl.createDiv({ cls: 'sh-bulk-import-list' });
 		this.candidates.forEach((f) => {
 			const row = list.createDiv({ cls: 'sh-bulk-import-row' });
@@ -288,6 +296,12 @@ export class ReviewConnectionsModal extends Modal {
 				this.pairs.push({ source: src, target: tgt, edges });
 			}
 		}
+		this.pairs.sort((a, b) => {
+			const aSrc = a.source.basename.toLowerCase();
+			const bSrc = b.source.basename.toLowerCase();
+			if (aSrc !== bSrc) return aSrc.localeCompare(bSrc);
+			return a.target.basename.toLowerCase().localeCompare(b.target.basename.toLowerCase());
+		});
 		this.render();
 	}
 
@@ -363,64 +377,96 @@ export class ReviewConnectionsModal extends Modal {
 
 	private renderPairRow(list: HTMLElement, p: ReviewPair): void {
 		const row = list.createDiv({ cls: 'sh-review-row' });
-		const pairKey = this.getPairKey(p);
-		row.toggleClass('is-skipped', this.skippedPairs.has(pairKey));
+		
+		// Header row
+		const header = row.createDiv({ cls: 'sh-review-header' });
+		const names = header.createDiv({ cls: 'sh-review-names' });
+		
+		const leftName = names.createSpan({ cls: 'sh-review-name', text: p.source.basename, attr: { title: p.source.basename } });
+		leftName.style.justifySelf = 'center';
+		
+		const arrow = names.createSpan({ text: '→' });
+		arrow.style.justifySelf = 'center';
+		
+		const rightName = names.createSpan({ cls: 'sh-review-name', text: p.target.basename, attr: { title: p.target.basename } });
+		rightName.style.justifySelf = 'center';
 
-		// Checkbox for skipping
-		const skipCheck = row.createEl('input', { type: 'checkbox', cls: 'sh-review-skip' });
-		skipCheck.checked = this.skippedPairs.has(pairKey);
-		skipCheck.addEventListener('change', () => {
-			if (skipCheck.checked) this.skippedPairs.add(pairKey);
-			else this.skippedPairs.delete(pairKey);
-			row.toggleClass('is-skipped', skipCheck.checked);
+		const addBtn = header.createEl('button', { text: '+', cls: 'sh-review-btn sh-review-add-rel' });
+		addBtn.setAttribute('title', 'Add relationship');
+		addBtn.addEventListener('click', () => {
+			this.renderAddEdgeRow(relsContainer, p);
 		});
 
-		const names = row.createDiv({ cls: 'sh-review-names' });
-		names.createSpan({ cls: 'sh-review-name', text: p.source.basename });
-		
-		const swapBtn = names.createEl('button', { text: '↔', cls: 'sh-review-swap' });
-		swapBtn.addEventListener('click', () => {
-			const tmp = p.source;
-			p.source = p.target;
-			p.target = tmp;
-			this.render();
-		});
-		
-		names.createSpan({ cls: 'sh-review-name', text: p.target.basename });
-
-		const relationsList = row.createDiv({ cls: 'sh-review-relations' });
+		// Relations container
+		const relsContainer = row.createDiv({ cls: 'sh-review-rels-container' });
 		for (const e of p.edges) {
-			const relRow = relationsList.createDiv({ cls: 'sh-review-rel' });
-			const color = this.plugin.settings.relTypes.find((t) => t.id === e.relId)?.color ?? '#C0C0C0';
-			relRow.style.borderColor = color;
+			const relRow = relsContainer.createDiv({ cls: 'sh-review-rel-row' });
 			const forward = e.source === p.source.path && e.target === p.target.path;
-			relRow.createSpan({ text: `${forward ? '→' : '←'} ${e.relId} (${formatStrength(e.strength)})` });
 			
-			const del = relRow.createEl('button', { text: '✕', cls: 'sh-review-del' });
+			const typeSpan = relRow.createSpan({ cls: 'sh-review-rel-type', text: `${e.relId} (${formatStrength(e.strength)})` });
+			typeSpan.style.flex = '1';
+			typeSpan.style.textAlign = 'left';
+			
+			const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
+			controls.style.marginLeft = 'auto';
+			controls.style.display = 'flex';
+			controls.style.gap = '4px';
+
+			const toggle = controls.createEl('button', { text: forward ? '→' : '←', cls: 'sh-review-btn sh-review-rel-toggle' });
+			toggle.setAttribute('title', 'Toggle direction (left/right)');
+			toggle.addEventListener('click', () => {
+				void this.onDeleteEdge(e).then(() => {
+					void this.onAdd(p, { relId: e.relId, strength: e.strength, reversed: !e.reversed });
+				});
+			});
+
+			const del = controls.createEl('button', { text: '✕', cls: 'sh-review-btn sh-review-rel-del' });
+			del.setAttribute('title', 'Delete relationship');
 			del.addEventListener('click', () => {
 				void this.onDeleteEdge(e);
 			});
 		}
+	}
 
-		const addForm = row.createDiv({ cls: 'sh-review-add-form' });
+	private renderAddEdgeRow(container: HTMLElement, p: ReviewPair) {
+		const relRow = container.createDiv({ cls: 'sh-review-rel-row' });
+		
 		const enabled = this.plugin.settings.relTypes.filter((t) => t.enabled);
 		const relTypes = enabled.length > 0 ? enabled : this.plugin.settings.relTypes;
 		
-		const dropdown = addForm.createEl('select');
+		const dropdown = relRow.createEl('select');
+		dropdown.style.marginRight = '8px';
 		for (const t of relTypes) dropdown.createEl('option', { value: t.id, text: t.id });
 		
-		const strength = addForm.createEl('input', { type: 'number', attr: { min: '0', max: '1', step: '0.1', value: '0.5' } });
-		
-		const addBtn = addForm.createEl('button', { text: 'Add' });
-		addBtn.addEventListener('click', () => {
+		const strengthInput = relRow.createEl('input', { 
+			type: 'number', 
+			attr: { min: '0', max: '1', step: '0.1', value: '0.5', title: 'Strength' } 
+		});
+		strengthInput.style.width = '60px';
+
+		const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
+		controls.style.marginLeft = 'auto';
+		controls.style.display = 'flex';
+		controls.style.gap = '4px';
+
+		const saveBtn = controls.createEl('button', { text: '✓', cls: 'sh-review-btn sh-review-save-btn' });
+		saveBtn.addEventListener('click', () => {
 			const req: ReviewAddRequest = {
 				relId: dropdown.value,
-				strength: parseFloat(strength.value) || 0.5,
-				reversed: false // Simplified for now
+				strength: parseFloat(strengthInput.value) || 0.5,
+				reversed: false
 			};
 			void this.onAdd(p, req);
+			relRow.remove();
+		});
+		
+		const cancelBtn = controls.createEl('button', { text: '✕', cls: 'sh-review-btn sh-review-rel-del' });
+		cancelBtn.addEventListener('click', () => {
+			relRow.remove();
 		});
 	}
+
+
 
 	private async onDeleteEdge(e: RelationEdge): Promise<void> {
 		const file = this.plugin.app.vault.getAbstractFileByPath(e.authoredFrom);

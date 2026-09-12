@@ -1,9 +1,9 @@
-import { App, FuzzySuggestModal, Notice, TFile, Vault } from 'obsidian';
+import { App, FuzzySuggestModal, Modal, Notice, Setting, TFile, Vault } from 'obsidian';
 import { HOLOGRAM_FOLDER } from './settings';
 import type SemanticHologramPlugin from './main';
 
 /** Ensure a note declares `hologram-node: true`, preserving existing frontmatter. */
-export function ensureHologramContent(content: string, defaultNoteType = 'concept', source: TFile, plugin: SemanticHologramPlugin): string {
+export function ensureHologramContent(content: string, defaultNoteType = 'concept', source: TFile, plugin: SemanticHologramPlugin, hologramTag?: string): string {
 	const created = new Date().toISOString().slice(0, 10);
 	// 1. Ensure frontmatter
 	let res = content;
@@ -13,6 +13,13 @@ export function ensureHologramContent(content: string, defaultNoteType = 'concep
 		let modified = false;
 		if (!/^hologram-node:\s*true/im.test(body)) {
 			body = `hologram-node: true\n${body}`;
+			modified = true;
+		}
+		if (hologramTag && !/^hologram:/im.test(body)) {
+			body = `${body}\nhologram: [${hologramTag}]`;
+			modified = true;
+		} else if (hologramTag && /^hologram:/im.test(body)) {
+			body = body.replace(/^hologram:\s*\[(.*)\]/im, `hologram: [$1, ${hologramTag}]`);
 			modified = true;
 		}
 		if (!/^note-type:/im.test(body)) {
@@ -27,16 +34,14 @@ export function ensureHologramContent(content: string, defaultNoteType = 'concep
 			res = `---\n${body.trim()}\n---${res.slice(m[0].length)}`;
 		}
 	} else {
-		res = `---\nhologram-node: true\nnote-type: ${defaultNoteType}\ncreated: ${created}\n---\n\n${res}`;
+		res = `---\nhologram-node: true\nnote-type: ${defaultNoteType}\ncreated: ${created}\n${hologramTag ? `hologram: [${hologramTag}]` : ''}\n---\n\n${res}`;
 	}
 
 	// 2. Ensure sections
 	if (!/(^|\n)#{1,6}\s+Relations/i.test(res)) {
 		res = res.trimEnd() + '\n\n## Relations\n\n';
 	}
-	if (!/(^|\n)#{1,6}\s+Incoming\s+Relations/i.test(res)) {
-		res = res.trimEnd() + '\n\n## Incoming relationships\n\n';
-	}
+	// Removed hard-coded incoming relationships header insertion, as it is now dynamically rendered.
 
 	return injectWikilinksAsRelations(res, source, plugin);
 }
@@ -89,8 +94,8 @@ export function injectWikilinksAsRelations(content: string, source: TFile, plugi
 
 	while ((match = wikilinkRegex.exec(newBodyContent)) !== null) {
 		const target = match[1]?.trim();
-		// Get target path via metadata cache if possible, to compare with current file path
-		const targetFile = plugin.app.metadataCache.getFirstLinkpathDest(target ?? '', '');
+		// Get target path via metadata cache, using source.path for proper disambiguation
+		const targetFile = plugin.app.metadataCache.getFirstLinkpathDest(target ?? '', source.path);
 		if (target && targetFile && targetFile.path !== source.path) {
 			targets.add(target);
 		}
@@ -155,12 +160,71 @@ export class ImportNoteModal extends FuzzySuggestModal<TFile> {
 	}
 
 	onChooseItem(item: TFile): void {
-		void importNoteIntoHolograms(this.plugin, item);
+		new HologramTagModal(this.app, (tag) => {
+			void importNoteIntoHolograms(this.plugin, item, tag);
+		}).open();
 	}
 }
 
+export class HologramTagModal extends Modal {
+	constructor(
+		app: App,
+		private onConfirm: (tag: string) => void,
+	) {
+		super(app);
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.createEl('h2', { text: 'Enter Hologram Tag' });
+		const setting = new Setting(contentEl);
+		let tag = '';
+		setting.setName('Tag').addText((text) =>
+			text.onChange((value) => {
+				tag = value;
+			})
+		);
+		setting.addButton((btn) =>
+			btn
+				.setButtonText('Import')
+				.setCta()
+				.onClick(() => {
+					this.onConfirm(tag);
+					this.close();
+				})
+		);
+	}
+
+	onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
+	}
+}
+
+/** Rewrites wikilinks to exclusively point to hologram-scoped notes. */
+export function rewriteLinks(plugin: SemanticHologramPlugin, content: string): string {
+    const vaultBasenames = new Set(plugin.app.vault.getMarkdownFiles().map(f => f.basename));
+
+	return content.replace(/\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?\]\]/g, (match, target, section, display) => {
+		const trimmedTarget = target.trim();
+        const basename = trimmedTarget.split('/').pop()!;
+
+        if (trimmedTarget.startsWith(HOLOGRAM_FOLDER + '/')) {
+            return match;
+        }
+
+        if (vaultBasenames.has(basename)) {
+			const newDisplay = display || trimmedTarget;
+			const sectionPart = section ? `#${section}` : '';
+			return `[[${HOLOGRAM_FOLDER}/${basename}${sectionPart}|${newDisplay}]]`;
+		}
+		
+		return match;
+	});
+}
+
 /** Copy a note into `Holograms/`, marking it as a hologram node, then rebuild the graph. */
-export async function importNoteIntoHolograms(plugin: SemanticHologramPlugin, source: TFile): Promise<TFile | null> {
+export async function importNoteIntoHolograms(plugin: SemanticHologramPlugin, source: TFile, hologramTag: string): Promise<TFile | null> {
 	const vault = plugin.app.vault;
 	if (plugin.isInScope(source.path)) {
 		new Notice('This note is already in the hologram scope.');
@@ -173,18 +237,37 @@ export async function importNoteIntoHolograms(plugin: SemanticHologramPlugin, so
 	} catch {
 		// Folder already exists.
 	}
-	const destPath = nextAvailablePath(vault, source.basename);
-	let content = '';
+	const destPath = `${HOLOGRAM_FOLDER}/${source.basename}.md`;
+	let newContent = '';
 	try {
-		content = await vault.read(source);
+		newContent = await vault.read(source);
 	} catch (e) {
 		new Notice(`Could not read ${source.path}: ${String(e)}`);
 		return null;
 	}
+
+	let finalContent = '';
+	const existingFile = vault.getAbstractFileByPath(destPath);
+	if (existingFile instanceof TFile) {
+		const existingContent = await vault.read(existingFile);
+		// Simple concatenate: append new body to existing content
+		finalContent = existingContent + '\n\n' + newContent;
+	} else {
+		finalContent = newContent;
+	}
+
+	finalContent = rewriteLinks(plugin, finalContent);
 	const defaultType = plugin.settings.nodeTypes[0]?.id ?? 'concept';
-	content = ensureHologramContent(content, defaultType, source, plugin);
+	finalContent = ensureHologramContent(finalContent, defaultType, source, plugin, hologramTag);
+	
 	try {
-		const f = await vault.create(destPath, content);
+		let f: TFile;
+		if (existingFile instanceof TFile) {
+			await vault.modify(existingFile, finalContent);
+			f = existingFile;
+		} else {
+			f = await vault.create(destPath, finalContent);
+		}
 		await plugin.refreshGraphs();
 		new Notice(`Imported ${source.basename} into ${destPath}`);
 		return f;

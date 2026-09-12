@@ -16,11 +16,35 @@ import { ImportNoteModal } from './importNote';
 import { FolderPickModal, ReviewConnectionsModal } from './review';
 import { auditHologramNodes, HologramAuditModal } from './audit';
 
+import { IncomingIndex } from './incomingIndex';
+
 export default class SemanticHologramPlugin extends Plugin {
 	settings!: SemanticHologramSettings;
+	incomingIndex!: IncomingIndex;
 
 	async onload() {
 		await this.loadSettings();
+		this.incomingIndex = new IncomingIndex(this);
+		await this.incomingIndex.update();
+
+		this.registerEvent(this.app.vault.on('modify', () => { void this.incomingIndex.update(); }));
+		this.registerEvent(this.app.vault.on('create', () => { void this.incomingIndex.update(); }));
+		this.registerEvent(this.app.vault.on('delete', () => { void this.incomingIndex.update(); }));
+
+		this.registerMarkdownPostProcessor((el, ctx) => {
+			if (!this.isInScope(ctx.sourcePath)) return;
+			
+			console.log(`MarkdownPostProcessor: checking incoming for ${ctx.sourcePath}`);
+			const incoming = this.incomingIndex.getIncoming(ctx.sourcePath);
+			if (incoming.length === 0) return;
+
+			const container = el.createDiv({ cls: 'sh-incoming-render' });
+			container.createEl('h2', { text: 'Incoming relationships' });
+			const list = container.createEl('ul');
+			for (const edge of incoming) {
+				list.createEl('li', { text: `${edge.relId} from [[${edge.source}]] (${edge.strength})` });
+			}
+		});
 
 		this.registerView(
 			VIEW_TYPE_HOLOGRAM,

@@ -77,7 +77,7 @@ export class HologramAuditModal extends Modal {
 						const content = await this.app.vault.read(res.file);
 						// Use default type from settings or 'concept'
 						const defaultType = this.plugin.settings.nodeTypes[0]?.id ?? 'concept';
-						const fixed = ensureHologramContent(content, defaultType);
+						const fixed = ensureHologramContent(content, defaultType, res.file, this.plugin);
 						await this.app.vault.modify(res.file, fixed);
 					}
 					new Notice(`Fixed ${this.results.length} nodes.`);

@@ -246,8 +246,6 @@ export async function scanRelations(
 	const edges: RelationEdge[] = [];
 	const malformed: MalformedRelation[] = [];
 
-	const resolve = (name: string): string | null => metadataCache.getFirstLinkpathDest(name, '')?.path ?? null;
-
 	for (const f of files) {
 		if (!inScope(f.path)) {
 			continue;
@@ -263,6 +261,20 @@ export async function scanRelations(
 		if (!fm.hologramNode && !inScope(f.path)) {
 			continue;
 		}
+
+		const resolve = (name: string): string | null => {
+			const base = name.split('|').pop()!.split('/').pop()!.trim();
+			const holoPath = `hologram/${base}.md`;
+			const holo = files.find((file) => file.path === holoPath);
+			if (holo) return holo.path;
+			const dest = metadataCache.getFirstLinkpathDest(name, f.path);
+			if (dest) {
+				return dest.path;
+			}
+			const found = files.find((file) => file.basename.toLowerCase() === base.toLowerCase());
+			return found ? found.path : null;
+		};
+
 		const data = parseRelations(f.path, content, resolve, knownIds);
 		edges.push(...data.outgoing);
 		malformed.push(...data.malformed);

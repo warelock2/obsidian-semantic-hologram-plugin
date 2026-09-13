@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf } from 'obsidian';
+import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
 import type SemanticHologramPlugin from './main';
 import { SemanticHologramView, VIEW_TYPE_HOLOGRAM } from './view';
 
@@ -32,6 +32,18 @@ export class SemanticHologramControlsView extends ItemView {
 		this.registerEvent(
 			this.app.workspace.on('layout-change', () => this.render()),
 		);
+		this.registerEvent(
+			this.app.vault.on('modify', () => {
+				const slider = this.contentEl.querySelector('input[type="range"]') as HTMLInputElement;
+				if (slider && slider.value !== String(this.plugin.settings.maxDepth)) {
+					slider.value = String(this.plugin.settings.maxDepth);
+					const label = this.contentEl.querySelector('.sh-controls-label');
+					if (label) {
+						label.textContent = `Max Depth: ${this.plugin.settings.maxDepth}`;
+					}
+				}
+			})
+		);
 	}
 
 	onClose(): Promise<void> {
@@ -45,6 +57,13 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const header = contentEl.createDiv({ cls: 'sh-controls-header' });
 		header.createEl('h4', { text: 'Semantic Hologram' });
+		header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Open settings' } }, (btn) => {
+			setIcon(btn, 'settings');
+			btn.addEventListener('click', () => {
+				(this.app as any).setting.open();
+				(this.app as any).setting.openTabById(this.plugin.manifest.id);
+			});
+		});
 
 		const helpHint = contentEl.createDiv({ cls: 'sh-controls-help-hint' });
 		helpHint.setText("Press 'h' for help");
@@ -70,6 +89,21 @@ export class SemanticHologramControlsView extends ItemView {
 		centerCheckbox.checked = this.plugin.settings.showRotationCenter;
 		centerCheckbox.addEventListener('change', () => {
 			void this.plugin.setShowRotationCenter(centerCheckbox.checked);
+		});
+
+		const depthRow = contentEl.createDiv({ cls: 'sh-controls-row sh-controls-col' });
+		depthRow.createEl('span', { text: `Max Depth: ${this.plugin.settings.maxDepth}`, cls: 'sh-controls-label' });
+		const depthSlider = depthRow.createEl('input', {
+			type: 'range',
+			attr: { min: '0', max: '5', step: '1', value: String(this.plugin.settings.maxDepth) },
+		}) as HTMLInputElement;
+		depthSlider.addEventListener('input', () => {
+			this.plugin.settings.maxDepth = parseInt(depthSlider.value);
+			void this.plugin.saveSettings();
+			const label = depthRow.querySelector('.sh-controls-label');
+			if (label) {
+				label.textContent = `Max Depth: ${this.plugin.settings.maxDepth}`;
+			}
 		});
 
 		const hint = contentEl.createDiv({ cls: 'sh-controls-hint' });

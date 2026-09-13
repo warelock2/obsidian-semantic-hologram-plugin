@@ -1,8 +1,34 @@
 import { MetadataCache, TFile, Vault } from 'obsidian';
 import type { RelationEdge, RelationScan } from './relations';
-import { findIncomingSection, scanRelations } from './relations';
+import { findIncomingSection, formatStrength, scanRelations } from './relations';
+import { HOLOGRAM_FOLDER } from './settings';
 
 const INCOMING_HEADER_TEXT = '## Incoming relationships';
+
+const REL_VERBS: Record<string, string> = {
+	'logic/supports': 'supports',
+	'logic/contradicts': 'contradicts',
+	'structural/depends-on': 'depends on',
+	related: 'relates',
+};
+
+function relVerb(relId: string): string {
+	return REL_VERBS[relId] ?? relId;
+}
+
+/** Canonical link to a note path: hologram notes are folder-qualified. */
+function wikiLink(path: string): string {
+	const base = path.split('/').pop()?.replace(/\.md$/i, '') ?? path;
+	if (path.startsWith(`${HOLOGRAM_FOLDER}/`)) {
+		return `[[${HOLOGRAM_FOLDER}/${base}|${base}]]`;
+	}
+	return `[[${base}]]`;
+}
+
+/** Mirror line: `- (source note) relates (0.5)` on the target note's own section. */
+function formatIncomingLine(e: RelationEdge): string {
+	return `- (${wikiLink(e.source)}) ${relVerb(e.relId)} (${formatStrength(e.strength)})`;
+}
 
 export interface IncomingSyncResult {
 	updated: string[];
@@ -59,7 +85,7 @@ async function readSafe(f: TFile, vault: Vault): Promise<string> {
 function applyIncomingSection(content: string, edges: RelationEdge[]): string {
 	const lines = content.split(/\r?\n/);
 	const section = findIncomingSection(content);
-	const body = edges.map((e) => e.raw).sort();
+	const body = edges.map((e) => formatIncomingLine(e)).sort();
 
 	if (!section) {
 		if (body.length === 0) {

@@ -1107,6 +1107,35 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
+	private getDistances(start: number): Map<number, number> {
+		const distances = new Map<number, number>();
+		const queue: number[] = [start];
+		distances.set(start, 0);
+
+		// Build adjacency list
+		const adj = new Map<number, number[]>();
+		for (const l of this.links) {
+			if (!adj.has(l.a)) adj.set(l.a, []);
+			if (!adj.has(l.b)) adj.set(l.b, []);
+			adj.get(l.a)!.push(l.b);
+			adj.get(l.b)!.push(l.a);
+		}
+
+		while (queue.length > 0) {
+			const u = queue.shift()!;
+			const d = distances.get(u)!;
+			if (d >= this.plugin.settings.maxDepth) continue;
+
+			for (const v of adj.get(u) ?? []) {
+				if (!distances.has(v)) {
+					distances.set(v, d + 1);
+					queue.push(v);
+				}
+			}
+		}
+		return distances;
+	}
+
 	private draw(): void {
 		const ctx = this.ctx;
 		const canvas = this.canvas;
@@ -1127,6 +1156,15 @@ export class SemanticHologramView extends ItemView {
 			this.rotCz = c.z;
 		}
 
+		// Calculate highlighted nodes if hovering
+		const highlighted = new Set<number>();
+		if (this.hoverIndex >= 0 && this.plugin.settings.maxDepth > 0) {
+			const distances = this.getDistances(this.hoverIndex);
+			for (const nodeIdx of distances.keys()) {
+				highlighted.add(nodeIdx);
+			}
+		}
+
 		if (this.is3D) {
 			const R = this.worldR();
 			const rotated = this.nodes.map((n) => this.rotatePoint(n.x, n.y, n.z, this.rotCx, this.rotCy, this.rotCz));
@@ -1141,13 +1179,15 @@ export class SemanticHologramView extends ItemView {
 				const sx = this.toScreenX(p.x);
 				const sy = this.toScreenY(p.y);
 				const depth = (p.z + R) / (2 * R || 1);
-				const depthScale = 0.55 + depth * 0.9;
-				const r = Math.max(2, node.radius * this.viewScale * depthScale);
-				const alpha = 0.45 + depth * 0.55;
-				ctx.fillStyle =
-					node.pinned || node.selected || this.hoverIndex === i
+				const isHighlighted = this.hoverIndex === i || highlighted.has(i);
+				const isFaded = this.hoverIndex >= 0 && !isHighlighted;
+				const r = Math.max(2, node.radius * this.viewScale * (isHighlighted ? 1.5 : 1.0));
+				const alpha = isFaded ? 0.15 : ((node.pinned || node.selected || isHighlighted) ? 0.9 : (0.45 + depth * 0.55));
+				ctx.fillStyle = isFaded
+					? this.withAlpha(this.nodeColor, 0.15)
+					: ((node.pinned || node.selected || isHighlighted)
 						? this.nodeColor
-						: this.withAlpha(this.nodeColor, alpha);
+						: this.withAlpha(this.nodeColor, alpha));
 				if (node.pinned || node.selected) {
 					ctx.beginPath();
 					ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
@@ -1186,7 +1226,7 @@ export class SemanticHologramView extends ItemView {
 					this.toScreenY(rb.y),
 					this.nodeScreenRadius(b, rb, R),
 					l,
-					this.edgeStroke(l, sel),
+					this.edgeStroke(l, sel, highlighted),
 				);
 			}
 			this.drawLiveSelection();
@@ -1198,12 +1238,17 @@ export class SemanticHologramView extends ItemView {
 		ctx.textAlign = 'left';
 		ctx.textBaseline = 'middle';
 		for (const node of this.nodes) {
+			const i = this.nodes.indexOf(node);
 			const sx = this.toScreenX(node.x);
 			const sy = this.toScreenY(node.y);
-			const r = Math.max(3, node.radius * this.viewScale);
-			ctx.fillStyle = node.pinned || node.selected || this.hoverIndex === this.nodes.indexOf(node)
-				? this.nodeColor
-				: this.withAlpha(this.nodeColor, 0.92);
+			const isHighlighted = this.hoverIndex === i || highlighted.has(i);
+			const isFaded = this.hoverIndex >= 0 && !isHighlighted;
+			const r = Math.max(3, node.radius * this.viewScale * (isHighlighted ? 1.5 : 1.0));
+			ctx.fillStyle = isFaded
+				? this.withAlpha(this.nodeColor, 0.15)
+				: (node.pinned || node.selected || isHighlighted
+					? this.nodeColor
+					: this.withAlpha(this.nodeColor, 0.92));
 			if (node.pinned || node.selected) {
 				ctx.beginPath();
 				ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
@@ -1238,7 +1283,8 @@ export class SemanticHologramView extends ItemView {
 				this.toScreenY(b.y),
 				this.nodeScreenRadius(b, b, 1),
 				l,
-				this.edgeStroke(l, sel),
+					this.edgeStroke(l, sel, highlighted),
+
 			);
 		}
 		this.drawLiveSelection();
@@ -1250,19 +1296,22 @@ export class SemanticHologramView extends ItemView {
 	private nodeScreenRadius(node: GraphNode, p: { x: number; y: number; z: number }, R: number): number {
 		if (this.is3D) {
 			const depth = (p.z + R) / (2 * R || 1);
-			return Math.max(2, node.radius * this.viewScale * (0.55 + depth * 0.9));
+			return Math.max(2, node.radius * this.viewScale * (this.plugin.settings.depthBase + depth * 0.9));
 		}
 		return Math.max(3, node.radius * this.viewScale);
 	}
 
-	private edgeStroke(link: GraphLink, selCount: number): string {
-		if (selCount === 0) {
-			return link.edgeColor;
+	private edgeStroke(link: GraphLink, selCount: number, highlightedNodes?: Set<number>): string {
+		const isEdgeHighlighted = highlightedNodes && (highlightedNodes.has(link.a) || highlightedNodes.has(link.b));
+		const isFaded = highlightedNodes && highlightedNodes.size > 0 && !isEdgeHighlighted;
+
+		if (isFaded) {
+			return this.withAlpha(link.edgeColor, 0.1);
 		}
 		if (selCount === 1) {
 			return this.withAlpha(link.edgeColor, 0.35);
 		}
-		return this.withAlpha(link.edgeColor, 0.7);
+		return link.edgeColor;
 	}
 
 	private strokeArrowLine(
@@ -2366,6 +2415,16 @@ export class SemanticHologramView extends ItemView {
 		const sx = e.clientX - rect.left;
 		const sy = e.clientY - rect.top;
 		const dy = Math.max(-100, Math.min(100, e.deltaY));
+
+		// If hovering over a node, change max depth instead of zooming
+		if (this.hoverIndex >= 0) {
+			const delta = dy > 0 ? -1 : 1;
+			const newDepth = Math.max(0, Math.min(5, this.plugin.settings.maxDepth + delta));
+			void this.plugin.setMaxDepth(newDepth);
+			this.showToast(`Max Depth: ${newDepth}`);
+			return;
+		}
+
 		const factor = Math.exp(-dy * PHYS.zoomSpeed);
 		const worldX = this.toWorldX(sx);
 		const worldY = this.toWorldY(sy);
@@ -2390,7 +2449,7 @@ export class SemanticHologramView extends ItemView {
 				const sx = this.toScreenX(r.x);
 				const sy = this.toScreenY(r.y);
 				const depth = (r.z + this.worldR()) / (2 * this.worldR() || 1);
-				const depthScale = 0.55 + depth * 0.9;
+				const depthScale = this.plugin.settings.depthBase + depth * 0.9;
 				const rad = Math.max(2, node.radius * this.viewScale * depthScale);
 				const sd = Math.hypot(sx - x, sy - y);
 				if (sd < rad + 6 && sd < bestD) {

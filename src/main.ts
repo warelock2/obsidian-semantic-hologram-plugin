@@ -12,8 +12,10 @@ import { SemanticHologramView, VIEW_TYPE_HOLOGRAM } from './view';
 import { syncIncomingRelationships } from './incoming';
 import { inScopePath, scanRelations } from './relations';
 import { RelationSuggest, relationGhostExtension } from './relationSuggest';
-import { ImportNoteModal } from './importNote';
-import { FolderPickModal, ReviewConnectionsModal } from './review';
+import { ReviewConnectionsView, VIEW_TYPE_REVIEW_CONNECTIONS } from './reviewView';
+import { AuditConnectionsView, VIEW_TYPE_AUDIT_CONNECTIONS } from './auditView';
+import { ImportNoteModal, importNoteIntoHolograms } from './importNote';
+import { FolderPickModal } from './review';
 import { auditHologramNodes, HologramAuditModal } from './audit';
 
 export default class SemanticHologramPlugin extends Plugin {
@@ -30,9 +32,31 @@ export default class SemanticHologramPlugin extends Plugin {
 			VIEW_TYPE_HOLOGRAM_CONTROLS,
 			(leaf: WorkspaceLeaf) => new SemanticHologramControlsView(leaf, this),
 		);
+		this.registerView(
+			VIEW_TYPE_REVIEW_CONNECTIONS,
+			(leaf: WorkspaceLeaf) => new ReviewConnectionsView(leaf, this),
+		);
+		this.registerView(
+			VIEW_TYPE_AUDIT_CONNECTIONS,
+			(leaf: WorkspaceLeaf) => new AuditConnectionsView(leaf, this),
+		);
 
 		this.addRibbonIcon('waypoints', 'Semantic Hologram', () => {
 			void this.activateView();
+		});
+
+		this.addCommand({
+			id: 'test-import-specific-note',
+			name: 'Test import specific note',
+			callback: async () => {
+				const sourceFile = this.app.vault.getAbstractFileByPath('Test Import Source Note.md');
+				if (sourceFile instanceof TFile) {
+					const imported = await importNoteIntoHolograms(this, sourceFile);
+					new Notice(imported ? `Test import succeeded: ${imported.path}` : 'Test import failed');
+				} else {
+					new Notice('Test Import Source Note.md not found');
+				}
+			},
 		});
 
 		this.addCommand({
@@ -76,8 +100,7 @@ export default class SemanticHologramPlugin extends Plugin {
 			id: 'review-all-connections',
 			name: 'Review connections for all hologram notes',
 			callback: () => {
-				const files = this.app.vault.getMarkdownFiles().filter((f) => this.isInScope(f.path));
-				new ReviewConnectionsModal(this.app, this, files).open();
+				void this.activateReviewView();
 			},
 		});
 
@@ -93,7 +116,7 @@ export default class SemanticHologramPlugin extends Plugin {
 			id: 'audit-hologram-nodes',
 			name: 'Audit and fix hologram nodes',
 			callback: () => {
-				void this.auditNodes();
+				void this.activateAuditView();
 			},
 		});
 
@@ -125,6 +148,28 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		this.registerEditorSuggest(new RelationSuggest(this.app, this));
 		this.registerEditorExtension(relationGhostExtension(this));
+
+		this.registerEvent(
+			this.app.vault.on('modify', (file) => {
+				if (file instanceof TFile && this.isInScope(file.path)) {
+					void this.refreshGraphs();
+				}
+			}),
+		);
+		this.registerEvent(
+			this.app.vault.on('create', (file) => {
+				if (file instanceof TFile && this.isInScope(file.path)) {
+					void this.refreshGraphs();
+				}
+			}),
+		);
+		this.registerEvent(
+			this.app.vault.on('delete', (file) => {
+				if (file instanceof TFile && this.isInScope(file.path)) {
+					void this.refreshGraphs();
+				}
+			}),
+		);
 
 		this.app.workspace.onLayoutReady(() => {
 			void this.activateControlsView();
@@ -174,6 +219,17 @@ export default class SemanticHologramPlugin extends Plugin {
 				v.setMode(mode);
 			}
 		}
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramControlsView) {
+				v.render();
+			}
+		}
+	}
+
+	async setMaxDepth(depth: number): Promise<void> {
+		this.settings.maxDepth = depth;
+		await this.saveSettings();
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS)) {
 			const v = leaf.view;
 			if (v instanceof SemanticHologramControlsView) {
@@ -260,6 +316,30 @@ export default class SemanticHologramPlugin extends Plugin {
 			return;
 		}
 		await leaf.setViewState({ type: VIEW_TYPE_HOLOGRAM_CONTROLS, active: true });
+		workspace.revealLeaf(leaf);
+	}
+
+	async activateReviewView(): Promise<void> {
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(VIEW_TYPE_REVIEW_CONNECTIONS);
+		if (existing.length > 0) {
+			workspace.revealLeaf(existing[0]!);
+			return;
+		}
+		const leaf = workspace.getLeaf('tab');
+		await leaf.setViewState({ type: VIEW_TYPE_REVIEW_CONNECTIONS, active: true });
+		workspace.revealLeaf(leaf);
+	}
+
+	async activateAuditView(): Promise<void> {
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(VIEW_TYPE_AUDIT_CONNECTIONS);
+		if (existing.length > 0) {
+			workspace.revealLeaf(existing[0]!);
+			return;
+		}
+		const leaf = workspace.getLeaf('tab');
+		await leaf.setViewState({ type: VIEW_TYPE_AUDIT_CONNECTIONS, active: true });
 		workspace.revealLeaf(leaf);
 	}
 

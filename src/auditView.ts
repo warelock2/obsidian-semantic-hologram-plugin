@@ -1,0 +1,66 @@
+import { ItemView, WorkspaceLeaf, Setting, Notice } from 'obsidian';
+import type SemanticHologramPlugin from './main';
+import { auditHologramNodes } from './audit';
+import { ensureHologramContent } from './importNote';
+
+export const VIEW_TYPE_AUDIT_CONNECTIONS = 'audit-connections-view';
+
+export class AuditConnectionsView extends ItemView {
+    constructor(leaf: WorkspaceLeaf, private plugin: SemanticHologramPlugin) {
+        super(leaf);
+    }
+
+    getViewType(): string {
+        return VIEW_TYPE_AUDIT_CONNECTIONS;
+    }
+
+    getDisplayText(): string {
+        return 'Audit Connections';
+    }
+
+    getIcon(): string {
+        return 'shield-alert';
+    }
+
+    async onOpen(): Promise<void> {
+        this.contentEl.empty();
+        this.contentEl.addClass('sh-audit-view');
+        this.contentEl.createEl('h4', { text: 'Audit connections' });
+        
+        await this.runAudit();
+    }
+
+    private async runAudit(): Promise<void> {
+        const results = await auditHologramNodes(this.plugin.app.vault);
+        
+        const { contentEl } = this;
+        contentEl.createDiv({ cls: 'sh-audit-results' }, (div) => {
+            if (results.length === 0) {
+                div.createDiv({ text: 'No issues found.' });
+            } else {
+                div.createDiv({ text: `Found ${results.length} nodes with issues.` });
+                const list = div.createEl('ul');
+                for (const r of results) {
+                    list.createEl('li', { text: `${r.file.basename}: ${r.issues.join(', ')}` });
+                }
+                
+                new Setting(div).addButton((b) =>
+                    b
+                        .setButtonText('Fix All')
+                        .setCta()
+                        .onClick(async () => {
+                            for (const res of results) {
+                                const content = await this.plugin.app.vault.read(res.file);
+                                const defaultType = this.plugin.settings.nodeTypes[0]?.id ?? 'concept';
+                                const fixed = ensureHologramContent(content, defaultType, res.file, this.plugin);
+                                await this.plugin.app.vault.modify(res.file, fixed);
+                            }
+                            new Notice(`Fixed ${results.length} nodes.`);
+                            await this.plugin.refreshGraphs();
+                            await this.runAudit(); // Refresh the view
+                        }),
+                );
+            }
+        });
+    }
+}

@@ -230,7 +230,8 @@ export class BulkImportModal extends Modal {
 		if (imported.length === 0) {
 			return;
 		}
-		new ReviewConnectionsModal(this.app, this.plugin, imported).open();
+		// Open the dockable view instead of the modal
+		await this.plugin.activateReviewView();
 	}
 
 	onClose(): void {
@@ -270,10 +271,13 @@ export class ReviewConnectionsModal extends Modal {
 			this.plugin.knownRelIds(),
 			(path) => this.plugin.isInScope(path),
 		);
-		const allInScope = files.filter((f) => this.plugin.isInScope(f.path));
-		this.others = allInScope.filter((f) => !this.sources.some((s) => s.path === f.path));
+
+		// Include ALL files in the vault to identify potential connections between imported and non-imported notes
+		const allFiles = files;
 		
-		const targets = this.others.length > 0 ? this.others : allInScope;
+		this.others = allFiles.filter((f) => !this.sources.some((s) => s.path === f.path));
+		
+		const targets = this.others.length > 0 ? this.others : allFiles;
 		this.pairs = [];
 		const seenPairs = new Set<string>();
 
@@ -288,12 +292,19 @@ export class ReviewConnectionsModal extends Modal {
 				}
 				seenPairs.add(pairKey);
 
+				// Look for relationships in the scan
 				const edges = scan.edges.filter(
 					(e) =>
 						(e.source === src.path && e.target === tgt.path) ||
 						(e.source === tgt.path && e.target === src.path),
 				);
-				this.pairs.push({ source: src, target: tgt, edges });
+				
+				// ALSO look for wikilinks that aren't yet formal relationships
+				const isRelated = await this.hasWikilinkConnection(src, tgt);
+				
+				if (edges.length > 0 || isRelated) {
+					this.pairs.push({ source: src, target: tgt, edges });
+				}
 			}
 		}
 		this.pairs.sort((a, b) => {
@@ -303,6 +314,14 @@ export class ReviewConnectionsModal extends Modal {
 			return a.target.basename.toLowerCase().localeCompare(b.target.basename.toLowerCase());
 		});
 		this.render();
+	}
+
+	private async hasWikilinkConnection(f1: TFile, f2: TFile): Promise<boolean> {
+		const content1 = await this.plugin.app.vault.read(f1);
+		const content2 = await this.plugin.app.vault.read(f2);
+		const link1 = `[[${f2.basename}]]`;
+		const link2 = `[[${f1.basename}]]`;
+		return content1.includes(link1) || content2.includes(link2);
 	}
 
 	private visiblePairs(): ReviewPair[] {

@@ -29,6 +29,8 @@ export interface SemanticHologramSettings {
 	relTypes: RelTypeEntry[];
 	edgeMinLength: number;
 	edgeMaxLength: number;
+	depthBase: number;
+	maxDepth: number;
 }
 
 export const PALETTE = [
@@ -56,6 +58,8 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	showRotationCenter: true,
 	edgeMinLength: 120,
 	edgeMaxLength: 280,
+	depthBase: 0.55,
+	maxDepth: 1,
 	nodeTypes: [
 		{ id: 'concept', name: 'Concept', color: '#7C6FF6', description: 'A single concept or idea.', enabled: true },
 		{ id: 'literature', name: 'Literature', color: '#4D9DE0', description: 'A note sourced from literature.', enabled: true },
@@ -265,6 +269,25 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 					s.setValue(v);
 				}),
 		);
+
+		new Setting(containerEl)
+			.setName('Depth visualization')
+			.setDesc('Configure how depth affects node size and highlighting.')
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName('Max depth / connection level')
+			.setDesc('How many connection levels away to highlight when hovering over a node.')
+			.addSlider((s) =>
+				s
+					.setLimits(0, 5, 1)
+					.setValue(this.plugin.settings.maxDepth)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.maxDepth = v;
+						await this.persist();
+					}),
+			);
 
 		this.renderNodeGlossary(containerEl);
 		this.renderRelGlossary(containerEl);

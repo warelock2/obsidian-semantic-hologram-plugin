@@ -35,6 +35,17 @@ export async function auditHologramNodes(vault: Vault): Promise<AuditResult[]> {
 			issues.push('Missing ## Incoming relationships section');
 		}
 
+		// Check relation links are qualified with the hologram folder
+		const relLineRe = /-\s+[a-z0-9]+(?:\-[a-z0-9]+)*(?:\/[a-z0-9]+(?:\-[a-z0-9]+)*)?\s+\[\[([^\]|]+)\]\]/g;
+		let relMatch;
+		while ((relMatch = relLineRe.exec(content)) !== null) {
+			const target = relMatch[1]!.trim();
+			if (target.includes('/')) continue;
+			if (vault.getAbstractFileByPath(`${HOLOGRAM_FOLDER}/${target}.md`)) {
+				issues.push(`Unqualified relation link: [[${target}]]`);
+			}
+		}
+
 		if (issues.length > 0) {
 			results.push({ file, issues });
 		}
@@ -77,7 +88,7 @@ export class HologramAuditModal extends Modal {
 						const content = await this.app.vault.read(res.file);
 						// Use default type from settings or 'concept'
 						const defaultType = this.plugin.settings.nodeTypes[0]?.id ?? 'concept';
-						const fixed = ensureHologramContent(content, defaultType);
+						const fixed = ensureHologramContent(content, defaultType, res.file, this.plugin);
 						await this.app.vault.modify(res.file, fixed);
 					}
 					new Notice(`Fixed ${this.results.length} nodes.`);

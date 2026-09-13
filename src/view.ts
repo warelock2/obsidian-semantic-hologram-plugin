@@ -1722,7 +1722,7 @@ export class SemanticHologramView extends ItemView {
 			this.rotY = this.rotateStartRotY + dx * 0.005;
 			this.rotX = Math.max(
 				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.005),
+				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX + dy * 0.005),
 			);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
@@ -1951,7 +1951,7 @@ export class SemanticHologramView extends ItemView {
 			this.rotY = this.rotateStartRotY + dx * 0.005;
 			this.rotX = Math.max(
 				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.005),
+				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX + dy * 0.005),
 			);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;

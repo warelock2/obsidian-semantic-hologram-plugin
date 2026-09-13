@@ -2,7 +2,7 @@ import { App, ButtonComponent, FuzzySuggestModal, Modal, Notice, Setting, TFolde
 import type { RelationEdge } from './relations';
 import { findIncomingSection, findRelationsSection, formatStrength, scanRelations } from './relations';
 import { HOLOGRAM_FOLDER } from './settings';
-import { ensureHologramContent, nextAvailablePath } from './importNote';
+import { ensureHologramContent, nextAvailablePath, rewriteLinks, HologramTagModal } from './importNote';
 import { syncIncomingRelationships } from './incoming';
 import type SemanticHologramPlugin from './main';
 
@@ -19,7 +19,7 @@ interface ReviewPair {
 }
 
 /** Copy notes into `Holograms/` with `hologram-node: true`, collision-safe names. */
-export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFile[]): Promise<TFile[]> {
+export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFile[], hologramTag: string): Promise<TFile[]> {
 	const vault = plugin.app.vault;
 	try {
 		if (!vault.getAbstractFileByPath(HOLOGRAM_FOLDER)) {
@@ -41,14 +41,25 @@ export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFi
 			failed.push(source.path);
 			continue;
 		}
+		
+		const destPath = `${HOLOGRAM_FOLDER}/${source.basename}.md`;
+		const existingFile = vault.getAbstractFileByPath(destPath);
+		if (existingFile instanceof TFile) {
+			const existingContent = await vault.read(existingFile);
+			content = existingContent + '\n\n' + content;
+		}
+		
+		content = rewriteLinks(plugin, content);
 		const defaultType = plugin.settings.nodeTypes[0]?.id ?? 'concept';
-		content = ensureHologramContent(content, defaultType, source, plugin);
+		content = ensureHologramContent(content, defaultType, source, plugin, hologramTag);
 		try {
-			const p = nextAvailablePath(vault, source.basename);
-			console.log('Importing to:', p);
-			const f = await vault.create(p, content);
-			imported.push(f);
-			console.log('Imported:', f.path);
+			if (existingFile instanceof TFile) {
+				await vault.modify(existingFile, content);
+				imported.push(existingFile);
+			} else {
+				const f = await vault.create(destPath, content);
+				imported.push(f);
+			}
 		} catch (e) {
 			console.error('Import failed for:', source.path, e);
 			failed.push(source.path);
@@ -226,12 +237,13 @@ export class BulkImportModal extends Modal {
 	private async runImport(): Promise<void> {
 		const files = this.candidates.filter((f) => this.selected.has(f.path));
 		this.close();
-		const imported = await bulkImportNotes(this.plugin, files);
-		if (imported.length === 0) {
-			return;
-		}
-		// Open the dockable view instead of the modal
-		await this.plugin.activateReviewView();
+		new HologramTagModal(this.app, async (tag) => {
+			const imported = await bulkImportNotes(this.plugin, files, tag);
+			if (imported.length === 0) {
+				return;
+			}
+			new ReviewConnectionsModal(this.app, this.plugin, imported).open();
+		}).open();
 	}
 
 	onClose(): void {

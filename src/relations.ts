@@ -161,124 +161,119 @@ export function findIncomingSection(content: string): { startLine: number; endLi
 }
 
 /**
- * Parse a note's Relations section into directed relation edges.
- * Missing/unresolvable lines are returned in `malformed`.
- * `resolve` maps a wikilink display name to a vault path (or null).
- */
-export function parseRelations(
-	path: string,
-	content: string,
-	resolve: (name: string) => string | null,
-	knownIds: Set<string>,
-): RelationsData {
-	const outgoing: RelationEdge[] = [];
-	const malformed: MalformedRelation[] = [];
-	const section = findRelationsSection(content);
-	if (!section) {
+	 * Parse a note's Relations section into directed relation edges.
+	 * Missing/unresolvable lines are returned in `malformed`.
+	 * `resolve` maps a wikilink display name (plus source note path for disambiguation) to a vault path (or null).
+	 */
+	export function parseRelations(
+		path: string,
+		content: string,
+		resolve: (name: string, sourcePath: string) => string | null,
+		knownIds: Set<string>,
+	): RelationsData {
+		const outgoing: RelationEdge[] = [];
+		const malformed: MalformedRelation[] = [];
+		const section = findRelationsSection(content);
+		if (!section) {
+			return { outgoing, malformed };
+		}
+
+		const lines = content.split(/\r?\n/);
+		for (let i = section.startLine + 1; i < section.endLine; i++) {
+			const line = lines[i] ?? '';
+			const trimmed = line.trim();
+			if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('---')) {
+				continue;
+			}
+			if (!trimmed.startsWith('-')) {
+				continue;
+			}
+			const m = trimmed.match(REL_LINE);
+			if (!m) {
+				malformed.push({ path, line: i, text: trimmed, reason: 'unparsable relation line' });
+				continue;
+			}
+			const relId = m[1]!;
+			const targetName = m[2]!;
+			const reversed = !!m[3];
+			const strengthStr = m[4]!;
+			const strength = parseFloat(strengthStr);
+
+			if (!knownIds.has(relId)) {
+				malformed.push({ path, line: i, text: trimmed, reason: `unknown relationship type '${relId}'` });
+				continue;
+			}
+			if (strength < 0 || strength > 1) {
+				malformed.push({ path, line: i, text: trimmed, reason: `strength out of range [0,1]: ${strengthStr}` });
+				continue;
+			}
+
+			const target = resolve(targetName, path);
+			if (!target || target === path) {
+				malformed.push({ path, line: i, text: trimmed, reason: `unresolved target '${targetName}'` });
+				continue;
+			}
+
+			// {R}: the authored line is reversed — the hosting note is the semantic
+			// destination and the referenced note is the source.
+			const source = reversed ? target : path;
+			const edgeTarget = reversed ? path : target;
+			outgoing.push({
+				source,
+				target: edgeTarget,
+				relId,
+				strength,
+				reversed,
+				authoredFrom: path,
+				raw: trimmed,
+			});
+		}
 		return { outgoing, malformed };
 	}
 
-	const lines = content.split(/\r?\n/);
-	for (let i = section.startLine + 1; i < section.endLine; i++) {
-		const line = lines[i] ?? '';
-		const trimmed = line.trim();
-		if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('---')) {
-			continue;
-		}
-		if (!trimmed.startsWith('-')) {
-			continue;
-		}
-		const m = trimmed.match(REL_LINE);
-		if (!m) {
-			malformed.push({ path, line: i, text: trimmed, reason: 'unparsable relation line' });
-			continue;
-		}
-		const relId = m[1]!;
-		const targetName = m[2]!;
-		const reversed = !!m[3];
-		const strengthStr = m[4]!;
-		const strength = parseFloat(strengthStr);
+	/**
+	 * Scan all hologram-scoped notes, parse their Relations and build the complete
+	 * typed edge set with dedup (first wins) and conflict detection (differing
+	 * strengths for the same (source, target, relId)).
+	 */
+	export async function scanRelations(
+		files: TFile[],
+		vault: Vault,
+		metadataCache: MetadataCache,
+		knownIds: Set<string>,
+		inScope: (path: string) => boolean,
+	): Promise<RelationScan> {
+		const edges: RelationEdge[] = [];
+		const malformed: MalformedRelation[] = [];
 
-		if (!knownIds.has(relId)) {
-			malformed.push({ path, line: i, text: trimmed, reason: `unknown relationship type '${relId}'` });
-			continue;
-		}
-		if (strength < 0 || strength > 1) {
-			malformed.push({ path, line: i, text: trimmed, reason: `strength out of range [0,1]: ${strengthStr}` });
-			continue;
-		}
-
-		const target = resolve(targetName);
-		if (!target || target === path) {
-			malformed.push({ path, line: i, text: trimmed, reason: `unresolved target '${targetName}'` });
-			continue;
-		}
-
-		// {R}: the authored line is reversed — the hosting note is the semantic
-		// destination and the referenced note is the source.
-		const source = reversed ? target : path;
-		const edgeTarget = reversed ? path : target;
-		outgoing.push({
-			source,
-			target: edgeTarget,
-			relId,
-			strength,
-			reversed,
-			authoredFrom: path,
-			raw: trimmed,
-		});
-	}
-	return { outgoing, malformed };
-}
-
-/**
- * Scan all hologram-scoped notes, parse their Relations and build the complete
- * typed edge set with dedup (first wins) and conflict detection (differing
- * strengths for the same (source, target, relId)).
- */
-export async function scanRelations(
-	files: TFile[],
-	vault: Vault,
-	metadataCache: MetadataCache,
-	knownIds: Set<string>,
-	inScope: (path: string) => boolean,
-): Promise<RelationScan> {
-	const edges: RelationEdge[] = [];
-	const malformed: MalformedRelation[] = [];
-
-	for (const f of files) {
-		if (!inScope(f.path)) {
-			continue;
-		}
-		let content: string;
-		try {
-			content = await vault.read(f);
-		} catch {
-			continue;
-		}
-		const frontmatter = extractFrontmatter(content);
-		const fm = parseNoteFrontmatter(frontmatter);
-		if (!fm.hologramNode && !inScope(f.path)) {
-			continue;
-		}
-
-		const resolve = (name: string): string | null => {
-			const base = name.split('|').pop()!.split('/').pop()!.trim();
-			const holoPath = `hologram/${base}.md`;
-			const holo = files.find((file) => file.path === holoPath);
-			if (holo) return holo.path;
-			const dest = metadataCache.getFirstLinkpathDest(name, f.path);
-			if (dest) {
-				return dest.path;
+		const resolve = (name: string, sourcePath: string): string | null => {
+			const file = metadataCache.getFirstLinkpathDest(name, sourcePath);
+			// Enforce separate context: only resolve to files within HOLOGRAM_FOLDER
+			if (file && file.path.startsWith(HOLOGRAM_FOLDER + '/')) {
+				return file.path;
 			}
-			const found = files.find((file) => file.basename.toLowerCase() === base.toLowerCase());
-			return found ? found.path : null;
+			return null;
 		};
 
-		const data = parseRelations(f.path, content, resolve, knownIds);
-		edges.push(...data.outgoing);
-		malformed.push(...data.malformed);
-	}
+		for (const f of files) {
+			if (!inScope(f.path)) {
+				continue;
+			}
+			let content: string;
+			try {
+				content = await vault.read(f);
+			} catch {
+				continue;
+			}
+			const frontmatter = extractFrontmatter(content);
+			const fm = parseNoteFrontmatter(frontmatter);
+			if (!fm.hologramNode && !inScope(f.path)) {
+				continue;
+			}
+			const data = parseRelations(f.path, content, resolve, knownIds);
+			edges.push(...data.outgoing);
+			malformed.push(...data.malformed);
+		}
 
 	// Dedup on (source, target, relId): keep the first, aggregate strengths for conflicts.
 	const unique = new Map<string, RelationEdge>();

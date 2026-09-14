@@ -1124,7 +1124,7 @@ export class SemanticHologramView extends ItemView {
 		while (queue.length > 0) {
 			const u = queue.shift()!;
 			const d = distances.get(u)!;
-			if (d >= this.plugin.settings.maxDepth) continue;
+			if (d >= this.plugin.settings.hoverDepth) continue;
 
 			for (const v of adj.get(u) ?? []) {
 				if (!distances.has(v)) {
@@ -1157,13 +1157,8 @@ export class SemanticHologramView extends ItemView {
 		}
 
 		// Calculate highlighted nodes if hovering
-		const highlighted = new Set<number>();
-		if (this.hoverIndex >= 0 && this.plugin.settings.maxDepth > 0) {
-			const distances = this.getDistances(this.hoverIndex);
-			for (const nodeIdx of distances.keys()) {
-				highlighted.add(nodeIdx);
-			}
-		}
+		const distances = this.hoverIndex >= 0 && this.plugin.settings.hoverDepth > 0 ? this.getDistances(this.hoverIndex) : undefined;
+		const highlighted = distances ? new Set(distances.keys()) : new Set<number>();
 
 		if (this.is3D) {
 			const R = this.worldR();
@@ -1226,7 +1221,7 @@ export class SemanticHologramView extends ItemView {
 					this.toScreenY(rb.y),
 					this.nodeScreenRadius(b, rb, R),
 					l,
-					this.edgeStroke(l, sel, highlighted),
+					this.edgeStroke(l, sel, highlighted, distances),
 				);
 			}
 			this.drawLiveSelection();
@@ -1283,7 +1278,7 @@ export class SemanticHologramView extends ItemView {
 				this.toScreenY(b.y),
 				this.nodeScreenRadius(b, b, 1),
 				l,
-					this.edgeStroke(l, sel, highlighted),
+					this.edgeStroke(l, sel, highlighted, distances),
 
 			);
 		}
@@ -1301,17 +1296,22 @@ export class SemanticHologramView extends ItemView {
 		return Math.max(3, node.radius * this.viewScale);
 	}
 
-	private edgeStroke(link: GraphLink, selCount: number, highlightedNodes?: Set<number>): string {
-		const isEdgeHighlighted = highlightedNodes && (highlightedNodes.has(link.a) || highlightedNodes.has(link.b));
-		const isFaded = highlightedNodes && highlightedNodes.size > 0 && !isEdgeHighlighted;
-
-		if (isFaded) {
-			return this.withAlpha(link.edgeColor, 0.1);
+	private edgeStroke(link: GraphLink, selCount: number, highlightedNodes?: Set<number>, distances?: Map<number, number>): string {
+		const hasHighlight = highlightedNodes !== undefined && highlightedNodes.size > 0;
+		if (!hasHighlight) {
+			if (selCount === 1) return this.withAlpha(link.edgeColor, 0.35);
+			return link.edgeColor;
 		}
-		if (selCount === 1) {
-			return this.withAlpha(link.edgeColor, 0.35);
-		}
-		return link.edgeColor;
+		const bothIn = highlightedNodes!.has(link.a) && highlightedNodes!.has(link.b);
+		if (!bothIn) return this.withAlpha(link.edgeColor, 0.25);
+		const da = distances?.get(link.a);
+		const db = distances?.get(link.b);
+		if (da === undefined || db === undefined) return this.withAlpha(link.edgeColor, 0.25);
+		const minD = Math.min(da, db);
+		const diff = Math.abs(da - db);
+		if (diff === 1 && minD < this.plugin.settings.hoverDepth) return link.edgeColor;
+		if (diff === 0 && minD === 0) return link.edgeColor;
+		return this.withAlpha(link.edgeColor, 0.25);
 	}
 
 	private strokeArrowLine(
@@ -1722,7 +1722,7 @@ export class SemanticHologramView extends ItemView {
 			this.rotY = this.rotateStartRotY + dx * 0.005;
 			this.rotX = Math.max(
 				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX + dy * 0.005),
+				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.005),
 			);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
@@ -1951,7 +1951,7 @@ export class SemanticHologramView extends ItemView {
 			this.rotY = this.rotateStartRotY + dx * 0.005;
 			this.rotX = Math.max(
 				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX + dy * 0.005),
+				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.005),
 			);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
@@ -2230,9 +2230,28 @@ export class SemanticHologramView extends ItemView {
 	};
 
 	private selectHovered(): void {
-		if (this.hoverIndex >= 0) {
-			this.toggleNodeSelection(this.hoverIndex);
+		if (this.hoverIndex < 0) return;
+		const toSelect: number[] = [this.hoverIndex];
+		if (this.plugin.settings.hoverDepth > 0) {
+			const d = this.getDistances(this.hoverIndex);
+			for (const idx of d.keys()) if (idx !== this.hoverIndex) toSelect.push(idx);
 		}
+		const allAlready = toSelect.every((i) => this.selected.has(i));
+		if (allAlready) {
+			for (const i of toSelect) {
+				const n = this.nodes[i];
+				if (n) n.selected = false;
+				this.selected.delete(i);
+			}
+		} else {
+			for (const i of toSelect) {
+				const n = this.nodes[i];
+				if (!n) continue;
+				n.selected = true;
+				this.selected.add(i);
+			}
+		}
+		this.updateCursor();
 	}
 
 	private centerSelectedOnOrigin(): void {

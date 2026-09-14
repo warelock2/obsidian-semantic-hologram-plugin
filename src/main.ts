@@ -76,7 +76,7 @@ export default class SemanticHologramPlugin extends Plugin {
 			callback: async () => {
 				const sourceFile = this.app.vault.getAbstractFileByPath('Test Import Source Note.md');
 				if (sourceFile instanceof TFile) {
-					const imported = await importNoteIntoHolograms(this, sourceFile);
+					const imported = await importNoteIntoHolograms(this, sourceFile, '#hologram');
 					new Notice(imported ? `Test import succeeded: ${imported.path}` : 'Test import failed');
 				} else {
 					new Notice('Test Import Source Note.md not found');
@@ -237,6 +237,7 @@ export default class SemanticHologramPlugin extends Plugin {
 
 	async setHoverDepth(value: number): Promise<void> {
 		this.settings.hoverDepth = value;
+		this.settings.maxDepth = value;
 		await this.saveSettings();
 	}
 
@@ -259,6 +260,7 @@ export default class SemanticHologramPlugin extends Plugin {
 
 	async setMaxDepth(depth: number): Promise<void> {
 		this.settings.maxDepth = depth;
+		this.settings.hoverDepth = depth;
 		await this.saveSettings();
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS)) {
 			const v = leaf.view;
@@ -429,11 +431,14 @@ export default class SemanticHologramPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			(await this.loadData()) as Partial<SemanticHologramSettings>,
-		);
+		const saved = (await this.loadData()) as Partial<SemanticHologramSettings> | null;
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {});
+		if ((this.settings.hoverDepth ?? 0) === 0 && (saved as any)?.maxDepth) {
+			this.settings.hoverDepth = (saved as any).maxDepth;
+			this.settings.maxDepth = (saved as any).maxDepth;
+		}
+		if (this.settings.maxDepth === undefined) this.settings.maxDepth = this.settings.hoverDepth;
+		if ((this.settings as any).depthBase === undefined) (this.settings as any).depthBase = 0.55;
 	}
 
 	async saveSettings() {

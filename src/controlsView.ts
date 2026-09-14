@@ -35,11 +35,11 @@ export class SemanticHologramControlsView extends ItemView {
 		this.registerEvent(
 			this.app.vault.on('modify', () => {
 				const slider = this.contentEl.querySelector('input[type="range"]') as HTMLInputElement;
-				if (slider && slider.value !== String(this.plugin.settings.maxDepth)) {
-					slider.value = String(this.plugin.settings.maxDepth);
+				if (slider && slider.value !== String(this.plugin.settings.hoverDepth)) {
+					slider.value = String(this.plugin.settings.hoverDepth);
 					const label = this.contentEl.querySelector('.sh-controls-label');
 					if (label) {
-						label.textContent = `Max Depth: ${this.plugin.settings.maxDepth}`;
+						label.textContent = `Hover depth: ${this.plugin.settings.hoverDepth}`;
 					}
 				}
 			})
@@ -92,15 +92,18 @@ export class SemanticHologramControlsView extends ItemView {
 		});
 
 		const depthRow = contentEl.createDiv({ cls: 'sh-controls-row' });
-		depthRow.createEl('span', { text: 'Hover depth', cls: 'sh-controls-label' });
+		depthRow.createEl('span', { text: `Hover depth: ${this.plugin.settings.hoverDepth}`, cls: 'sh-controls-label' });
 		const depthSlider = depthRow.createEl('input', {
 			type: 'range',
-			attr: { min: '0', max: '3', step: '1' },
+			attr: { min: '0', max: '3', step: '1', value: String(this.plugin.settings.hoverDepth) },
 		}) as HTMLInputElement;
-		depthSlider.value = this.plugin.settings.hoverDepth.toString();
 		depthSlider.addEventListener('input', () => {
-			const depth = parseInt(depthSlider.value, 10);
-			void this.plugin.setHoverDepth(depth);
+			const v = parseInt(depthSlider.value, 10);
+			this.plugin.settings.hoverDepth = v;
+			this.plugin.settings.maxDepth = v;
+			void this.plugin.saveSettings();
+			const label = depthRow.querySelector('.sh-controls-label');
+			if (label) label.textContent = `Hover depth: ${v}`;
 		});
 
 		const hint = contentEl.createDiv({ cls: 'sh-controls-hint' });

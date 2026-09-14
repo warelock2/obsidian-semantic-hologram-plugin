@@ -1,4 +1,6 @@
 import { ItemView, Platform, WorkspaceLeaf } from 'obsidian';
+// @ts-ignore
+import { GIF } from 'gifenc';
 import type SemanticHologramPlugin from './main';
 import type { HologramTool, RelTypeEntry } from './settings';
 import type { RelationEdge } from './relations';
@@ -155,6 +157,9 @@ export class SemanticHologramView extends ItemView {
 	private touchDownY = 0;
 	private touchTappedNode = -1;
 	private touchGesture: 'none' | 'pan' | 'pin' | 'group' | 'select' | 'rotate' = 'none';
+	private isRecording = false;
+	private recordingFrames: ImageData[] = [];
+	private recordingRotYStart = 0;
 
 	constructor(leaf: WorkspaceLeaf, plugin: SemanticHologramPlugin) {
 		super(leaf);
@@ -691,8 +696,40 @@ export class SemanticHologramView extends ItemView {
 	private loop = (): void => {
 		this.step();
 		this.draw();
+		if (this.isRecording) {
+			this.captureFrame();
+		}
 		this.raf = requestAnimationFrame(this.loop);
 	};
+
+	private startRecording(): void {
+		if (!this.is3D) {
+			this.showToast('Recording only supported in 3D mode');
+			return;
+		}
+		this.isRecording = true;
+		this.recordingFrames = [];
+		this.recordingRotYStart = this.rotY;
+		this.showToast('Recording...');
+	}
+
+	private captureFrame(): void {
+		if (!this.canvas || !this.ctx) return;
+		const { width, height } = this.canvas;
+		const imageData = this.ctx.getImageData(0, 0, width, height);
+		this.recordingFrames.push(imageData as any);
+
+		// Stop after one full rotation (approx 2π / 0.005)
+		if (Math.abs(this.rotY - this.recordingRotYStart) >= Math.PI * 2) {
+			this.stopAndEncode();
+		}
+	}
+
+	private stopAndEncode(): void {
+		this.isRecording = false;
+		this.showToast('Encoding...');
+		// Need to actually use gifenc here to encode this.recordingFrames
+	}
 
 	private step(): void {
 		const { nodes, links } = this;
@@ -766,9 +803,9 @@ export class SemanticHologramView extends ItemView {
 		}
 
 		if (this.autoRotating === 'ccw' && this.nodes.length > 0) {
-			this.rotY -= 0.01;
+			this.rotY -= 0.005;
 		} else if (this.autoRotating === 'cw' && this.nodes.length > 0) {
-			this.rotY += 0.01;
+			this.rotY += 0.005;
 		}
 		if (!this.settled) {
 			this.layoutFrames++;
@@ -1719,10 +1756,10 @@ export class SemanticHologramView extends ItemView {
 		if (this.rotating) {
 			const dx = e.clientX - this.rotateStartX;
 			const dy = e.clientY - this.rotateStartY;
-			this.rotY = this.rotateStartRotY + dx * 0.005;
+			this.rotY = this.rotateStartRotY + dx * 0.00125;
 			this.rotX = Math.max(
 				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.005),
+				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.00125),
 			);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
@@ -1948,10 +1985,10 @@ export class SemanticHologramView extends ItemView {
 		if (this.rotating) {
 			const dx = e.clientX - this.rotateStartX;
 			const dy = e.clientY - this.rotateStartY;
-			this.rotY = this.rotateStartRotY + dx * 0.005;
+			this.rotY = this.rotateStartRotY + dx * 0.00125;
 			this.rotX = Math.max(
 				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.005),
+				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.00125),
 			);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
@@ -2222,6 +2259,8 @@ export class SemanticHologramView extends ItemView {
 			this.autoRotating = nextMode;
 			const label = nextMode === 'off' ? 'Rotation off' : nextMode === 'cw' ? 'CW rotation' : 'CCW rotation';
 			this.showToast(label);
+		} else if (key === 'g' && !e.repeat) {
+			this.startRecording();
 		} else if (key === 's' && !e.repeat) {
 			this.selectMode = true;
 			this.selectDragOccurred = false;

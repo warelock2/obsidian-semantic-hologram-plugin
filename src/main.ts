@@ -400,6 +400,13 @@ export default class SemanticHologramPlugin extends Plugin {
 	async activateView() {
 		const { workspace } = this.app;
 
+		// If the active leaf is an empty view (new tab), reuse it.
+		if (workspace.activeLeaf?.view.getViewType() === 'empty') {
+			await workspace.activeLeaf.setViewState({ type: VIEW_TYPE_HOLOGRAM, active: true });
+			workspace.revealLeaf(workspace.activeLeaf);
+			return;
+		}
+
 		// Reuse an existing hologram view, but only if it lives in the main
 		// workspace area (not the right sidebar). Otherwise close stale sidebar
 		// copies and open a fresh pane split from the active note.

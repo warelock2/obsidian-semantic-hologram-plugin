@@ -52,6 +52,7 @@ export class SemanticHologramControlsView extends ItemView {
 	}
 
 	render(): void {
+		console.log('Rendering controls view, settings:', this.plugin.settings);
 		const { contentEl } = this;
 		contentEl.empty();
 

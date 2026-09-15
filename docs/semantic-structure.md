@@ -65,9 +65,9 @@ Before compression into the streamlined operational tiers, the semantic hierarch
 |---|---|---|---|
 | **1** | `concept` | Atomic baseline items requiring no decomposition. | `CPU Ring`, `Page Table Entry (PTE)` |
 | **2** | `idea` | First-order synthesis of raw concepts. | `Fork`, `Thread` |
-| **3** | `model` / `mechanism` | System structures and working subsystems. | `Virtual Memory`, `Scheduler` |
+| **3** | `model` | System structures and working subsystems. | `Virtual Memory`, `Scheduler` |
 | **4** | `pattern` | Cross-cutting optimization strategies. | `Copy On Write`, `Demand Paging` |
-| **5** | `framework` | System integrators combining multiple patterns and mechanisms. | `Page Cache` |
+| **5** | `framework` | System integrators combining multiple patterns and models. | `Page Cache` |
 | **6** | `topic` | Root container for the domain hologram. | `Linux Kernel Internals` |
 | **7** | `domain` | Broader sub-field grouping multiple topics. | `Operating Systems` |
 | **8** | `field` | Macro-discipline container. | `Computer Science` |

@@ -9,7 +9,7 @@ To reduce human cognitive load while preserving the precise dependency Directed 
 | **0** | `concept` | **Atomic primitives**: Foundational hardware or kernel-level building blocks that require no further decomposition in this domain. | `CPU Ring`, `Syscall`, `Operating System`, `Page Table Entry (PTE)` |
 | **1** | `idea` | **Syntheses & mechanisms**: First-order abstractions combining multiple concepts into functional units or working schemas. Positioned at the geometric centroid of their supporting concepts in the topology. | `Process`, `Thread`, `Fork`, `Exec`, `Virtual Memory`, `Page Table`, `Page Fault`, `Scheduler`, `Preemption`, `Context Switch` |
 | **2** | `pattern` | **Recurring strategies**: Cross-cutting design patterns or policies that govern interactions between ideas and mechanisms. Positioned at the centroid of their supporting ideas. | `Copy On Write`, `Demand Paging`, `Zero Page`, `Anonymous Page`, `Dirty Bit`, `MAP_PRIVATE vs MAP_SHARED`, `Memory Accounting (RSS, VSZ, PSS)`, `SIGSEGV and SIGBUS`, `Page Cache` |
-| **3** | `topic` | **The Topic Container**: The root container representing a specific subject domain or individual hologram set. | `Linux Kernel Internals` |
+| **3** | `topic` | **Topic**: A subject domain or grouping tier in the semantic hierarchy. Any abstraction level can serve as the top-level root of a hologram. | `Linux Kernel Internals` |
 | **4** | `domain` | **Sub-Field / Branch**: A category grouping multiple related topics and holograms together into a coherent sub-discipline. | `Operating Systems`, `Networking`, `Distributed Systems` |
 | **5** | `field` | **Macro-Discipline**: High-level umbrella category encompassing multiple domains across technical or scientific spheres. | `Computer Science`, `Systems Engineering`, `Physics` |
 
@@ -27,9 +27,9 @@ Every semantic node note in the `hologram/` folder uses the following frontmatte
 - `groups: [...]` — Membership linkages connecting nodes upward through the hierarchy:
   - **Concepts** list the `idea` nodes they participate in.
   - **Ideas** list the `pattern` nodes they support.
-  - **Patterns** list the `topic` / hologram container.
-  - **Topics** roll up into `domain` categories.
-  - **Domains** roll up into `field` structures.
+   - **Patterns** (and higher tiers) list their parent grouping nodes or hologram roots.
+   - **Topics** (and other tiers) roll up into `domain` categories.
+   - **Domains** roll up into `field` structures.
 
 ---
 
@@ -39,7 +39,7 @@ Every semantic node note in the `hologram/` folder uses the following frontmatte
 1. **Level 0 (Concepts)**: Rendered at the periphery as the atomic baseline nodes.
 2. **Level 1 (Ideas)**: Compute the geometric centroid of supporting `concept` nodes.
 3. **Level 2 (Patterns)**: Compute the geometric centroid of supporting `idea` nodes.
-4. **Level 3 (Topic)**: Bounding frame for the individual hologram set.
+4. **Level 3 (Topic)**: Bounding frame for the hologram set (if applicable to this abstraction level).
 5. **Level 4-5 (Domain / Field)**: Macro-bounding frames and multi-domain cluster centroids.
 
 ### Edge Semantics & Enhanced Relationships
@@ -52,7 +52,7 @@ Beyond Obsidian's native bidirectional `[[link]]` syntax, relationship semantics
 
 ## 4. Holograms and Fields
 
-- **Hologram**: An independent, interconnected set of concepts at any level representing a specific sub-topic or discipline.
+- **Hologram**: An independent, interconnected set of concepts representing a specific sub-topic or discipline. Any abstraction tier (from concept to field) can act as the top-level root of a hologram.
 - **Super-Hologram / Multi-Topic Vat**: A composite container created by pouring multiple holograms together, enabling cross-domain knowledge synthesis while preserving individual topological provenance.
 
 ---

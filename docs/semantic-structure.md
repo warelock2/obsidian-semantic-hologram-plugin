@@ -57,6 +57,30 @@ Beyond Obsidian's native bidirectional `[[link]]` syntax, relationship semantics
 
 ---
 
+## 5. Standard Node Template
+
+For new semantic nodes in the `hologram/` folder, use the following standardized Obsidian template featuring clean, empty fields for rapid creation, Obsidian template variables (`{{date}}`, `{{title}}`), and an auto-populated incoming relationships section:
+
+```markdown
+---
+hologram-node: true
+node-type: concept
+created: {{date}}
+hologram: 
+groups:
+  - [[]]
+---
+
+# {{title}}
+
+## Relationships
+- 
+
+## Incoming Relationships (read only)
+```
+
+---
+
 ## Appendix: Original Expanded Hierarchy Reference
 
 Before compression into the streamlined operational tiers, the semantic hierarchy extended across granular layers. For historical reference and architectural provenance, the full multi-level hierarchy is defined below:

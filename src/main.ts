@@ -34,6 +34,17 @@ export default class SemanticHologramPlugin extends Plugin {
 		this.registerEvent(this.app.vault.on('create', () => { void this.incomingIndex.update(); }));
 		this.registerEvent(this.app.vault.on('delete', () => { void this.incomingIndex.update(); }));
 
+		this.registerEvent(this.app.vault.on('modify', (file) => {
+			if (file.path === '.hologram-command.json') {
+				void this.handleCommandFile();
+			}
+		}));
+		this.registerEvent(this.app.vault.on('create', (file) => {
+			if (file.path === '.hologram-command.json') {
+				void this.handleCommandFile();
+			}
+		}));
+
 		this.registerMarkdownPostProcessor((el, ctx) => {
 			if (!this.isInScope(ctx.sourcePath)) return;
 			
@@ -80,6 +91,20 @@ export default class SemanticHologramPlugin extends Plugin {
 					new Notice(imported ? `Test import succeeded: ${imported.path}` : 'Test import failed');
 				} else {
 					new Notice('Test Import Source Note.md not found');
+				}
+			},
+		});
+
+		this.addCommand({
+			id: 'start-hologram-recording',
+			name: 'Start Hologram GIF Recording',
+			callback: () => {
+				const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
+				if (view) {
+					console.log('[SH] Command triggered recording');
+					(view as any).startRecording();
+				} else {
+					new Notice('Open Semantic Hologram view first.');
 				}
 			},
 		});
@@ -446,6 +471,25 @@ export default class SemanticHologramPlugin extends Plugin {
 		}
 		if (this.settings.maxDepth === undefined) this.settings.maxDepth = this.settings.hoverDepth;
 		if ((this.settings as any).depthBase === undefined) (this.settings as any).depthBase = 0.55;
+	}
+
+	private async handleCommandFile() {
+		const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
+		if (view) {
+			(view as any).startRecording();
+		} else {
+			const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM);
+			if (leaves.length > 0 && leaves[0]?.view) {
+				const v = leaves[0].view as SemanticHologramView;
+				(v as any).startRecording();
+			} else {
+				await this.activateView();
+				const newView = this.app.workspace.getActiveViewOfType(SemanticHologramView);
+				if (newView) {
+					(newView as any).startRecording();
+				}
+			}
+		}
 	}
 
 	async saveSettings() {

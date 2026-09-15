@@ -1,4 +1,4 @@
-import { App, Modal, PluginSettingTab, Setting } from 'obsidian';
+import { App, Modal, Notice, PluginSettingTab, Setting } from 'obsidian';
 import type SemanticHologramPlugin from './main';
 
 export type HologramMode = '2d' | '3d';
@@ -32,6 +32,10 @@ export interface SemanticHologramSettings {
 	hoverDepth: number;
 	maxDepth: number;
 	depthBase: number;
+	mcpEnabled: boolean;
+	mcpWriteAccess: boolean;
+	mcpKeyHash?: string;
+	mcpKeyMasked?: string;
 }
 
 export const PALETTE = [
@@ -62,6 +66,8 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	hoverDepth: 1,
 	maxDepth: 1,
 	depthBase: 0.55,
+	mcpEnabled: false,
+	mcpWriteAccess: false,
 	nodeTypes: [
 		{ id: 'concept', name: 'Concept', color: '#7C6FF6', description: 'A single concept or idea.', enabled: true },
 		{ id: 'literature', name: 'Literature', color: '#4D9DE0', description: 'A note sourced from literature.', enabled: true },
@@ -223,6 +229,55 @@ class EntryModal extends Modal {
 	}
 }
 
+class ConfirmModal extends Modal {
+	constructor(
+		app: App,
+		private options: {
+			title: string;
+			message: string;
+			onConfirm: () => void;
+			onCancel?: () => void;
+		},
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('sh-confirm-modal');
+
+		contentEl.createEl('h4', { text: this.options.title });
+		contentEl.createEl('p', { text: this.options.message });
+
+		new Setting(contentEl)
+			.addButton((b) =>
+				b.setButtonText('Cancel').onClick(() => {
+					if (this.options.onCancel) {
+						this.options.onCancel();
+					}
+					this.close();
+				}),
+			)
+			.addButton((b) =>
+				b.setButtonText('Yes')
+					.setWarning()
+					.onClick(() => {
+						this.options.onConfirm();
+						this.close();
+					}),
+			);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+		if (this.options.onCancel) {
+			// If closed via ESC or outside click without clicking Cancel button
+			// Wait, onClose is called for any close. Let's just handle it in Cancel button.
+		}
+	}
+}
+
 export class SemanticHologramSettingTab extends PluginSettingTab {
 	plugin: SemanticHologramPlugin;
 
@@ -292,9 +347,84 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 					}),
 			);
 
+		new Setting(containerEl)
+			.setName('Plugin MCP Authentication')
+			.setDesc('Generate an authentication token for local plugin MCP access. Keys are only shown once upon generation. This plugin uses a standard `stdio` MCP server (no network URL or HTTP endpoint).\n\nBenefits & Capabilities when enabled:\n• List, read, create, & update hologram notes\n• Query graph node neighbors & filter notes by type\n• Inspect graph state dumps programmatically')
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName('Enable MCP Service')
+			.setDesc('Enable or disable the local MCP server.')
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.mcpEnabled).onChange(async (v) => {
+					this.plugin.settings.mcpEnabled = v;
+					await this.persist();
+					this.display(); // Refresh to update greyed-out state
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Enable Write Access')
+			.setDesc('Allow MCP tools to create/update hologram notes (read-only by default).')
+			.setDisabled(!this.plugin.settings.mcpEnabled)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.mcpWriteAccess).onChange(async (v) => {
+					this.plugin.settings.mcpWriteAccess = v;
+					await this.persist();
+					this.display(); // Refresh to update greyed-out state
+				}),
+			);
+
+		let generatedKeyCache = '';
+		const initialDesc = this.plugin.settings.mcpKeyMasked 
+			? `Key (obscured): ${this.plugin.settings.mcpKeyMasked} (Status: ${this.plugin.settings.mcpEnabled ? 'Enabled' : 'Disabled'})` 
+			: (this.plugin.settings.mcpKeyHash ? 'Key configured (hash stored).' : 'No active key generated.');
+
+		const mcpSetting = new Setting(containerEl)
+			.setName('MCP Key')
+			.setDesc(initialDesc);
+
+		mcpSetting.addButton((b) =>
+			b.setButtonText('Generate Key').setCta().onClick(async () => {
+				const arr = new Uint8Array(24);
+				window.crypto.getRandomValues(arr);
+				const newKey = 'sh_' + Array.from(arr, byte => byte.toString(16).padStart(2, '0')).join('');
+				
+				// Generate hash
+				const encoder = new TextEncoder();
+				const data = encoder.encode(newKey);
+				const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+				const hashArray = Array.from(new Uint8Array(hashBuffer));
+				const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+				
+				const masked = newKey.slice(0, 6) + '••••••••••••••••' + newKey.slice(-4);
+				
+				this.plugin.settings.mcpKeyHash = hashHex;
+				this.plugin.settings.mcpKeyMasked = masked;
+				await this.persist();
+				
+				generatedKeyCache = newKey;
+				mcpSetting.setDesc(`Generated: ${newKey} (Copy it now, it will obscure after copying!)`);
+			}),
+		);
+
+		mcpSetting.addButton((b) =>
+			b.setButtonText('Copy to Clipboard').onClick(async () => {
+				if (!generatedKeyCache) {
+					new Notice('No MCP key generated yet.');
+					return;
+				}
+				await navigator.clipboard.writeText(generatedKeyCache);
+				new Notice('MCP key copied to clipboard.');
+				const masked = generatedKeyCache.slice(0, 6) + '••••••••••••••••' + generatedKeyCache.slice(-4);
+				mcpSetting.setDesc(`Key (obscured): ${masked}`);
+			}),
+		);
+
 		this.renderNodeGlossary(containerEl);
 		this.renderRelGlossary(containerEl);
 	}
+
 
 	private renderNodeGlossary(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Node types').setDesc('Glossary of hologram node types.').setHeading();
@@ -421,5 +551,23 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 				this.display();
 			}).open();
 		});
+
+		new Setting(containerEl)
+			.setName('Reset settings')
+			.setDesc('Revert all settings to factory defaults.')
+			.addButton((b) =>
+				b.setButtonText('Reset to factory defaults')
+					.setWarning()
+					.onClick(() => {
+						new ConfirmModal(this.app, {
+							title: 'Are you sure?',
+							message: 'All settings will revert to defaults.',
+							onConfirm: () => {
+								this.plugin.settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+								void this.persist().then(() => this.display());
+							},
+						}).open();
+					}),
+			);
 	}
 }

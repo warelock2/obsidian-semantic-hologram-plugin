@@ -1,6 +1,7 @@
 import { ItemView, Platform, WorkspaceLeaf } from 'obsidian';
 // @ts-ignore
-import { GIF } from 'gifenc';
+import * as gifenc from 'gifenc';
+const { GIFEncoder, quantize, applyPalette } = gifenc;
 import type SemanticHologramPlugin from './main';
 import type { HologramTool, RelTypeEntry } from './settings';
 import type { RelationEdge } from './relations';
@@ -158,8 +159,10 @@ export class SemanticHologramView extends ItemView {
 	private touchTappedNode = -1;
 	private touchGesture: 'none' | 'pan' | 'pin' | 'group' | 'select' | 'rotate' = 'none';
 	private isRecording = false;
+	private isEncoding = false;
 	private recordingFrames: ImageData[] = [];
 	private recordingRotYStart = 0;
+	private recordingProgressEl: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: SemanticHologramPlugin) {
 		super(leaf);
@@ -697,38 +700,165 @@ export class SemanticHologramView extends ItemView {
 		this.step();
 		this.draw();
 		if (this.isRecording) {
+			console.log('[SH] loop: isRecording=true, calling captureFrame');
 			this.captureFrame();
 		}
 		this.raf = requestAnimationFrame(this.loop);
 	};
 
-	private startRecording(): void {
+	private async startRecording(): Promise<void> {
+		console.log('[SH] startRecording called, is3D:', this.is3D);
 		if (!this.is3D) {
 			this.showToast('Recording only supported in 3D mode');
 			return;
 		}
 		this.isRecording = true;
+		this.isEncoding = false;
 		this.recordingFrames = [];
 		this.recordingRotYStart = this.rotY;
-		this.showToast('Recording...');
+		this.showToast('Recording 3D rotation...');
+
+		if (!this.recordingProgressEl) {
+			console.log('[SH] Creating recordingProgressEl and attaching to document.body');
+			this.recordingProgressEl = document.body.createDiv({ cls: 'sh-recording-progress' });
+		}
+		this.recordingProgressEl.style.cssText = 'display: block !important; visibility: visible !important;';
+		console.log('[SH] progress bar set to display block');
+		this.updateProgressUI(0, 1257);
+
+		// Write status file for MCP
+		const statusPath = '.hologram-status.json';
+		const statusData = JSON.stringify({ status: 'recording', timestamp: Date.now() });
+		
+        // Use adapter directly to overwrite reliably
+        await (this.app.vault.adapter as any).write(statusPath, statusData);
+	}
+
+	private updateProgressUI(current: number, total: number): void {
+		if (!this.recordingProgressEl) return;
+		const pct = Math.min(100, Math.round((current / total) * 100));
+		this.recordingProgressEl.innerHTML = `
+			<div class="sh-progress-bar-title">Generating GIF: ${pct}%</div>
+			<div class="sh-progress-bar-track"><div class="sh-progress-bar-fill" style="width: ${pct}%"></div></div>
+		`;
 	}
 
 	private captureFrame(): void {
 		if (!this.canvas || !this.ctx) return;
-		const { width, height } = this.canvas;
-		const imageData = this.ctx.getImageData(0, 0, width, height);
-		this.recordingFrames.push(imageData as any);
+		
+		// Capture every 2nd frame to reduce size and frame count
+		if (this.recordingFrames.length % 2 === 0) {
+			const targetWidth = 800;
+			const aspect = this.canvas.height / this.canvas.width;
+			const targetHeight = Math.round(targetWidth * aspect);
+
+			const offscreen = document.createElement('canvas');
+			offscreen.width = targetWidth;
+			offscreen.height = targetHeight;
+			const offCtx = offscreen.getContext('2d');
+			if (offCtx) {
+				offCtx.drawImage(this.canvas, 0, 0, targetWidth, targetHeight);
+				const imageData = offCtx.getImageData(0, 0, targetWidth, targetHeight);
+				this.recordingFrames.push(imageData as any);
+			}
+		}
+
+		const totalExpected = 1257;
+		this.updateProgressUI(this.recordingFrames.length, totalExpected / 2);
 
 		// Stop after one full rotation (approx 2π / 0.005)
-		if (Math.abs(this.rotY - this.recordingRotYStart) >= Math.PI * 2) {
+		if (Math.abs(this.rotY - this.recordingRotYStart) >= Math.PI * 2 || this.recordingFrames.length >= totalExpected / 2) {
 			this.stopAndEncode();
 		}
 	}
 
 	private stopAndEncode(): void {
 		this.isRecording = false;
-		this.showToast('Encoding...');
-		// Need to actually use gifenc here to encode this.recordingFrames
+		this.isEncoding = true;
+		if (this.recordingProgressEl) {
+			this.recordingProgressEl.innerHTML = `<div class="sh-progress-bar-title">Encoding GIF... Please wait</div>`;
+		}
+		this.showToast('Encoding GIF...');
+
+		// Run encoding asynchronously
+		setTimeout(async () => {
+			try {
+				const gif = GIFEncoder();
+
+				this.recordingFrames.forEach((frame, i) => {
+					const data = frame.data;
+					const fWidth = frame.width;
+					const fHeight = frame.height;
+					const palette = quantize(data, 256);
+					const index = applyPalette(data, palette);
+					
+					const opts: any = { palette, delay: 10 };
+					if (i === 0) opts.repeat = 0;
+					
+					gif.writeFrame(index, fWidth, fHeight, opts);
+				});
+
+				gif.finish();
+				const buffer = gif.bytes();
+				const blob = new Blob([buffer], { type: 'image/gif' });
+				const url = URL.createObjectURL(blob);
+
+				const folderName = 'HologramCaptures';
+				const vault = this.app.vault;
+				if (!vault.getAbstractFileByPath(folderName)) {
+					await vault.createFolder(folderName);
+				}
+
+				const fileName = `${folderName}/hologram-${Date.now()}.gif`;
+				const arrayBuffer = await blob.arrayBuffer();
+                
+                // Ensure unique filename
+                let finalFileName = fileName;
+                let counter = 1;
+                while (vault.getAbstractFileByPath(finalFileName)) {
+                    finalFileName = `${folderName}/hologram-${Date.now()}-${counter++}.gif`;
+                }
+                
+				await vault.createBinary(finalFileName, arrayBuffer);
+
+				this.showToast(`Saved GIF to ${finalFileName}`);
+
+				// Write status file for MCP
+				const statusPath = '.hologram-status.json';
+				const statusData = JSON.stringify({ status: 'success', path: finalFileName, timestamp: Date.now() });
+				await (vault.adapter as any).write(statusPath, statusData);
+
+				if (this.recordingProgressEl) {
+					this.recordingProgressEl.innerHTML = `
+						<div class="sh-progress-bar-title">Saved to ${finalFileName}</div>
+						<div class="sh-preview-container"><img class="sh-gif-preview" src="${url}" /></div>
+						<div class="sh-progress-actions">
+							<button class="sh-dismiss-progress-btn">Close</button>
+						</div>
+					`;
+					this.recordingProgressEl.querySelector('.sh-dismiss-progress-btn')?.addEventListener('click', () => {
+						this.recordingProgressEl!.style.display = 'none';
+					});
+					
+					// Open the file in a new leaf/pane
+					await this.app.workspace.openLinkText(fileName, '', true);
+				}
+			} catch (err) {
+				console.error('[SH] GIF encoding error:', err);
+				this.showToast('GIF encoding failed');
+				
+				// Write error status
+				const statusPath = '.hologram-status.json';
+				const statusData = JSON.stringify({ status: 'error', error: String(err), timestamp: Date.now() });
+				await (this.app.vault.adapter as any).write(statusPath, statusData);
+
+				if (this.recordingProgressEl) {
+					this.recordingProgressEl.style.display = 'none';
+				}
+			} finally {
+				this.isEncoding = false;
+			}
+		}, 50);
 	}
 
 	private step(): void {
@@ -2260,7 +2390,12 @@ export class SemanticHologramView extends ItemView {
 			const label = nextMode === 'off' ? 'Rotation off' : nextMode === 'cw' ? 'CW rotation' : 'CCW rotation';
 			this.showToast(label);
 		} else if (key === 'g' && !e.repeat) {
-			this.startRecording();
+			console.log('[SH] g key pressed, isRecording:', this.isRecording, 'isEncoding:', this.isEncoding);
+			if (this.isRecording || this.isEncoding) {
+				this.showToast('GIF generation in progress');
+			} else {
+				this.startRecording();
+			}
 		} else if (key === 's' && !e.repeat) {
 			this.selectMode = true;
 			this.selectDragOccurred = false;

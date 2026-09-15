@@ -1330,6 +1330,7 @@ export class SemanticHologramView extends ItemView {
 		if (this.is3D) {
 			const R = this.worldR();
 			const rotated = this.nodes.map((n) => this.rotatePoint(n.x, n.y, n.z, this.rotCx, this.rotCy, this.rotCz));
+			const maxAbsZ = Math.max(...rotated.map(p => Math.abs(p.z)), 1);
 
 			const order = rotated
 				.map((p, i) => ({ p, i }))
@@ -1343,7 +1344,7 @@ export class SemanticHologramView extends ItemView {
 				const depth = (p.z + R) / (2 * R || 1);
 				const isHighlighted = this.hoverIndex === i || highlighted.has(i);
 				const isFaded = this.hoverIndex >= 0 && !isHighlighted;
-				const r = Math.max(2, node.radius * this.viewScale * (isHighlighted ? 1.5 : 1.0));
+				const r = this.nodeScreenRadius(node, p, maxAbsZ) * (isHighlighted ? 1.4 : 1.0);
 				const alpha = isFaded ? 0.15 : ((node.pinned || node.selected || isHighlighted) ? 0.9 : (0.45 + depth * 0.55));
 				ctx.fillStyle = isFaded
 					? this.withAlpha(this.nodeColor, 0.15)
@@ -1362,11 +1363,19 @@ export class SemanticHologramView extends ItemView {
 				ctx.fill();
 			}
 
-			ctx.font = '10px var(--font-interface)';
 			for (const { p, i } of order) {
 				const node = this.nodes[i]!;
+				const normZ = p.z / maxAbsZ;
+				let scale: number;
+				if (normZ <= 0) {
+					scale = 0.25 + (normZ + 1) * 0.75;
+				} else {
+					scale = 1.0 + normZ * 1.0;
+				}
+				const fontSize = Math.max(6, Math.round(10 * scale));
+				ctx.font = `${fontSize}px var(--font-interface)`;
 				ctx.fillStyle = this.withAlpha(this.labelColor, 0.35 + ((p.z + R) / (2 * R || 1)) * 0.65);
-				ctx.fillText(node.label, this.toScreenX(p.x) + node.radius + 3, this.toScreenY(p.y));
+				ctx.fillText(node.label, this.toScreenX(p.x) + this.nodeScreenRadius(node, p, maxAbsZ) + 3, this.toScreenY(p.y));
 			}
 
 			// Edges are drawn in the foreground so arrowheads stay visible over nodes.
@@ -1380,15 +1389,18 @@ export class SemanticHologramView extends ItemView {
 					continue;
 				}
 				const sel = (a.selected ? 1 : 0) + (b.selected ? 1 : 0);
+				const normZA = ra.z / maxAbsZ;
+				const normZB = rb.z / maxAbsZ;
+				const edgeNormZ = (normZA + normZB) / 2;
 				this.strokeArrowLine(
 					this.toScreenX(ra.x),
 					this.toScreenY(ra.y),
-					this.nodeScreenRadius(a, ra, R),
+					this.nodeScreenRadius(a, ra, maxAbsZ),
 					this.toScreenX(rb.x),
 					this.toScreenY(rb.y),
-					this.nodeScreenRadius(b, rb, R),
+					this.nodeScreenRadius(b, rb, maxAbsZ),
 					l,
-					this.edgeStroke(l, sel, highlighted, distances),
+					this.edgeStroke(l, sel, highlighted, distances, edgeNormZ),
 				);
 			}
 			this.drawLiveSelection();
@@ -1458,27 +1470,34 @@ export class SemanticHologramView extends ItemView {
 	private nodeScreenRadius(node: GraphNode, p: { x: number; y: number; z: number }, R: number): number {
 		if (this.is3D) {
 			const depth = (p.z + R) / (2 * R || 1);
-			return Math.max(2, node.radius * this.viewScale * (this.plugin.settings.depthBase + depth * 0.9));
+			const minScale = 0.25;
+			const maxScale = 2.0;
+			const scale = minScale + depth * (maxScale - minScale);
+			return Math.max(2, node.radius * this.viewScale * scale);
 		}
 		return Math.max(3, node.radius * this.viewScale);
 	}
 
-	private edgeStroke(link: GraphLink, selCount: number, highlightedNodes?: Set<number>, distances?: Map<number, number>): string {
+	private edgeStroke(link: GraphLink, selCount: number, highlightedNodes?: Set<number>, distances?: Map<number, number>, edgeDepth?: number): string {
 		const hasHighlight = highlightedNodes !== undefined && highlightedNodes.size > 0;
+		let baseAlpha = 1.0;
+		if (this.is3D && edgeDepth !== undefined) {
+			baseAlpha = 0.25 + edgeDepth * 0.75;
+		}
 		if (!hasHighlight) {
-			if (selCount === 1) return this.withAlpha(link.edgeColor, 0.35);
-			return link.edgeColor;
+			if (selCount === 1) return this.withAlpha(link.edgeColor, Math.min(0.35, baseAlpha * 0.5));
+			return this.withAlpha(link.edgeColor, baseAlpha);
 		}
 		const bothIn = highlightedNodes!.has(link.a) && highlightedNodes!.has(link.b);
-		if (!bothIn) return this.withAlpha(link.edgeColor, 0.25);
+		if (!bothIn) return this.withAlpha(link.edgeColor, Math.min(0.25, baseAlpha * 0.3));
 		const da = distances?.get(link.a);
 		const db = distances?.get(link.b);
-		if (da === undefined || db === undefined) return this.withAlpha(link.edgeColor, 0.25);
+		if (da === undefined || db === undefined) return this.withAlpha(link.edgeColor, Math.min(0.25, baseAlpha * 0.3));
 		const minD = Math.min(da, db);
 		const diff = Math.abs(da - db);
-		if (diff === 1 && minD < this.plugin.settings.hoverDepth) return link.edgeColor;
-		if (diff === 0 && minD === 0) return link.edgeColor;
-		return this.withAlpha(link.edgeColor, 0.25);
+		if (diff === 1 && minD < this.plugin.settings.hoverDepth) return this.withAlpha(link.edgeColor, baseAlpha);
+		if (diff === 0 && minD === 0) return this.withAlpha(link.edgeColor, baseAlpha);
+		return this.withAlpha(link.edgeColor, Math.min(0.25, baseAlpha * 0.3));
 	}
 
 	private strokeArrowLine(
@@ -1660,6 +1679,36 @@ export class SemanticHologramView extends ItemView {
 			ix = this.toScreenX(this.rotCx);
 			iy = this.toScreenY(this.rotCy);
 		}
+
+		if (this.is3D) {
+			const cx = w / 2;
+			const cy = h - 35;
+			const rx = 20;
+			const ry = 7;
+
+			// Draw X-Z plane rotation track ellipse at bottom center (fixed screen space, no zoom scaling)
+			ctx.save();
+			ctx.strokeStyle = this.withAlpha(this.nodeColor, 0.85);
+			ctx.lineWidth = 1.5;
+			ctx.beginPath();
+			ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+			ctx.stroke();
+
+			// Draw orbiting node on the X-Z track (driven by rotY rotation around Y axis)
+			const dotSx = cx + rx * Math.cos(-this.rotY);
+			const dotSy = cy + ry * Math.sin(-this.rotY);
+			const dotRadius = 4.5;
+
+			ctx.fillStyle = this.nodeColor;
+			ctx.beginPath();
+			ctx.arc(dotSx, dotSy, dotRadius, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.strokeStyle = this.withAlpha(this.nodeColor, 0.8);
+			ctx.lineWidth = 1.5;
+			ctx.stroke();
+			ctx.restore();
+		}
+
 		const s = 13;
 		ctx.lineWidth = 1.25;
 		ctx.strokeStyle = this.withAlpha(this.labelColor, 0.85);
@@ -1889,7 +1938,7 @@ export class SemanticHologramView extends ItemView {
 			this.rotY = this.rotateStartRotY + dx * 0.00125;
 			this.rotX = Math.max(
 				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.00125),
+				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX + dy * 0.00125),
 			);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
@@ -2118,7 +2167,7 @@ export class SemanticHologramView extends ItemView {
 			this.rotY = this.rotateStartRotY + dx * 0.00125;
 			this.rotX = Math.max(
 				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.00125),
+				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX + dy * 0.00125),
 			);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;

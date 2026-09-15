@@ -425,10 +425,15 @@ export default class SemanticHologramPlugin extends Plugin {
 	async activateView() {
 		const { workspace } = this.app;
 
-		// If the active leaf is an empty view (new tab), reuse it.
-		if (workspace.activeLeaf?.view.getViewType() === 'empty') {
-			await workspace.activeLeaf.setViewState({ type: VIEW_TYPE_HOLOGRAM, active: true });
-			workspace.revealLeaf(workspace.activeLeaf);
+		// If there is an empty leaf (e.g. new tab), reuse it.
+		const emptyLeaves = workspace.getLeavesOfType('empty');
+		const targetLeaf = workspace.activeLeaf?.view.getViewType() === 'empty' 
+			? workspace.activeLeaf 
+			: (emptyLeaves.length > 0 ? emptyLeaves[0] : null);
+		
+		if (targetLeaf) {
+			await targetLeaf.setViewState({ type: VIEW_TYPE_HOLOGRAM, active: true });
+			workspace.revealLeaf(targetLeaf);
 			return;
 		}
 

@@ -6,6 +6,7 @@ import type SemanticHologramPlugin from './main';
 import type { HologramTool, RelTypeEntry } from './settings';
 import type { RelationEdge } from './relations';
 import { inScopePath, scanRelations } from './relations';
+import { readConfidences } from './confidence';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
 
@@ -497,6 +498,13 @@ export class SemanticHologramView extends ItemView {
 
 		const nodes: GraphNode[] = [];
 		const index = new Map<string, number>();
+
+		console.time('SH-Confidence-Load');
+		const confs = await readConfidences(this.plugin.app, files);
+		console.timeEnd('SH-Confidence-Load');
+		const confMap = new Map(confs.map((c) => [c.path, c.value]));
+		console.log('[SH] Loaded confidences (non-null entries):', Array.from(confMap.entries()).filter(([p, v]) => v !== null));
+
 		for (const f of files) {
 			const oldIdx = existing.get(f.path);
 			let node: GraphNode;
@@ -519,6 +527,7 @@ export class SemanticHologramView extends ItemView {
 					pinned: false,
 					selected: false,
 					homeSet: false,
+					confidence: confMap.get(f.path) ?? null,
 				};
 			}
 			index.set(f.path, nodes.length);
@@ -1349,7 +1358,19 @@ export class SemanticHologramView extends ItemView {
 				const isCandidate = this.candidateNode === node.path;
 				const isFaded = this.hoverIndex >= 0 && !isHighlighted;
 				const r = this.nodeScreenRadius(node, p, maxAbsZ) * (isHighlighted ? 1.4 : 1.0);
-				const alpha = isFaded ? 0.15 : ((node.pinned || node.selected || isHighlighted || isCandidate) ? 0.9 : (0.45 + depth * 0.55));
+				let alpha = isFaded ? 0.15 : ((node.pinned || node.selected || isHighlighted || isCandidate) ? 0.9 : (0.45 + depth * 0.55));
+				if (node.confidence !== null && !isFaded && !node.pinned && !node.selected && !isHighlighted && !isCandidate) {
+					alpha = 0.3 + node.confidence * 0.6;
+				}
+
+				if (node.confidence !== null && !isFaded) {
+					ctx.beginPath();
+					ctx.arc(sx, sy, r + 2 + node.confidence * 6, 0, Math.PI * 2);
+					ctx.strokeStyle = this.withAlpha(this.nodeColor, node.confidence * 0.4);
+					ctx.lineWidth = 1;
+					ctx.stroke();
+				}
+
 				ctx.fillStyle = isFaded
 					? this.withAlpha(this.nodeColor, 0.15)
 					: ((node.pinned || node.selected || isHighlighted || isCandidate)
@@ -1423,11 +1444,25 @@ export class SemanticHologramView extends ItemView {
 			const isCandidate = this.candidateNode === node.path;
 			const isFaded = this.hoverIndex >= 0 && !isHighlighted;
 			const r = Math.max(3, node.radius * this.viewScale * (isHighlighted ? 1.5 : 1.0));
+			
+			let alpha = 0.92;
+			if (node.confidence !== null && !isFaded && !node.pinned && !node.selected && !isHighlighted && !isCandidate) {
+				alpha = 0.3 + node.confidence * 0.6;
+			}
+
+			if (node.confidence !== null && !isFaded) {
+				ctx.beginPath();
+				ctx.arc(sx, sy, r + 2 + node.confidence * 6, 0, Math.PI * 2);
+				ctx.strokeStyle = this.withAlpha(this.nodeColor, node.confidence * 0.4);
+				ctx.lineWidth = 1;
+				ctx.stroke();
+			}
+
 			ctx.fillStyle = isFaded
 				? this.withAlpha(this.nodeColor, 0.15)
 				: (node.pinned || node.selected || isHighlighted || isCandidate
 					? (isCandidate ? '#9B5DE5' : this.nodeColor)
-					: this.withAlpha(this.nodeColor, 0.92));
+					: this.withAlpha(this.nodeColor, alpha));
 			if (node.pinned || node.selected || isCandidate) {
 				ctx.beginPath();
 				ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);

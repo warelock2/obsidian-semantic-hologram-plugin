@@ -33,19 +33,14 @@ interface ConfidenceMap {
 	nodeType: string;
 }
 
-async function readConfidences(plugin: SemanticHologramPlugin, files: TFile[]): Promise<ConfidenceMap[]> {
-	return Promise.all(
-		files.map(async (f) => {
-			let content = '';
-			try {
-				content = await plugin.app.vault.read(f);
-			} catch {
-				// Unreadable note: treat as unknown confidence.
-			}
-			const fm = parseNoteFrontmatter(extractFrontmatter(content));
-			return { path: f.path, value: fm.confidence, nodeType: fm.noteType ?? 'concept' };
-		}),
-	);
+export async function readConfidences(app: App, files: TFile[]): Promise<ConfidenceMap[]> {
+	return files.map((f) => {
+		const cache = app.metadataCache.getFileCache(f);
+		const fm = cache?.frontmatter ?? {};
+		const confidence = typeof fm['confidence'] === 'number' ? Math.min(1, Math.max(0, fm['confidence'])) : null;
+		const nodeType = (typeof fm['node-type'] === 'string' ? fm['node-type'] : (typeof fm['note-type'] === 'string' ? fm['note-type'] : null)) ?? 'concept';
+		return { path: f.path, value: confidence, nodeType };
+	});
 }
 
 export async function computeGrounding(
@@ -53,7 +48,7 @@ export async function computeGrounding(
 	files: TFile[],
 	edges: RelationEdge[],
 ): Promise<Set<string>> {
-	const confidences = await readConfidences(plugin, files);
+	const confidences = await readConfidences(plugin.app, files);
 	const nodeTypes = new Map<string, string>();
 	for (const c of confidences) {
 		nodeTypes.set(c.path, c.nodeType);
@@ -114,7 +109,7 @@ export async function computeTopicKnowledge(
 	}
 
 	const confidences = new Map<string, number>();
-	for (const c of await readConfidences(plugin, files)) {
+	for (const c of await readConfidences(plugin.app, files)) {
 		if (c.value !== null) {
 			const isGrounded = grounded.has(c.path);
 			confidences.set(c.path, isGrounded ? c.value : 0);
@@ -159,7 +154,7 @@ export class NodeConfidenceModal extends Modal {
 		const files = this.plugin.app.vault
 			.getMarkdownFiles()
 			.filter((f) => f.path.startsWith(`${HOLOGRAM_FOLDER}/`));
-		const confidences = await readConfidences(this.plugin, files);
+		const confidences = await readConfidences(this.plugin.app, files);
 		const confMap = new Map<string, number>();
 		for (const c of confidences) {
 			if (c.value !== null) {

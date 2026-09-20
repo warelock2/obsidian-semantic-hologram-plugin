@@ -25,6 +25,7 @@ interface GraphNode {
 	pinned: boolean;
 	selected: boolean;
 	homeSet: boolean;
+	confidence: number | null;
 }
 
 interface GraphLink {
@@ -158,6 +159,7 @@ export class SemanticHologramView extends ItemView {
 	private touchDownY = 0;
 	private touchTappedNode = -1;
 	private touchGesture: 'none' | 'pan' | 'pin' | 'group' | 'select' | 'rotate' = 'none';
+	private candidateNode: string | null = null;
 	private isRecording = false;
 	private isEncoding = false;
 	private recordingFrames: ImageData[] = [];
@@ -555,6 +557,7 @@ export class SemanticHologramView extends ItemView {
 			this.app.vault,
 			this.app.metadataCache,
 			knownIds,
+			settings.defaultRelStrength,
 			(path) => this.isInScope(path),
 		);
 		// A newer build may have started while we were reading; drop stale results.
@@ -706,7 +709,7 @@ export class SemanticHologramView extends ItemView {
 		this.raf = requestAnimationFrame(this.loop);
 	};
 
-	private async startRecording(): Promise<void> {
+	public async startRecording(): Promise<void> {
 		console.log('[SH] startRecording called, is3D:', this.is3D);
 		if (!this.is3D) {
 			this.showToast('Recording only supported in 3D mode');
@@ -1343,18 +1346,19 @@ export class SemanticHologramView extends ItemView {
 				const sy = this.toScreenY(p.y);
 				const depth = (p.z + R) / (2 * R || 1);
 				const isHighlighted = this.hoverIndex === i || highlighted.has(i);
+				const isCandidate = this.candidateNode === node.path;
 				const isFaded = this.hoverIndex >= 0 && !isHighlighted;
 				const r = this.nodeScreenRadius(node, p, maxAbsZ) * (isHighlighted ? 1.4 : 1.0);
-				const alpha = isFaded ? 0.15 : ((node.pinned || node.selected || isHighlighted) ? 0.9 : (0.45 + depth * 0.55));
+				const alpha = isFaded ? 0.15 : ((node.pinned || node.selected || isHighlighted || isCandidate) ? 0.9 : (0.45 + depth * 0.55));
 				ctx.fillStyle = isFaded
 					? this.withAlpha(this.nodeColor, 0.15)
-					: ((node.pinned || node.selected || isHighlighted)
-						? this.nodeColor
+					: ((node.pinned || node.selected || isHighlighted || isCandidate)
+						? (isCandidate ? '#9B5DE5' : this.nodeColor)
 						: this.withAlpha(this.nodeColor, alpha));
-				if (node.pinned || node.selected) {
+				if (node.pinned || node.selected || isCandidate) {
 					ctx.beginPath();
 					ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
-					ctx.strokeStyle = this.nodeColor;
+					ctx.strokeStyle = isCandidate ? '#9B5DE5' : this.nodeColor;
 					ctx.lineWidth = 1.5;
 					ctx.stroke();
 				}
@@ -1416,17 +1420,18 @@ export class SemanticHologramView extends ItemView {
 			const sx = this.toScreenX(node.x);
 			const sy = this.toScreenY(node.y);
 			const isHighlighted = this.hoverIndex === i || highlighted.has(i);
+			const isCandidate = this.candidateNode === node.path;
 			const isFaded = this.hoverIndex >= 0 && !isHighlighted;
 			const r = Math.max(3, node.radius * this.viewScale * (isHighlighted ? 1.5 : 1.0));
 			ctx.fillStyle = isFaded
 				? this.withAlpha(this.nodeColor, 0.15)
-				: (node.pinned || node.selected || isHighlighted
-					? this.nodeColor
+				: (node.pinned || node.selected || isHighlighted || isCandidate
+					? (isCandidate ? '#9B5DE5' : this.nodeColor)
 					: this.withAlpha(this.nodeColor, 0.92));
-			if (node.pinned || node.selected) {
+			if (node.pinned || node.selected || isCandidate) {
 				ctx.beginPath();
 				ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
-				ctx.strokeStyle = this.nodeColor;
+				ctx.strokeStyle = isCandidate ? '#9B5DE5' : this.nodeColor;
 				ctx.lineWidth = 1.5;
 				ctx.stroke();
 			}
@@ -2294,6 +2299,7 @@ export class SemanticHologramView extends ItemView {
 			}
 		}
 		this.selected.clear();
+		this.candidateNode = null;
 		this.updateCursor();
 	}
 
@@ -2721,6 +2727,26 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		void this.app.workspace.openLinkText(node.label, '');
+	}
+
+	setCandidateNode(path: string | null): void {
+		this.candidateNode = path;
+		if (path) {
+			const node = this.nodes.find((n) => n.path === path);
+			if (node) {
+				this.viewX = node.x - (this.canvas?.clientWidth ?? 0) / (2 * this.viewScale);
+				this.viewY = node.y - (this.canvas?.clientHeight ?? 0) / (2 * this.viewScale);
+			}
+		}
+		this.requestRedraw();
+	}
+
+	requestRedraw(): void {
+		this.settled = false;
+	}
+
+	showLevelTooltip(show: boolean): void {
+		// Implement later
 	}
 
 	async dumpGraphState(): Promise<string> {

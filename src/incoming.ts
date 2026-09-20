@@ -1,27 +1,16 @@
 import { MetadataCache, TFile, Vault } from 'obsidian';
 import type { RelationEdge, RelationScan } from './relations';
 import { findIncomingSection, formatStrength, scanRelations } from './relations';
-import { HOLOGRAM_FOLDER } from './settings';
 
 const INCOMING_HEADER_TEXT = '## Incoming relationships';
 
-const REL_VERBS: Record<string, string> = {
-	'logic/supports': 'supports',
-	'logic/contradicts': 'contradicts',
-	'structural/depends-on': 'depends on',
-	related: 'relates',
-};
-
 function relVerb(relId: string): string {
-	return REL_VERBS[relId] ?? relId;
+	return relId;
 }
 
-/** Canonical link to a note path: hologram notes are folder-qualified. */
+/** Canonical link to a note path: bare wikilink (hologram-internal links are unqualified). */
 function wikiLink(path: string): string {
 	const base = path.split('/').pop()?.replace(/\.md$/i, '') ?? path;
-	if (path.startsWith(`${HOLOGRAM_FOLDER}/`)) {
-		return `[[${HOLOGRAM_FOLDER}/${base}|${base}]]`;
-	}
 	return `[[${base}]]`;
 }
 
@@ -44,9 +33,10 @@ export async function syncIncomingRelationships(
 	vault: Vault,
 	metadataCache: MetadataCache,
 	knownIds: Set<string>,
+	defaultRelStrength: number,
 	inScope: (path: string) => boolean,
 ): Promise<IncomingSyncResult> {
-	const scan = await scanRelations(files, vault, metadataCache, knownIds, inScope);
+	const scan = await scanRelations(files, vault, metadataCache, knownIds, defaultRelStrength, inScope);
 	const byTarget = new Map<string, RelationEdge[]>();
 	for (const e of scan.edges) {
 		const arr = byTarget.get(e.target) ?? [];

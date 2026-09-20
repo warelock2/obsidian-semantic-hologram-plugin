@@ -3,7 +3,18 @@ export const REL_LINE_SEARCH = /-\s+([a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[
 
 import type { TFile } from 'obsidian';
 
-export function injectWikilinksAsRelations(content: string, _source?: TFile, _plugin?: { app: { vault: { getAbstractFileByPath: (p: string) => unknown } } }): string {
+interface PluginLike {
+	app: {
+		vault: {
+			getAbstractFileByPath: (p: string) => unknown;
+		};
+	};
+	settings: {
+		defaultRelStrength?: number;
+	};
+}
+
+export function injectWikilinksAsRelations(content: string, _source?: TFile, _plugin?: PluginLike): string {
     // 1. Parse existing sections: Relations and Incoming relationships
     const relHeaderMatch = content.match(/(^|\n)(#{1,6}\s+Relations(?:hips)?\s*\r?\n)/i);
     const incomingHeaderMatch = content.match(/(^|\n)(#{1,6}\s+Incoming\s+Relations(?:hips)?\s*\r?\n)/i);
@@ -74,7 +85,6 @@ export function injectWikilinksAsRelations(content: string, _source?: TFile, _pl
     const qualify = (target: string): string => {
         const base = target.split('|').pop()!.split('/').pop()!.trim();
         if (!base) return target;
-        if (_plugin && _plugin.app.vault.getAbstractFileByPath(`hologram/${base}.md`)) return `hologram/${base}|${base}`;
         return base;
     };
 
@@ -84,7 +94,7 @@ export function injectWikilinksAsRelations(content: string, _source?: TFile, _pl
         const relId = m[1]!;
         const target = m[2]!;
         const revived = m[3] ? ' {R}' : '';
-        const strength = m[4]!;
+        const strength = m[4] ?? String(_plugin?.settings?.defaultRelStrength ?? 0.5);
         return `- ${relId} [[${qualify(target)}]]${revived} (${strength})`;
     };
 
@@ -100,12 +110,13 @@ export function injectWikilinksAsRelations(content: string, _source?: TFile, _pl
         }
     }
 
+    const defaultStrength = String(_plugin?.settings?.defaultRelStrength ?? 0.5);
     const linesToAdd = [...deduped];
     for (const target of targets) {
         const base = target.split('|').pop()!.split('/').pop()!.trim();
         const exists = [...existingRelTargets].some((r) => r.split('|').pop()!.split('/').pop()!.trim() === base);
         if (!exists) {
-            linesToAdd.push(`- related [[${qualify(target)}]] (0.5)`);
+            linesToAdd.push(`- related [[${qualify(target)}]] (${defaultStrength})`);
         }
     }
 

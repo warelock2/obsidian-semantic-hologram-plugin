@@ -1,4 +1,4 @@
-import { MetadataCache, TFile, Vault } from 'obsidian';
+import { MetadataCache, TFile, Vault, parseYaml } from 'obsidian';
 import type { RelTypeEntry } from './settings';
 import { HOLOGRAM_FOLDER } from './settings';
 
@@ -43,13 +43,17 @@ export interface NoteFrontmatter {
 	noteType: string | null;
 	confidence: number | null;
 	created: string | null;
+	groups: string[];
+	groupsExcluded: string[];
+	holograms?: string[];
 }
 
 export const RELATION_HEADER = /^#{1,6}\s+(Relations(?:hips)?|Relationship)\s*$/i;
 export const INCOMING_HEADER = /^#{1,6}\s+Incoming\s+Relations(?:hips)?\s*$/i;
 
-// - logic/supports [[Target]] {R}? (0.50)
+// - logic/supports [[Target]] {R}? (0.5)
 // - related [[Target]] (0.5)
+// - structural/subsumed-by [[Target]] (0.75)
 const REL_LINE =
 	/^-\s+([a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?)\s+\[\[([^\]]+)\]\]\s*(\{R\})?\s*\((\d{1,2}(?:\.\d{1,2})?)\)\s*$/;
 
@@ -66,17 +70,7 @@ export function isHologramNote(
 
 /** True when a vault path is a hologram-scoped note. */
 export function inScopePath(path: string, vault: Vault, metadataCache: MetadataCache): boolean {
-	if (path.startsWith(`${HOLOGRAM_FOLDER}/`)) {
-		return true;
-	}
-	const f = vault.getAbstractFileByPath(path);
-	if (f instanceof TFile) {
-		const fm = metadataCache.getFileCache(f)?.frontmatter;
-		if (fm && (fm['hologram-node'] === true || fm['hologram_node'] === true)) {
-			return true;
-		}
-	}
-	return false;
+	return path.startsWith(`${HOLOGRAM_FOLDER}/`);
 }
 
 export function parseNoteFrontmatter(frontmatter: string | null): NoteFrontmatter {
@@ -85,25 +79,48 @@ export function parseNoteFrontmatter(frontmatter: string | null): NoteFrontmatte
 		noteType: null,
 		confidence: null,
 		created: null,
+		groups: [],
+		groupsExcluded: [],
 	};
 	if (!frontmatter) {
 		return out;
 	}
-	const m = frontmatter.match(/^hologram-node:\s*(true|false)/i);
-	if (m) {
-		out.hologramNode = m[1]!.toLowerCase() === 'true';
-	}
-	const t = frontmatter.match(/^note-type:\s*(.+)$/im);
-	if (t) {
-		out.noteType = t[1]!.trim();
-	}
-	const c = frontmatter.match(/^confidence:\s*([0-9]*\.?[0-9]+)/im);
-	if (c) {
-		out.confidence = Math.min(1, Math.max(0, parseFloat(c[1]!)));
-	}
-	const cr = frontmatter.match(/^created:\s*(.+)$/im);
-	if (cr) {
-		out.created = cr[1]!.trim();
+	try {
+		const fm = parseYaml(frontmatter) as Record<string, unknown>;
+		out.hologramNode = !!fm['hologram-node'] || !!fm['hologram_node'];
+		let rawType: unknown = fm['node-type'] || fm['note-type'] || null;
+		if (typeof rawType === 'string' && rawType.startsWith('DEFUNCT:')) {
+			rawType = null;
+		}
+		out.noteType = typeof rawType === 'string' ? rawType : null;
+		out.confidence = typeof fm['confidence'] === 'number' ? Math.min(1, Math.max(0, fm['confidence'])) : null;
+		out.created = fm['created'] ? (typeof fm['created'] === 'object' ? JSON.stringify(fm['created']) : String(fm['created'])) : null;
+		if (Array.isArray(fm['groups'])) {
+			out.groups = fm['groups'].flatMap((g: any): string[] => {
+				if (typeof g === 'string') {
+					return [g];
+				}
+				// Unquoted YAML like `- [[Dirty Bit]]` parses as a nested flow
+				// sequence (e.g. [['Dirty Bit']]); unwrap a single-element array.
+				if (Array.isArray(g) && g.length === 1 && typeof g[0] === 'string') {
+					return [g[0]];
+				}
+				return [];
+			});
+		}
+		if (Array.isArray(fm['groups-excluded'])) {
+			out.groupsExcluded = fm['groups-excluded'].flatMap((g: any): string[] => {
+				if (typeof g === 'string') {
+					return [g];
+				}
+				if (Array.isArray(g) && g.length === 1 && typeof g[0] === 'string') {
+					return [g[0]];
+				}
+				return [];
+			});
+		}
+	} catch (e) {
+		console.error('Failed to parse frontmatter', e);
 	}
 	return out;
 }
@@ -182,7 +199,7 @@ export function findIncomingSection(content: string): { startLine: number; endLi
 		for (let i = section.startLine + 1; i < section.endLine; i++) {
 			const line = lines[i] ?? '';
 			const trimmed = line.trim();
-			if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('---')) {
+			if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('---') || trimmed.startsWith('- DEFUNCT:')) {
 				continue;
 			}
 			if (!trimmed.startsWith('-')) {
@@ -196,20 +213,21 @@ export function findIncomingSection(content: string): { startLine: number; endLi
 			const relId = m[1]!;
 			const targetName = m[2]!;
 			const reversed = !!m[3];
-			const strengthStr = m[4]!;
-			const strength = parseFloat(strengthStr);
+			const strengthStr = m[4];
+			const strength = parseFloat(strengthStr!);
 
 			if (!knownIds.has(relId)) {
 				malformed.push({ path, line: i, text: trimmed, reason: `unknown relationship type '${relId}'` });
 				continue;
 			}
-			if (strength < 0 || strength > 1) {
-				malformed.push({ path, line: i, text: trimmed, reason: `strength out of range [0,1]: ${strengthStr}` });
+			if (strength < 0.01 || strength > 1) {
+				malformed.push({ path, line: i, text: trimmed, reason: `strength out of range [0.01,1]: ${strengthStr}` });
 				continue;
 			}
 
 			const target = resolve(targetName, path);
 			if (!target || target === path) {
+				console.log(`[SH-Relations] Failed to resolve target '${targetName}' from source '${path}'`);
 				malformed.push({ path, line: i, text: trimmed, reason: `unresolved target '${targetName}'` });
 				continue;
 			}
@@ -241,6 +259,7 @@ export function findIncomingSection(content: string): { startLine: number; endLi
 		vault: Vault,
 		metadataCache: MetadataCache,
 		knownIds: Set<string>,
+		defaultRelStrength: number,
 		inScope: (path: string) => boolean,
 	): Promise<RelationScan> {
 		const edges: RelationEdge[] = [];
@@ -249,6 +268,24 @@ export function findIncomingSection(content: string): { startLine: number; endLi
 		const resolve = (name: string, sourcePath: string): string | null => {
 			const file = metadataCache.getFirstLinkpathDest(name, sourcePath);
 			// Enforce separate context: only resolve to files within HOLOGRAM_FOLDER
+			if (file && file.path.startsWith(HOLOGRAM_FOLDER + '/')) {
+				return file.path;
+			}
+			return null;
+		};
+
+		// A `groups:` membership entry may be any of: a bare name (`Linux Kernel
+		// Internals`), a wikilink (`[[Linux Kernel Internals]]`), a folder-qualified
+		// wikilink with alias (`[[hologram/Linux Kernel Internals|Linux Kernel
+		// Internals (0.50)]]`), or a wikilink with a trailing strength token
+		// (`[[hologram/Demand Paging]] (0.50)`). Normalize to the link target and
+		// resolve it to a hologram note path.
+		const resolveGroup = (group: string, sourcePath: string): string | null => {
+			const wikilink = group.match(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]*)?\]\]/);
+			let target = wikilink ? wikilink[1]!.trim() : group.trim();
+			// Drop any leftover strength token like `(0.50)` after the target.
+			target = target.replace(/\s*\(\d{1,2}(?:\.\d{1,2})?\)\s*$/, '');
+			const file = metadataCache.getFirstLinkpathDest(target, sourcePath);
 			if (file && file.path.startsWith(HOLOGRAM_FOLDER + '/')) {
 				return file.path;
 			}
@@ -271,8 +308,24 @@ export function findIncomingSection(content: string): { startLine: number; endLi
 				continue;
 			}
 			const data = parseRelations(f.path, content, resolve, knownIds);
+			console.log(`[SH-Relations] Parsed ${data.outgoing.length} edges from ${f.path}`);
 			edges.push(...data.outgoing);
 			malformed.push(...data.malformed);
+
+			for (const group of fm.groups) {
+				const parentPath = resolveGroup(group, f.path);
+				if (parentPath) {
+					edges.push({
+						source: f.path,          // Lower-order concept (Child/Specialization)
+						target: parentPath,      // Higher-order concept (Parent)
+						relId: 'structural/subsumed-by',
+						strength: fm.confidence ?? defaultRelStrength, // Child's confidence level
+						reversed: false,
+						authoredFrom: f.path,
+						raw: `groups: ${group}`,
+					});
+				}
+			}
 		}
 
 	// Dedup on (source, target, relId): keep the first, aggregate strengths for conflicts.
@@ -319,7 +372,108 @@ export function formatStrength(v: number): string {
 	return s;
 }
 
+/**
+ * Set the `groups:` and `groups-excluded:` frontmatter lists of a note body,
+ * preserving every other field. `groupName` entries not present in the lists
+ * are appended; entries already present are de-duplicated.
+ */
+export function setGroupsInContent(content: string, groups: string[], groupsExcluded: string[]): string {
+	const clean = (arr: string[]): string[] =>
+		[...new Set(arr.map((g) => g.trim()).filter(Boolean))];
+	const g = stringifyList(clean(groups));
+	const e = stringifyList(clean(groupsExcluded));
+	const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+	if (!m) {
+		return `---\ngroups:\n${g}groups-excluded:\n${e}---\n\n${content}`;
+	}
+	let body = m[1]!;
+	body = replaceListKey(body, 'groups', g);
+	body = replaceListKey(body, 'groups-excluded', e);
+	return `---\n${body}\n---${content.slice(m[0]!.length)}`;
+}
+
+/**
+ * Set the `holograms:` frontmatter list of a note body, preserving every other field.
+ * Tags already present are deduplicated.
+ */
+export function setHologramsInContent(content: string, holograms: string[]): string {
+	const clean = (arr: string[]): string[] =>
+		[...new Set(arr.map((g) => g.trim()).filter(Boolean))];
+	const h = stringifyList(clean(holograms));
+	const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+	if (!m) {
+		return `---\nholograms:\n${h}---\n\n${content}`;
+	}
+	let body = m[1]!;
+	body = replaceListKey(body, 'holograms', h);
+	return `---\n${body}\n---${content.slice(m[0]!.length)}`;
+}
+
+/** YAML block-list lines for the given strings (indented under a key). */
+function stringifyList(arr: string[]): string {
+	return arr.length === 0 ? '  []\n' : arr.map((s) => `  - "${s.replace(/"/g, '\\"')}"\n`).join('');
+}
+
+/**
+ * Replace (or insert) a YAML list key inside a frontmatter body. Handles both
+ * block lists (`groups:\n  - A`) and flow lists (`groups: [A]`).
+ */
+function replaceListKey(body: string, key: string, replacement: string): string {
+	const re = new RegExp(`^${key}:.*$`, 'm');
+	const line = `${key}:`;
+	// Insert after the last non-empty line so we never land inside another key's
+	// block. For a fresh key, append at the end.
+	if (!re.test(body)) {
+		const trimmed = body.trimEnd();
+		return trimmed ? `${trimmed}\n${line}\n${replacement}` : `${line}\n${replacement}`;
+	}
+	// Remove the old key line and any following block-list items.
+	const lines = body.split('\n');
+	let idx = lines.findIndex((l) => new RegExp(`^${key}:`).test(l));
+	if (idx < 0) {
+		return body;
+	}
+	let end = idx + 1;
+	while (end < lines.length && /^\s+[-[]/.test(lines[end]!)) {
+		end++;
+	}
+	lines.splice(idx, end - idx, line, ...replacement.split('\n'));
+	return lines.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
 /** Serialized representation of a relation line for mirroring. */
 export function relationLineToText(rel: RelTypeEntry, targetName: string, strength: number, reversed: boolean): string {
 	return `- ${rel.id} [[${targetName}]]${reversed ? ' {R}' : ''} (${formatStrength(strength)})`;
+}
+
+// An authored relation line (`- <relId> [[target]] [{R}]`) with no strength.
+// Does not match incoming mirror lines (`- ([[...]])`) or `- DEFUNCT:` lines.
+const REL_LINE_NO_STRENGTH =
+	/^(-\s+[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?\s+\[\[[^\]]+\]\]\s*(?:\{R\})?\s*)$/gm;
+
+export interface MissingStrengthLocation {
+	line: number;
+	text: string;
+}
+
+/** Locate authored relationship lines that are missing an explicit strength. */
+export function findMissingStrengths(content: string): MissingStrengthLocation[] {
+	const out: MissingStrengthLocation[] = [];
+	const re = new RegExp(REL_LINE_NO_STRENGTH.source, REL_LINE_NO_STRENGTH.flags);
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(content)) !== null) {
+		if (m[0].length === 0) {
+			re.lastIndex++;
+			continue;
+		}
+		const line = (content.slice(0, m.index).match(/\n/g)?.length ?? 0) + 1;
+		out.push({ line, text: m[0].trim() });
+	}
+	return out;
+}
+
+/** Re-append the configured default strength to relation lines that lack one. */
+export function normalizeRelationStrengths(content: string, defaultRelStrength: number): string {
+	const strength = formatStrength(defaultRelStrength);
+	return content.replace(REL_LINE_NO_STRENGTH, (m) => `${m} (${strength})`);
 }

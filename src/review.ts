@@ -1,21 +1,24 @@
 import { App, ButtonComponent, FuzzySuggestModal, Modal, Notice, Setting, TFolder, TFile } from 'obsidian';
 import type { RelationEdge } from './relations';
-import { findIncomingSection, findRelationsSection, formatStrength, scanRelations } from './relations';
+import { formatStrength } from './relations';
 import { HOLOGRAM_FOLDER } from './settings';
-import { ensureHologramContent, nextAvailablePath, rewriteLinks, HologramTagModal } from './importNote';
+import { ensureHologramContent, rewriteLinks, HologramTagModal } from './importNote';
+import { auditHologramNodes, HologramAuditModal } from './audit';
 import { syncIncomingRelationships } from './incoming';
 import type SemanticHologramPlugin from './main';
+import {
+	addRelation as addRelationShared,
+	removeRelation as removeRelationShared,
+	collectReviewData,
+	setGroupState,
+	typeBucketKey,
+} from './reviewCommon';
+import type { ReviewData, ReviewPair, GroupBucket, GroupSubject, GroupState } from './reviewCommon';
 
 export interface ReviewAddRequest {
 	relId: string;
 	strength: number;
 	reversed: boolean;
-}
-
-interface ReviewPair {
-	source: TFile;
-	target: TFile;
-	edges: RelationEdge[];
 }
 
 /** Copy notes into `Holograms/` with `hologram-node: true`, collision-safe names. */
@@ -69,52 +72,15 @@ export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFi
 	await plugin.refreshGraphs();
 	if (imported.length > 0) {
 		new Notice(`Imported ${imported.length} note(s) into ${HOLOGRAM_FOLDER}/.`);
+		const auditResults = await auditHologramNodes(plugin);
+		if (auditResults.length > 0) {
+			new HologramAuditModal(plugin.app, plugin, auditResults).open();
+		}
 	}
 	if (failed.length > 0) {
 		new Notice(`Failed to import ${failed.length} note(s).`);
 	}
 	return imported;
-}
-
-/** Append a relation line to a note's `## Relations` section, creating it if needed. */
-async function addRelationTo(
-	plugin: SemanticHologramPlugin,
-	sourceFile: TFile,
-	targetFile: TFile,
-	req: ReviewAddRequest,
-): Promise<void> {
-	const vault = plugin.app.vault;
-	let content = await vault.read(sourceFile);
-	const lines = content.split(/\r?\n/);
-	const line = `- ${req.relId} [[${targetFile.basename}]]${req.reversed ? ' {R}' : ''} (${formatStrength(req.strength)})`;
-	const section = findRelationsSection(content);
-	if (section) {
-		lines.splice(section.startLine + 1, 0, '', line);
-	} else {
-		const incoming = findIncomingSection(content);
-		lines.splice(incoming ? incoming.startLine : lines.length, 0, '', '## Relations', '', line);
-	}
-	await vault.modify(sourceFile, lines.join('\n').replace(/\n{3,}/g, '\n\n'));
-}
-
-/** Remove a relation line (verbatim `raw`) from the note that hosts it. */
-async function removeRelationFrom(plugin: SemanticHologramPlugin, authoringFile: TFile, raw: string): Promise<void> {
-	const vault = plugin.app.vault;
-	let content = await vault.read(authoringFile);
-	const section = findRelationsSection(content);
-	if (!section) {
-		return;
-	}
-	const lines = content.split(/\r?\n/);
-	const idx = lines.findIndex((l) => l.trim().length > 0 && l.trim() === raw.trim());
-	if (idx < 0) {
-		return;
-	}
-	lines.splice(idx, 1);
-	if (lines[idx]?.trim() === '') {
-		lines.splice(idx, 1);
-	}
-	await vault.modify(authoringFile, lines.join('\n').replace(/\n{3,}/g, '\n\n'));
 }
 
 export class FolderPickModal extends FuzzySuggestModal<TFolder> {
@@ -167,7 +133,7 @@ export class BulkImportModal extends Modal {
 		folder: TFolder,
 	) {
 		super(app);
-		const under = folder.isRoot() ? (f: TFile) => true : (f: TFile) => f.path.startsWith(`${folder.path}/`);
+		const under = folder.isRoot() ? (_f: TFile) => true : (f: TFile) => f.path.startsWith(`${folder.path}/`);
 		this.candidates = app.vault
 			.getMarkdownFiles()
 			.filter((f) => under(f) && !plugin.isInScope(f.path))
@@ -237,12 +203,13 @@ export class BulkImportModal extends Modal {
 	private async runImport(): Promise<void> {
 		const files = this.candidates.filter((f) => this.selected.has(f.path));
 		this.close();
-		new HologramTagModal(this.app, async (tag) => {
-			const imported = await bulkImportNotes(this.plugin, files, tag);
-			if (imported.length === 0) {
-				return;
-			}
-			new ReviewConnectionsModal(this.app, this.plugin, imported).open();
+		new HologramTagModal(this.app, (tag) => {
+			void bulkImportNotes(this.plugin, files, tag).then((imported) => {
+				if (imported.length === 0) {
+					return;
+				}
+				new ReviewConnectionsModal(this.app, this.plugin).open();
+			});
 		}).open();
 	}
 
@@ -252,98 +219,83 @@ export class BulkImportModal extends Modal {
 }
 
 export class ReviewConnectionsModal extends Modal {
-	private others: TFile[] = [];
-	private pairs: ReviewPair[] = [];
+	private data: ReviewData | null = null;
+	private activeTab: 'pairings' | 'groups' | 'holograms' = 'pairings';
 	private mode: 'all' | 'random' = 'all';
 	private sampleSize = 20;
-	private skippedPairs = new Set<string>();
+	private dirByPair = new Map<string, boolean>();
 
 	constructor(
 		app: App,
 		private plugin: SemanticHologramPlugin,
-		private sources: TFile[],
+		_sources?: TFile[],
 	) {
 		super(app);
 	}
 
 	async onOpen(): Promise<void> {
+		this.contentEl.addClass('sh-review-modal');
+		this.contentEl.style.display = 'flex';
+		this.contentEl.style.flexDirection = 'column';
+		this.contentEl.style.height = '80vh';
+		this.contentEl.style.boxSizing = 'border-box';
+		this.contentEl.style.overflow = 'hidden';
 		await this.reload();
 	}
 
-	private getPairKey(p: ReviewPair): string {
-		return [p.source.path, p.target.path].sort().join('|');
-	}
-
 	private async reload(): Promise<void> {
-		const files = this.plugin.app.vault.getMarkdownFiles();
-		const scan = await scanRelations(
-			files,
-			this.plugin.app.vault,
-			this.plugin.app.metadataCache,
-			this.plugin.knownRelIds(),
-			(path) => this.plugin.isInScope(path),
-		);
-
-		// Include ALL files in the vault to identify potential connections between imported and non-imported notes
-		const allFiles = files;
-		
-		this.others = allFiles.filter((f) => !this.sources.some((s) => s.path === f.path));
-		
-		const targets = this.others.length > 0 ? this.others : allFiles;
-		this.pairs = [];
-		const seenPairs = new Set<string>();
-
-		for (const src of this.sources) {
-			for (const tgt of targets) {
-				if (src.path === tgt.path) {
-					continue;
-				}
-				const pairKey = [src.path, tgt.path].sort().join('|');
-				if (seenPairs.has(pairKey)) {
-					continue;
-				}
-				seenPairs.add(pairKey);
-
-				// Look for relationships in the scan
-				const edges = scan.edges.filter(
-					(e) =>
-						(e.source === src.path && e.target === tgt.path) ||
-						(e.source === tgt.path && e.target === src.path),
-				);
-				
-				// ALSO look for wikilinks that aren't yet formal relationships
-				const isRelated = await this.hasWikilinkConnection(src, tgt);
-				
-				if (edges.length > 0 || isRelated) {
-					this.pairs.push({ source: src, target: tgt, edges });
-				}
-			}
-		}
-		this.pairs.sort((a, b) => {
-			const aSrc = a.source.basename.toLowerCase();
-			const bSrc = b.source.basename.toLowerCase();
-			if (aSrc !== bSrc) return aSrc.localeCompare(bSrc);
-			return a.target.basename.toLowerCase().localeCompare(b.target.basename.toLowerCase());
-		});
+		this.dirByPair.clear();
+		this.data = await collectReviewData(this.plugin);
 		this.render();
 	}
 
-	private async hasWikilinkConnection(f1: TFile, f2: TFile): Promise<boolean> {
-		const content1 = await this.plugin.app.vault.read(f1);
-		const content2 = await this.plugin.app.vault.read(f2);
-		const link1 = `[[${f2.basename}]]`;
-		const link2 = `[[${f1.basename}]]`;
-		return content1.includes(link1) || content2.includes(link2);
+	private render(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+
+		const header = contentEl.createDiv({ cls: 'sh-review-header-container' });
+		header.createEl('h4', { text: 'Review connections' });
+
+		const tabs = contentEl.createDiv({ cls: 'sh-review-tabs' });
+		const mkTab = (label: string, tab: 'pairings' | 'groups' | 'holograms') => {
+			const btn = tabs.createEl('button', { text: label, cls: 'sh-review-tab' });
+			btn.toggleClass('is-active', this.activeTab === tab);
+			btn.addEventListener('click', () => {
+				this.activeTab = tab;
+				this.render();
+			});
+		};
+		mkTab('Pairings', 'pairings');
+		mkTab('Groups', 'groups');
+		mkTab('Holograms', 'holograms');
+
+		const scroll = contentEl.createDiv({ cls: 'sh-review-scroll' });
+		scroll.style.flex = '1';
+		scroll.style.overflowY = 'auto';
+
+		if (!this.data) {
+			return;
+		}
+		if (this.activeTab === 'pairings') {
+			this.renderPairings(scroll);
+		} else if (this.activeTab === 'groups') {
+			this.renderGroups(scroll);
+		} else {
+			this.renderHolograms(scroll);
+		}
 	}
 
 	private visiblePairs(): ReviewPair[] {
-		if (this.mode === 'all') {
-			return this.pairs;
-		}
-		if (this.pairs.length === 0) {
+		if (!this.data) {
 			return [];
 		}
-		const copy = [...this.pairs];
+		if (this.mode === 'all') {
+			return this.data.pairs;
+		}
+		if (this.data.pairs.length === 0) {
+			return [];
+		}
+		const copy = [...this.data.pairs];
 		for (let i = copy.length - 1; i > 0; i--) {
 			const j = Math.floor(Math.random() * (i + 1));
 			const a = copy[i];
@@ -356,17 +308,16 @@ export class ReviewConnectionsModal extends Modal {
 		return copy.slice(0, Math.min(this.sampleSize, copy.length));
 	}
 
-	private render(): void {
-		const { contentEl } = this;
-		contentEl.empty();
-		contentEl.addClass('sh-review-modal');
-		contentEl.createEl('h4', { text: 'Review connections' });
-		contentEl.createDiv({
+	private renderPairings(scroll: HTMLElement): void {
+		if (!this.data) {
+			return;
+		}
+		scroll.createDiv({
 			cls: 'sh-review-sub',
-			text: `${this.pairs.length} pair(s) to review.`,
+			text: `${this.data.pairs.length} possible pair(s).`,
 		});
 
-		const toolbar = contentEl.createDiv({ cls: 'sh-review-toolbar' });
+		const toolbar = scroll.createDiv({ cls: 'sh-review-toolbar' });
 		const mkMode = (label: string, mode: 'all' | 'random') => {
 			const btn = toolbar.createEl('button', { text: label, cls: 'sh-review-mode' });
 			btn.toggleClass('is-active', this.mode === mode);
@@ -377,49 +328,90 @@ export class ReviewConnectionsModal extends Modal {
 		};
 		mkMode('All pairs', 'all');
 		mkMode('Random sample', 'random');
-		if (this.mode === 'random' && this.pairs.length > 0) {
+		if (this.mode === 'random' && this.data.pairs.length > 0) {
 			const sizeWrap = toolbar.createSpan({ cls: 'sh-review-size' });
 			sizeWrap.createSpan({ text: 'sample:' });
 			const size = sizeWrap.createEl('input', {
 				type: 'number',
-				attr: { min: '1', max: String(this.pairs.length), value: String(this.sampleSize) },
+				attr: { min: '1', max: String(this.data.pairs.length), value: String(this.sampleSize) },
 			});
 			size.addEventListener('change', () => {
-				const v = Math.max(1, Math.min(this.pairs.length, parseInt(size.value, 10) || 1));
+				const v = Math.max(1, Math.min(this.data?.pairs.length ?? 1, parseInt(size.value, 10) || 1));
 				this.sampleSize = v;
 				this.render();
 			});
 		}
 
 		const shown = this.visiblePairs();
-		contentEl.createDiv({ cls: 'sh-review-sub', text: `Showing ${shown.length} / ${this.pairs.length} pair(s).` });
-
 		if (shown.length === 0) {
-			contentEl.createDiv({ cls: 'sh-review-empty', text: 'No pairs to review.' });
-		} else {
-			const list = contentEl.createDiv({ cls: 'sh-review-list' });
-			for (const p of shown) {
+			scroll.createDiv({ cls: 'sh-review-empty', text: 'No pairs to review.' });
+			return;
+		}
+
+		const buckets = new Map<string, ReviewPair[]>();
+		for (const p of shown) {
+			const key = typeBucketKey(p.sourceType, p.targetType);
+			const arr = buckets.get(key) ?? [];
+			arr.push(p);
+			buckets.set(key, arr);
+		}
+		const sorted = [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+		const list = scroll.createDiv({ cls: 'sh-review-list' });
+		for (const [bucketKey, pairs] of sorted) {
+			const [ta, tb] = bucketKey.split('|');
+			const bucketHeader = list.createDiv({ cls: 'sh-review-bucket' });
+			bucketHeader.createSpan({
+				cls: 'sh-review-bucket-label',
+				text: `${ta} — ${tb} (${pairs.length})`,
+			});
+			for (const p of pairs) {
 				this.renderPairRow(list, p);
 			}
 		}
+	}
 
-		new Setting(contentEl).addButton((b) => b.setButtonText('Done').setCta().onClick(() => this.close()));
+	private pairKey(p: ReviewPair): string {
+		return `${p.source.path}|${p.target.path}`;
+	}
+
+	private pairDir(p: ReviewPair): boolean {
+		const v = this.dirByPair.get(this.pairKey(p));
+		return v === undefined ? true : v;
 	}
 
 	private renderPairRow(list: HTMLElement, p: ReviewPair): void {
 		const row = list.createDiv({ cls: 'sh-review-row' });
-		
-		// Header row
+
 		const header = row.createDiv({ cls: 'sh-review-header' });
 		const names = header.createDiv({ cls: 'sh-review-names' });
-		
-		const leftName = names.createSpan({ cls: 'sh-review-name', text: p.source.basename, attr: { title: p.source.basename } });
+
+		const dirForward = this.pairDir(p);
+		const left = dirForward ? p.source : p.target;
+		const right = dirForward ? p.target : p.source;
+
+		const leftName = names.createSpan({
+			cls: 'sh-review-name',
+			text: left.basename,
+			attr: { title: left.basename },
+		});
 		leftName.style.justifySelf = 'center';
-		
-		const arrow = names.createSpan({ text: '→' });
-		arrow.style.justifySelf = 'center';
-		
-		const rightName = names.createSpan({ cls: 'sh-review-name', text: p.target.basename, attr: { title: p.target.basename } });
+
+		const dirBtn = names.createEl('button', {
+			text: dirForward ? '→' : '←',
+			cls: 'sh-review-btn sh-review-dir',
+		});
+		dirBtn.setAttribute('title', dirForward ? 'Source → Target' : 'Target → Source');
+		dirBtn.addEventListener('click', () => {
+			this.dirByPair.set(this.pairKey(p), !dirForward);
+			this.render();
+		});
+
+		const rightName = names.createSpan({
+			cls: 'sh-review-name',
+			text: right.basename,
+			attr: { title: right.basename },
+		});
 		rightName.style.justifySelf = 'center';
 
 		const addBtn = header.createEl('button', { text: '+', cls: 'sh-review-btn sh-review-add-rel' });
@@ -428,50 +420,86 @@ export class ReviewConnectionsModal extends Modal {
 			this.renderAddEdgeRow(relsContainer, p);
 		});
 
-		// Relations container
 		const relsContainer = row.createDiv({ cls: 'sh-review-rels-container' });
 		for (const e of p.edges) {
-			const relRow = relsContainer.createDiv({ cls: 'sh-review-rel-row' });
-			const forward = e.source === p.source.path && e.target === p.target.path;
-			
-			const typeSpan = relRow.createSpan({ cls: 'sh-review-rel-type', text: `${e.relId} (${formatStrength(e.strength)})` });
-			typeSpan.style.flex = '1';
-			typeSpan.style.textAlign = 'left';
-			
-			const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
-			controls.style.marginLeft = 'auto';
-			controls.style.display = 'flex';
-			controls.style.gap = '4px';
-
-			const toggle = controls.createEl('button', { text: forward ? '→' : '←', cls: 'sh-review-btn sh-review-rel-toggle' });
-			toggle.setAttribute('title', 'Toggle direction (left/right)');
-			toggle.addEventListener('click', () => {
-				void this.onDeleteEdge(e).then(() => {
-					void this.onAdd(p, { relId: e.relId, strength: e.strength, reversed: !e.reversed });
-				});
-			});
-
-			const del = controls.createEl('button', { text: '✕', cls: 'sh-review-btn sh-review-rel-del' });
-			del.setAttribute('title', 'Delete relationship');
-			del.addEventListener('click', () => {
-				void this.onDeleteEdge(e);
-			});
+			this.renderEdgeRow(relsContainer, p, e);
 		}
 	}
 
-	private renderAddEdgeRow(container: HTMLElement, p: ReviewPair) {
+	private renderEdgeRow(container: HTMLElement, p: ReviewPair, e: RelationEdge): void {
 		const relRow = container.createDiv({ cls: 'sh-review-rel-row' });
-		
+
+		const forward = e.source === p.source.path && e.target === p.target.path;
+
+		const typeSpan = relRow.createSpan({
+			cls: 'sh-review-rel-type',
+			text: `${e.relId} (${formatStrength(e.strength)})`,
+		});
+		typeSpan.style.flex = '1';
+		typeSpan.style.textAlign = 'left';
+
+		const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
+		controls.style.marginLeft = 'auto';
+		controls.style.display = 'flex';
+		controls.style.gap = '4px';
+
+		const toggle = controls.createEl('button', {
+			text: forward ? '→' : '←',
+			cls: 'sh-review-btn sh-review-rel-toggle',
+		});
+		toggle.setAttribute('title', 'Toggle direction (left/right)');
+		toggle.addEventListener('click', () => {
+			void this.onDeleteEdge(e).then(() => {
+				void this.onAdd(p, { relId: e.relId, strength: e.strength, reversed: !e.reversed });
+			});
+		});
+
+		const edit = controls.createEl('button', { text: '✎', cls: 'sh-review-btn sh-review-rel-toggle' });
+		edit.setAttribute('title', 'Edit relationship type and strength');
+		edit.addEventListener('click', () => {
+			new RelationEditModal(
+				this.app,
+				this.plugin,
+				p,
+				async (req) => {
+					await removeRelationShared(this.plugin, this.fileOf(e.authoredFrom)!, e.raw);
+					await this.onAdd(p, req);
+				},
+				{ relId: e.relId, strength: e.strength, reversed: e.reversed },
+			).open();
+		});
+
+		const del = controls.createEl('button', { text: '✕', cls: 'sh-review-btn sh-review-rel-del' });
+		del.setAttribute('title', 'Delete relationship');
+		del.addEventListener('click', () => {
+			void this.onDeleteEdge(e);
+		});
+	}
+
+	private fileOf(path: string): TFile | null {
+		const f = this.plugin.app.vault.getAbstractFileByPath(path);
+		return f instanceof TFile ? f : null;
+	}
+
+	private renderAddEdgeRow(container: HTMLElement, p: ReviewPair): void {
+		const relRow = container.createDiv({ cls: 'sh-review-rel-row' });
+
 		const enabled = this.plugin.settings.relTypes.filter((t) => t.enabled);
 		const relTypes = enabled.length > 0 ? enabled : this.plugin.settings.relTypes;
-		
+
 		const dropdown = relRow.createEl('select');
 		dropdown.style.marginRight = '8px';
 		for (const t of relTypes) dropdown.createEl('option', { value: t.id, text: t.id });
-		
-		const strengthInput = relRow.createEl('input', { 
-			type: 'number', 
-			attr: { min: '0', max: '1', step: '0.1', value: '0.5', title: 'Strength' } 
+
+		const strengthInput = relRow.createEl('input', {
+			type: 'number',
+			attr: {
+				min: '0.01',
+				max: '1',
+				step: '0.01',
+				value: String(this.plugin.settings.defaultRelStrength ?? 0.5),
+				title: 'Strength',
+			},
 		});
 		strengthInput.style.width = '60px';
 
@@ -482,29 +510,34 @@ export class ReviewConnectionsModal extends Modal {
 
 		const saveBtn = controls.createEl('button', { text: '✓', cls: 'sh-review-btn sh-review-save-btn' });
 		saveBtn.addEventListener('click', () => {
-			const req: ReviewAddRequest = {
+			void this.onAdd(p, {
 				relId: dropdown.value,
-				strength: parseFloat(strengthInput.value) || 0.5,
-				reversed: false
-			};
-			void this.onAdd(p, req);
+				strength: parseFloat(strengthInput.value) || (this.plugin.settings.defaultRelStrength ?? 0.5),
+				reversed: !this.pairDir(p),
+			});
 			relRow.remove();
 		});
-		
+
 		const cancelBtn = controls.createEl('button', { text: '✕', cls: 'sh-review-btn sh-review-rel-del' });
 		cancelBtn.addEventListener('click', () => {
 			relRow.remove();
 		});
 	}
 
-
-
 	private async onDeleteEdge(e: RelationEdge): Promise<void> {
-		const file = this.plugin.app.vault.getAbstractFileByPath(e.authoredFrom);
-		if (file instanceof TFile) {
-			await removeRelationFrom(this.plugin, file, e.raw);
+		const file = this.fileOf(e.authoredFrom);
+		if (file) {
+			await removeRelationShared(this.plugin, file, e.raw);
 			await this.syncAndReload();
 		}
+	}
+
+	private async onAdd(p: ReviewPair, req: ReviewAddRequest): Promise<void> {
+		const dirForward = this.pairDir(p);
+		const source = dirForward ? p.source : p.target;
+		const target = dirForward ? p.target : p.source;
+		await addRelationShared(this.plugin, source, target, req.relId, req.strength, req.reversed);
+		await this.syncAndReload();
 	}
 
 	private async syncAndReload(): Promise<void> {
@@ -514,6 +547,7 @@ export class ReviewConnectionsModal extends Modal {
 				this.plugin.app.vault,
 				this.plugin.app.metadataCache,
 				this.plugin.knownRelIds(),
+				this.plugin.settings.defaultRelStrength,
 				(path) => this.plugin.isInScope(path),
 			);
 		} catch (e) {
@@ -523,11 +557,158 @@ export class ReviewConnectionsModal extends Modal {
 		await this.reload();
 	}
 
-	private async onAdd(p: ReviewPair, req: ReviewAddRequest): Promise<void> {
-		await addRelationTo(this.plugin, p.source, p.target, req);
+	// ─── Groups ──────────────────────────────────────────────────────────────
+
+	private renderGroups(scroll: HTMLElement): void {
+		const data = this.data;
+		if (!data) {
+			return;
+		}
+		const groups = data.groups.filter((g) => g.groupType !== 'percept');
+		const total = groups.reduce((s, g) => s + g.members.length + g.deleted.length + g.candidates.length, 0);
+		scroll.createDiv({
+			cls: 'sh-review-sub',
+			text: `${groups.length} group(s), ${total} membership(s) to review.`,
+		});
+
+		if (groups.length === 0) {
+			scroll.createDiv({ cls: 'sh-review-empty', text: 'No groups: create notes with a valid group node type (anything but a percept).' });
+			return;
+		}
+
+		const list = scroll.createDiv({ cls: 'sh-review-list' });
+		for (const g of groups) {
+			this.renderGroupBucket(list, g);
+		}
+	}
+
+	private renderGroupBucket(list: HTMLElement, g: GroupBucket): void {
+		const bucket = list.createDiv({ cls: 'sh-review-bucket' });
+
+		const head = bucket.createDiv({ cls: 'sh-review-group-head' });
+		head.createSpan({
+			cls: 'sh-review-group-name',
+			text: `${g.group.basename}`,
+			attr: { title: g.group.path },
+		});
+		head.createSpan({ cls: 'sh-review-group-type', text: g.groupType });
+		head.createSpan({
+			cls: 'sh-review-group-count',
+			text: `${g.members.length} member(s), ${g.candidates.length} candidate(s)`,
+		});
+
+		this.renderSubjectSection(bucket, 'Members', g.members, g.group.basename, 'member');
+		this.renderSubjectSection(bucket, 'Candidates', g.candidates, g.group.basename, 'candidate');
+		this.renderSubjectSection(bucket, `Deleted (${g.deleted.length})`, g.deleted, g.group.basename, 'deleted', true);
+	}
+
+	private renderSubjectSection(
+		bucket: HTMLElement,
+		label: string,
+		list: GroupSubject[],
+		groupName: string,
+		currentState: GroupState,
+		collapsed = false,
+	): void {
+		const section = bucket.createDiv({ cls: 'sh-review-subject-section' });
+		const toggleBtn = section.createEl('button', {
+			text: `${collapsed ? '▸' : '▾'} ${label} (${list.length})`,
+			cls: 'sh-review-section-toggle',
+		});
+		const container = section.createDiv({ cls: 'sh-review-subject-list' });
+		if (collapsed) {
+			container.style.display = 'none';
+		}
+		toggleBtn.addEventListener('click', () => {
+			const show = container.style.display === 'none';
+			container.style.display = show ? '' : 'none';
+			toggleBtn.setText(`${show ? '▾' : '▸'} ${label} (${list.length})`);
+		});
+
+		if (list.length === 0) {
+			container.createDiv({ cls: 'sh-review-subject-empty', text: '—' });
+			return;
+		}
+		for (const s of list) {
+			const subRow = container.createDiv({ cls: 'sh-review-subject-row' });
+			subRow.createSpan({ cls: 'sh-review-subject-name', text: s.node.basename, attr: { title: s.node.path } });
+			subRow.createSpan({ cls: 'sh-review-subject-type', text: s.noteType });
+
+			const controls = subRow.createDiv({ cls: 'sh-review-rel-controls' });
+			controls.style.marginLeft = 'auto';
+			controls.style.display = 'flex';
+			controls.style.gap = '4px';
+
+			const mkStateBtn = (label: string, state: GroupState, title?: string) => {
+				const b = controls.createEl('button', { text: label, cls: 'sh-review-btn sh-review-subject-state' });
+				b.setAttribute('title', title ?? `Set to ${state}`);
+				b.addEventListener('click', () => {
+					void this.onGroupState(s, groupName, state);
+				});
+			};
+
+			if (currentState === 'member') {
+				mkStateBtn('Candidate', 'candidate', 'Remove membership');
+				mkStateBtn('Deleted', 'deleted', 'Exclude from this group');
+			} else if (currentState === 'candidate') {
+				mkStateBtn('Member', 'member', 'Add to group');
+				mkStateBtn('Deleted', 'deleted', 'Exclude from this group');
+			} else {
+				mkStateBtn('Candidate', 'candidate', 'Restore as candidate');
+				mkStateBtn('Member', 'member', 'Add to group');
+			}
+		}
+	}
+
+	private async onGroupState(s: GroupSubject, groupName: string, state: GroupState): Promise<void> {
+		await setGroupState(this.plugin, s.node, groupName, state);
 		await this.syncAndReload();
 	}
 
+	private renderHolograms(scroll: HTMLElement): void {
+		if (!this.data) return;
+
+		const tagMap = new Map<string, TFile[]>();
+		for (const file of this.data.nodes) {
+			const tags = this.plugin.hologramService.getTags(file.path);
+			for (const t of tags) {
+				const arr = tagMap.get(t) ?? [];
+				arr.push(file);
+				tagMap.set(t, arr);
+			}
+		}
+
+		scroll.createDiv({
+			cls: 'sh-review-sub',
+			text: `${tagMap.size} hologram tag(s) across ${this.data.nodes.length} note(s).`,
+		});
+
+		if (tagMap.size === 0) {
+			scroll.createDiv({ cls: 'sh-review-empty', text: 'No hologram tags assigned yet.' });
+			return;
+		}
+
+		const list = scroll.createDiv({ cls: 'sh-review-list' });
+		for (const [tag, files] of tagMap.entries()) {
+			const bucket = list.createDiv({ cls: 'sh-review-bucket' });
+			const head = bucket.createDiv({ cls: 'sh-review-group-head' });
+			head.createSpan({ cls: 'sh-review-group-name', text: tag });
+			head.createSpan({ cls: 'sh-review-group-count', text: `${files.length} note(s)` });
+
+			const subList = bucket.createDiv({ cls: 'sh-review-subject-list' });
+			for (const file of files) {
+				const row = subList.createDiv({ cls: 'sh-review-subject-row' });
+				row.createSpan({ cls: 'sh-review-subject-name', text: file.basename, attr: { title: file.path } });
+				const controls = row.createDiv({ cls: 'sh-review-rel-controls' });
+				controls.style.marginLeft = 'auto';
+				const removeBtn = controls.createEl('button', { text: '✕', cls: 'sh-review-btn sh-review-rel-del' });
+				removeBtn.setAttribute('title', 'Remove hologram tag');
+				removeBtn.addEventListener('click', () => {
+					void this.plugin.hologramService.removeTag(file, tag).then(() => this.reload());
+				});
+			}
+		}
+	}
 
 	onClose(): void {
 		this.contentEl.empty();
@@ -540,6 +721,7 @@ export class RelationEditModal extends Modal {
 		private plugin: SemanticHologramPlugin,
 		private pair: ReviewPair,
 		private onSave: (req: ReviewAddRequest) => Promise<void>,
+		private initial?: ReviewAddRequest,
 	) {
 		super(app);
 	}
@@ -549,12 +731,14 @@ export class RelationEditModal extends Modal {
 		contentEl.empty();
 		contentEl.addClass('sh-relation-edit-modal');
 		contentEl.createEl('h4', {
-			text: `Add relationship: ${this.pair.source.basename} → ${this.pair.target.basename}`,
+			text: `${this.initial ? 'Edit' : 'Add'} relationship: ${this.pair.source.basename} → ${this.pair.target.basename}`,
 		});
 
 		const enabled = this.plugin.settings.relTypes.filter((t) => t.enabled);
 		const relTypes = enabled.length > 0 ? enabled : this.plugin.settings.relTypes;
-		const state: ReviewAddRequest = { relId: relTypes[0]?.id ?? '', strength: 0.5, reversed: false };
+		const state: ReviewAddRequest = this.initial
+			? { ...this.initial }
+			: { relId: relTypes[0]?.id ?? '', strength: this.plugin.settings.defaultRelStrength ?? 0.5, reversed: false };
 
 		new Setting(contentEl).setName('Relationship type').addDropdown((d) => {
 			for (const t of relTypes) {
@@ -564,7 +748,7 @@ export class RelationEditModal extends Modal {
 		});
 
 		new Setting(contentEl).setName('Strength').addSlider((s) => {
-			s.setLimits(0, 1, 0.05).setValue(state.strength).setDynamicTooltip().onChange((v) => (state.strength = v));
+			s.setLimits(0.01, 1, 0.01).setValue(state.strength).setDynamicTooltip().onChange((v) => (state.strength = v));
 		});
 
 		new Setting(contentEl)

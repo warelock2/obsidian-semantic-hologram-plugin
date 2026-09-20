@@ -1,5 +1,6 @@
-import { App, Modal, Notice, Setting, TFile, Vault } from 'obsidian';
+import { App, Modal, Notice, Setting, TFile } from 'obsidian';
 import { HOLOGRAM_FOLDER } from './settings';
+import { findMissingStrengths, formatStrength, inScopePath, normalizeRelationStrengths, scanRelations } from './relations';
 import type SemanticHologramPlugin from './main';
 import { ensureHologramContent } from './importNote';
 
@@ -8,9 +9,33 @@ export interface AuditResult {
 	issues: string[];
 }
 
-export async function auditHologramNodes(vault: Vault): Promise<AuditResult[]> {
+/**
+ * Repair one hologram note: ensure frontmatter and sections, and restore
+ * missing strengths.
+ */
+export function repairHologramNode(content: string, file: TFile, plugin: SemanticHologramPlugin): string {
+	const defaultType = plugin.settings.nodeTypes[0]?.id ?? 'concept';
+	let fixed = ensureHologramContent(content, defaultType, file, plugin);
+	fixed = normalizeRelationStrengths(fixed, plugin.settings.defaultRelStrength);
+	return fixed;
+}
+
+export async function auditHologramNodes(plugin: SemanticHologramPlugin): Promise<AuditResult[]> {
+	const vault = plugin.app.vault;
 	const files = vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${HOLOGRAM_FOLDER}/`));
 	const results: AuditResult[] = [];
+
+	// Determine which notes actually have incoming edges; the incoming section is
+	// only required (and only fixable) when edges exist.
+	const scan = await scanRelations(
+		files,
+		vault,
+		plugin.app.metadataCache,
+		plugin.knownRelIds(),
+		plugin.settings.defaultRelStrength,
+		(path) => inScopePath(path, vault, plugin.app.metadataCache),
+	);
+	const incomingTargets = new Set(scan.edges.map((e) => e.target));
 
 	for (const file of files) {
 		const content = await vault.read(file);
@@ -20,30 +45,25 @@ export async function auditHologramNodes(vault: Vault): Promise<AuditResult[]> {
 		if (!/^---[\s\S]*?hologram-node:\s*true/im.test(content)) {
 			issues.push('Missing hologram-node: true');
 		}
-		if (!/^---[\s\S]*?note-type:/im.test(content)) {
-			issues.push('Missing note-type');
+		if (!/^---[\s\S]*?node-type:/im.test(content)) {
+			issues.push('Missing node-type');
 		}
 		if (!/^---[\s\S]*?created:/im.test(content)) {
 			issues.push('Missing created date');
 		}
 
 		// Check sections
-		if (!/(^|\n)#{1,6}\s+Relations/i.test(content)) {
-			issues.push('Missing ## Relations section');
+		if (!/(^|\n)#{1,6}\s+Relations(?:hips)?/i.test(content)) {
+			issues.push('Missing ## Relationships section');
 		}
-		if (!/(^|\n)#{1,6}\s+Incoming\s+Relations/i.test(content)) {
+		if (incomingTargets.has(file.path) && !/(^|\n)#{1,6}\s+Incoming\s+Relations(?:hips)?/i.test(content)) {
 			issues.push('Missing ## Incoming relationships section');
 		}
 
-		// Check relation links are qualified with the hologram folder
-		const relLineRe = /-\s+[a-z0-9]+(?:\-[a-z0-9]+)*(?:\/[a-z0-9]+(?:\-[a-z0-9]+)*)?\s+\[\[([^\]|]+)\]\]/g;
-		let relMatch;
-		while ((relMatch = relLineRe.exec(content)) !== null) {
-			const target = relMatch[1]!.trim();
-			if (target.includes('/')) continue;
-			if (vault.getAbstractFileByPath(`${HOLOGRAM_FOLDER}/${target}.md`)) {
-				issues.push(`Unqualified relation link: [[${target}]]`);
-			}
+		// Check every authored relation line carries an explicit strength.
+		const expected = ` (${formatStrength(plugin.settings.defaultRelStrength)})`;
+		for (const loc of findMissingStrengths(content)) {
+			issues.push(`Missing strength '${expected}' expected (line ${loc.line}); line: ${loc.text}`);
 		}
 
 		if (issues.length > 0) {
@@ -86,14 +106,19 @@ export class HologramAuditModal extends Modal {
 				.onClick(async () => {
 					for (const res of this.results) {
 						const content = await this.app.vault.read(res.file);
-						// Use default type from settings or 'concept'
-						const defaultType = this.plugin.settings.nodeTypes[0]?.id ?? 'concept';
-						const fixed = ensureHologramContent(content, defaultType, res.file, this.plugin);
+						const fixed = repairHologramNode(content, res.file, this.plugin);
 						await this.app.vault.modify(res.file, fixed);
 					}
 					new Notice(`Fixed ${this.results.length} nodes.`);
 					this.close();
+					await this.plugin.refreshIncomingRelationships();
 					await this.plugin.refreshGraphs();
+				}),
+		).addButton((b) =>
+			b
+				.setButtonText('Skip')
+				.onClick(() => {
+					this.close();
 				}),
 		);
 	}

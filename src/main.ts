@@ -17,48 +17,63 @@ import { AuditConnectionsView, VIEW_TYPE_AUDIT_CONNECTIONS } from './auditView';
 import { ImportNoteModal, importNoteIntoHolograms } from './importNote';
 import { FolderPickModal } from './review';
 import { auditHologramNodes, HologramAuditModal } from './audit';
+import { NodeConfidenceModal } from './confidence';
 
 import { IncomingIndex } from './incomingIndex';
+import { HologramService } from './hologramService';
 
 export default class SemanticHologramPlugin extends Plugin {
 	settings!: SemanticHologramSettings;
 	incomingIndex!: IncomingIndex;
+	hologramService!: HologramService;
 	private ribbonIcon: HTMLElement | null = null;
 
 	async onload() {
 		await this.loadSettings();
+		this.hologramService = new HologramService(this);
+		await this.hologramService.loadCache();
 		this.incomingIndex = new IncomingIndex(this);
 		await this.incomingIndex.update();
 
-		this.registerEvent(this.app.vault.on('modify', () => { void this.incomingIndex.update(); }));
-		this.registerEvent(this.app.vault.on('create', () => { void this.incomingIndex.update(); }));
-		this.registerEvent(this.app.vault.on('delete', () => { void this.incomingIndex.update(); }));
+		this.registerEvent(
+			this.app.vault.on('modify', async (file) => {
+				if (file instanceof TFile) {
+					void this.incomingIndex.update();
+					void this.hologramService.loadCache();
+					// Only sync if it's a hologram note to avoid infinite loops and bloat
+					if (this.isInScope(file.path)) {
+						await this.refreshIncomingRelationships();
+					}
+				}
+				if (file.path === '.hologram-command.json') {
+					void this.handleCommandFile();
+				}
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on('create', async (file) => {
+				if (file instanceof TFile && this.isInScope(file.path)) {
+					void this.hologramService.loadCache();
+					await this.refreshIncomingRelationships();
+				}
+				if (file.path === '.hologram-command.json') {
+					void this.handleCommandFile();
+				}
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on('delete', async (file) => {
+				void this.incomingIndex.update();
+				if (file instanceof TFile && this.isInScope(file.path)) {
+					await this.refreshIncomingRelationships();
+				}
+			})
+		);
 
-		this.registerEvent(this.app.vault.on('modify', (file) => {
-			if (file.path === '.hologram-command.json') {
-				void this.handleCommandFile();
-			}
-		}));
-		this.registerEvent(this.app.vault.on('create', (file) => {
-			if (file.path === '.hologram-command.json') {
-				void this.handleCommandFile();
-			}
-		}));
 
-		this.registerMarkdownPostProcessor((el, ctx) => {
-			if (!this.isInScope(ctx.sourcePath)) return;
-			
-			console.log(`MarkdownPostProcessor: checking incoming for ${ctx.sourcePath}`);
-			const incoming = this.incomingIndex.getIncoming(ctx.sourcePath);
-			if (incoming.length === 0) return;
+		// Post-processor removed in favor of dedicated side panel view
 
-			const container = el.createDiv({ cls: 'sh-incoming-render' });
-			container.createEl('h2', { text: 'Incoming relationships' });
-			const list = container.createEl('ul');
-			for (const edge of incoming) {
-				list.createEl('li', { text: `${edge.relId} from [[${edge.source}]] (${edge.strength})` });
-			}
-		});
+
 
 		this.registerView(
 			VIEW_TYPE_HOLOGRAM,
@@ -79,6 +94,16 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		this.ribbonIcon = this.addRibbonIcon('waypoints', 'Semantic Hologram', () => {
 			void this.activateView();
+		});
+
+
+
+		this.addCommand({
+			id: 'refresh-incoming-relationships',
+			name: 'Refresh incoming relationships in notes',
+			callback: async () => {
+				await this.refreshIncomingRelationships();
+			},
 		});
 
 		this.addCommand({
@@ -151,6 +176,14 @@ export default class SemanticHologramPlugin extends Plugin {
 			name: 'Review connections for all hologram notes',
 			callback: () => {
 				void this.activateReviewView();
+			},
+		});
+
+		this.addCommand({
+			id: 'review-node-confidence',
+			name: 'Review node confidence',
+			callback: () => {
+				new NodeConfidenceModal(this.app, this).open();
 			},
 		});
 
@@ -295,6 +328,24 @@ export default class SemanticHologramPlugin extends Plugin {
 		}
 	}
 
+	async setLevelHighlight(level: number): Promise<void> {
+		this.settings.levelHighlight = level;
+		await this.saveSettings();
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramControlsView) {
+				v.updateLevelSlider();
+			}
+		}
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramView) {
+				v.showLevelTooltip(true);
+				await v.rebuildGraph();
+			}
+		}
+	}
+
 	async refreshGraphs(): Promise<void> {
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM)) {
 			const v = leaf.view;
@@ -321,18 +372,20 @@ export default class SemanticHologramPlugin extends Plugin {
 				this.app.vault,
 				this.app.metadataCache,
 				this.knownRelIds(),
+				this.settings.defaultRelStrength,
 				(path) => this.isInScope(path),
 			);
 		} catch (e) {
 			new Notice(`Semantic Hologram: refresh failed: ${String(e)}`);
 			return;
 		}
-		new Notice(`Updated incoming relationships in ${result.updated.length} hologram note(s).`);
+		// new Notice(`Updated incoming relationships in ${result.updated.length} hologram note(s).`);
+		console.log(`Updated incoming relationships in ${result.updated.length} hologram note(s).`);
 		await this.refreshGraphs();
 	}
 
 	async auditNodes(): Promise<void> {
-		const results = await auditHologramNodes(this.app.vault);
+		const results = await auditHologramNodes(this);
 		new HologramAuditModal(this.app, this, results).open();
 	}
 
@@ -342,6 +395,7 @@ export default class SemanticHologramPlugin extends Plugin {
 			this.app.vault,
 			this.app.metadataCache,
 			this.knownRelIds(),
+			this.settings.defaultRelStrength,
 			(path) => this.isInScope(path),
 		);
 		const lines: string[] = [];

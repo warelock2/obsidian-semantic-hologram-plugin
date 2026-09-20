@@ -15,6 +15,7 @@ export class IncomingIndex {
 			this.plugin.app.vault,
 			this.plugin.app.metadataCache,
 			this.plugin.knownRelIds(),
+			this.plugin.settings.defaultRelStrength,
 			(path) => this.plugin.isInScope(path),
 		);
 		

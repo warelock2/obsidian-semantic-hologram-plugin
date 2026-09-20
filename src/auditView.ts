@@ -1,7 +1,6 @@
 import { ItemView, WorkspaceLeaf, Setting, Notice } from 'obsidian';
 import type SemanticHologramPlugin from './main';
-import { auditHologramNodes } from './audit';
-import { ensureHologramContent } from './importNote';
+import { auditHologramNodes, repairHologramNode } from './audit';
 
 export const VIEW_TYPE_AUDIT_CONNECTIONS = 'audit-connections-view';
 
@@ -31,7 +30,7 @@ export class AuditConnectionsView extends ItemView {
     }
 
     private async runAudit(): Promise<void> {
-        const results = await auditHologramNodes(this.plugin.app.vault);
+        const results = await auditHologramNodes(this.plugin);
         
         const { contentEl } = this;
         contentEl.createDiv({ cls: 'sh-audit-results' }, (div) => {
@@ -51,11 +50,11 @@ export class AuditConnectionsView extends ItemView {
                         .onClick(async () => {
                             for (const res of results) {
                                 const content = await this.plugin.app.vault.read(res.file);
-                                const defaultType = this.plugin.settings.nodeTypes[0]?.id ?? 'concept';
-                                const fixed = ensureHologramContent(content, defaultType, res.file, this.plugin);
+                                const fixed = repairHologramNode(content, res.file, this.plugin);
                                 await this.plugin.app.vault.modify(res.file, fixed);
                             }
                             new Notice(`Fixed ${results.length} nodes.`);
+                            await this.plugin.refreshIncomingRelationships();
                             await this.plugin.refreshGraphs();
                             await this.runAudit(); // Refresh the view
                         }),

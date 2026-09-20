@@ -1,5 +1,6 @@
 import { App, FuzzySuggestModal, Modal, Notice, Setting, TFile, Vault } from 'obsidian';
 import { HOLOGRAM_FOLDER } from './settings';
+import { auditHologramNodes, HologramAuditModal } from './audit';
 import type SemanticHologramPlugin from './main';
 
 /** Ensure a note declares `hologram-node: true`, preserving existing frontmatter. */
@@ -38,8 +39,8 @@ export function ensureHologramContent(content: string, defaultNoteType = 'concep
 	}
 
 	// 2. Ensure sections
-	if (!/(^|\n)#{1,6}\s+Relations/i.test(res)) {
-		res = res.trimEnd() + '\n\n## Relations\n\n';
+	if (!/(^|\n)#{1,6}\s+Relations(?:hips)?/i.test(res)) {
+		res = res.trimEnd() + '\n\n## Relationships\n\n';
 	}
 	// Removed hard-coded incoming relationships header insertion, as it is now dynamically rendered.
 
@@ -117,7 +118,7 @@ export function injectWikilinksAsRelations(content: string, source: TFile, plugi
 	const linesToAdd: string[] = [...existingLinesInBody, ...existingLinesInRelations];
 	for (const target of targets) {
 		if (!existingRelTargets.has(target)) {
-			linesToAdd.push(`- related [[${target}]] (0.5)`);
+			linesToAdd.push(`- related [[${target}]] (${String(plugin.settings?.defaultRelStrength ?? 0.5)})`);
 		}
 	}
 
@@ -274,6 +275,10 @@ export async function importNoteIntoHolograms(plugin: SemanticHologramPlugin, so
 		}
 		await plugin.refreshGraphs();
 		new Notice(`Imported ${source.basename} into ${destPath}`);
+		const auditResults = await auditHologramNodes(plugin);
+		if (auditResults.length > 0) {
+			new HologramAuditModal(plugin.app, plugin, auditResults).open();
+		}
 		return f;
 	} catch (e) {
 		new Notice(`Import failed: ${String(e)}`);

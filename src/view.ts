@@ -27,6 +27,7 @@ interface GraphNode {
 	selected: boolean;
 	homeSet: boolean;
 	confidence: number | null;
+	nodeType: string;
 }
 
 interface GraphLink {
@@ -503,6 +504,7 @@ export class SemanticHologramView extends ItemView {
 		const confs = await readConfidences(this.plugin.app, files);
 		console.timeEnd('SH-Confidence-Load');
 		const confMap = new Map(confs.map((c) => [c.path, c.value]));
+		const nodeTypeMap = new Map(confs.map((c) => [c.path, c.nodeType]));
 		console.log('[SH] Loaded confidences (non-null entries):', Array.from(confMap.entries()).filter(([p, v]) => v !== null));
 
 		for (const f of files) {
@@ -528,6 +530,7 @@ export class SemanticHologramView extends ItemView {
 					selected: false,
 					homeSet: false,
 					confidence: confMap.get(f.path) ?? null,
+					nodeType: nodeTypeMap.get(f.path) ?? 'concept',
 				};
 			}
 			index.set(f.path, nodes.length);
@@ -1363,23 +1366,26 @@ export class SemanticHologramView extends ItemView {
 					alpha = 0.3 + node.confidence * 0.6;
 				}
 
+				const typeEntry = this.plugin.settings.nodeTypes.find((t) => t.id === node.nodeType);
+				const nodeColor = typeEntry?.color ?? this.nodeColor;
+
 				if (node.confidence !== null && !isFaded) {
 					ctx.beginPath();
-					ctx.arc(sx, sy, r + 2 + node.confidence * 6, 0, Math.PI * 2);
-					ctx.strokeStyle = this.withAlpha(this.nodeColor, node.confidence * 0.4);
-					ctx.lineWidth = 1;
+					ctx.arc(sx, sy, r + 4 + node.confidence * 8, 0, Math.PI * 2);
+					ctx.strokeStyle = this.withAlpha(nodeColor, Math.max(0.6, node.confidence));
+					ctx.lineWidth = 2.5;
 					ctx.stroke();
 				}
 
 				ctx.fillStyle = isFaded
-					? this.withAlpha(this.nodeColor, 0.15)
+					? this.withAlpha(nodeColor, 0.15)
 					: ((node.pinned || node.selected || isHighlighted || isCandidate)
-						? (isCandidate ? '#9B5DE5' : this.nodeColor)
-						: this.withAlpha(this.nodeColor, alpha));
+						? (isCandidate ? '#9B5DE5' : nodeColor)
+						: this.withAlpha(nodeColor, alpha));
 				if (node.pinned || node.selected || isCandidate) {
 					ctx.beginPath();
 					ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
-					ctx.strokeStyle = isCandidate ? '#9B5DE5' : this.nodeColor;
+					ctx.strokeStyle = isCandidate ? '#9B5DE5' : nodeColor;
 					ctx.lineWidth = 1.5;
 					ctx.stroke();
 				}

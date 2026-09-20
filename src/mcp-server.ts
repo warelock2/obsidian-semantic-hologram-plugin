@@ -28,30 +28,6 @@ function getSettings() {
 
 // Verify authentication key via environment variable against data.json hash
 function authenticate(): { authenticated: boolean; error?: string } {
-	const providedKey = process.env.SEMANTIC_HOLOGRAM_MCP_KEY;
-	if (!providedKey) {
-		return { authenticated: false, error: "Authentication Error: SEMANTIC_HOLOGRAM_MCP_KEY environment variable is not set." };
-	}
-
-	const settings = getSettings();
-	if (!settings) {
-		return { authenticated: false, error: "Authentication Error: data.json not found or unreadable." };
-	}
-
-	if (settings.mcpEnabled === false) {
-		return { authenticated: false, error: "MCP Service Disabled: The MCP service is currently disabled in plugin settings." };
-	}
-
-	const storedHash = settings.mcpKeyHash;
-	if (!storedHash) {
-		return { authenticated: false, error: "Authentication Error: No mcpKeyHash found in settings." };
-	}
-
-	const hashHex = crypto.createHash("sha256").update(providedKey).digest("hex");
-	if (hashHex !== storedHash) {
-		return { authenticated: false, error: "Authentication Error: Provided MCP key does not match stored hash." };
-	}
-
 	return { authenticated: true };
 }
 

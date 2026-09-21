@@ -119,6 +119,20 @@ export function parseNoteFrontmatter(frontmatter: string | null): NoteFrontmatte
 				return [];
 			});
 		}
+		const rawHolograms: unknown = fm['holograms'] ?? fm['hologram'];
+		if (Array.isArray(rawHolograms)) {
+			out.holograms = rawHolograms.flatMap((h: unknown): string[] => {
+				if (typeof h === 'string') {
+					return [h];
+				}
+				if (Array.isArray(h) && h.length === 1 && typeof h[0] === 'string') {
+					return [h[0]];
+				}
+				return [];
+			});
+		} else if (typeof rawHolograms === 'string') {
+			out.holograms = [rawHolograms];
+		}
 	} catch (e) {
 		console.error('Failed to parse frontmatter', e);
 	}

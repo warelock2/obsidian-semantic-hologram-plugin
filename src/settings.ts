@@ -52,6 +52,9 @@ export interface SemanticHologramSettings {
 	facesOpacity: number;
 	facesColor: string;
 	defaultRelStrength: number;
+	defaultConfidence: number;
+	showGravitasColor: boolean;
+	showConfidenceHalo: boolean;
 	selectedHolograms: string[];
 }
 
@@ -118,6 +121,9 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 		{ id: 'related', color: '#C0C0C0', description: 'General relatedness.', enabled: true },
 	],
 	defaultRelStrength: 0.5,
+	defaultConfidence: 0.5,
+	showGravitasColor: true,
+	showConfidenceHalo: true,
 	selectedHolograms: [],
 };
 
@@ -395,6 +401,45 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 					s.setValue(v);
 				}),
 		);
+
+		new Setting(containerEl)
+			.setName('Confidence & gravitas')
+			.setDesc('How each node\'s confidence is shown on the graph. Colors range from red (0) to yellow (0.5) to green (1).')
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName('Show Gravitas as a node color')
+			.setDesc('Fill each node with the confidence spectrum: red (confidence 0) → yellow (0.5) → green (1). Nodes without a confidence frontmatter value use the default confidence.')
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.showGravitasColor).onChange(async (v) => {
+					this.plugin.settings.showGravitasColor = v;
+					await this.persist();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Show confidence level as a node halo')
+			.setDesc('Draw a colored ring around each node matching its confidence level using the same red → yellow → green spectrum.')
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.showConfidenceHalo).onChange(async (v) => {
+					this.plugin.settings.showConfidenceHalo = v;
+					await this.persist();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Default confidence')
+			.setDesc('Confidence used for nodes that do not have a confidence frontmatter value. Range 0 (red) to 1 (green).')
+			.addSlider((s) =>
+				s
+					.setLimits(0, 1, 0.01)
+					.setValue(this.plugin.settings.defaultConfidence)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.defaultConfidence = v;
+						await this.persist();
+					}),
+			);
 
 		new Setting(containerEl)
 			.setName('Depth visualization')

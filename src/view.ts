@@ -1,4 +1,4 @@
-import { ItemView, Platform, WorkspaceLeaf } from 'obsidian';
+import { ItemView, Notice, Platform, WorkspaceLeaf } from 'obsidian';
 // @ts-ignore
 import * as gifenc from 'gifenc';
 const { GIFEncoder, quantize, applyPalette } = gifenc;
@@ -88,6 +88,7 @@ export class SemanticHologramView extends ItemView {
 	private modeBanner: HTMLElement | null = null;
 	private nodes: GraphNode[] = [];
 	private links: GraphLink[] = [];
+	private loadingNotice: Notice | null = null;
 	private raf = 0;
 	private settled = false;
 	private settleCount = 0;
@@ -504,6 +505,10 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	private async buildGraph(incremental = false): Promise<void> {
+		if (!incremental) {
+			this.loadingNotice?.hide();
+			this.loadingNotice = new Notice('Loading hologram…', 0);
+		}
 		const allFiles = this.app.vault.getMarkdownFiles();
 		const files = allFiles.filter((f) => this.isInScope(f.path));
 		const resolved = this.app.metadataCache.resolvedLinks;
@@ -527,6 +532,8 @@ export class SemanticHologramView extends ItemView {
 			let node: GraphNode;
 			if (oldIdx !== undefined && incremental) {
 				node = this.nodes[oldIdx]!;
+				node.confidence = confMap.get(f.path) ?? null;
+				node.nodeType = nodeTypeMap.get(f.path) ?? 'concept';
 			} else {
 				node = {
 					path: f.path,
@@ -589,6 +596,8 @@ export class SemanticHologramView extends ItemView {
 		);
 		// A newer build may have started while we were reading; drop stale results.
 		if (buildSeq !== this.buildSeq) {
+			this.loadingNotice?.hide();
+			this.loadingNotice = null;
 			return;
 		}
 
@@ -693,6 +702,8 @@ export class SemanticHologramView extends ItemView {
 			node.radius = 3 + Math.min(7, Math.sqrt(degree[i] ?? 0) * 2.2 * Math.sqrt(maxDeg) / Math.sqrt(maxDeg));
 		});
 
+		this.loadingNotice?.hide();
+		this.loadingNotice = null;
 		this.nodes = nodes;
 		this.links = links;
 		console.log(`[SH] buildGraph: nodes=${nodes.length} links=${links.length} settled=${this.settled}`);
@@ -1375,30 +1386,33 @@ export class SemanticHologramView extends ItemView {
 				const isHighlighted = this.hoverIndex === i || highlighted.has(i);
 				const isCandidate = this.candidateNode === node.path;
 				const isFaded = this.hoverIndex >= 0 && !isHighlighted;
+				const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
 				const r = this.nodeScreenRadius(node, p, maxAbsZ) * (isHighlighted ? 1.4 : 1.0);
-				let alpha = isFaded ? 0.15 : ((node.pinned || node.selected || isHighlighted || isCandidate) ? 0.9 : (0.45 + depth * 0.55));
-				if (node.confidence !== null && !isFaded && !node.pinned && !node.selected && !isHighlighted && !isCandidate) {
-					alpha = 0.3 + node.confidence * 0.6;
+				const viewSettings = this.plugin.settings;
+				const conf = node.confidence ?? viewSettings.defaultConfidence;
+				let alpha = isFaded ? 0.15 : (isSpecial ? 0.9 : (0.45 + depth * 0.55));
+				if (viewSettings.showGravitasColor && !isFaded && !isSpecial) {
+					alpha = 0.3 + conf * 0.6;
 				}
 
-				const typeEntry = this.plugin.settings.nodeTypes.find((t) => t.id === node.nodeType);
+				const typeEntry = viewSettings.nodeTypes.find((t) => t.id === node.nodeType);
 				const baseColor = typeEntry?.color ?? this.nodeColor;
-				const nodeColor = node.confidence !== null ? this.getSpectrumColor(node.confidence, alpha) : baseColor;
+				const nodeColor = viewSettings.showGravitasColor ? this.getSpectrumColor(conf, alpha) : baseColor;
 
-				if (node.confidence !== null && !isFaded) {
+				if (viewSettings.showConfidenceHalo && !isFaded) {
 					ctx.beginPath();
-					ctx.arc(sx, sy, r + 4 + node.confidence * 8, 0, Math.PI * 2);
-					ctx.strokeStyle = this.getSpectrumColor(node.confidence, Math.max(0.7, node.confidence));
+					ctx.arc(sx, sy, r + 4 + conf * 8, 0, Math.PI * 2);
+					ctx.strokeStyle = this.getSpectrumColor(conf, Math.max(0.7, conf));
 					ctx.lineWidth = 2.5;
 					ctx.stroke();
 				}
 
 				ctx.fillStyle = isFaded
 					? this.withAlpha(baseColor, 0.15)
-					: ((node.pinned || node.selected || isHighlighted || isCandidate)
+					: (isSpecial
 						? (isCandidate ? '#9B5DE5' : baseColor)
 						: this.withAlpha(nodeColor, alpha));
-				if (node.pinned || node.selected || isCandidate) {
+				if (isSpecial) {
 					ctx.beginPath();
 					ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
 					ctx.strokeStyle = isCandidate ? '#9B5DE5' : baseColor;
@@ -1465,31 +1479,34 @@ export class SemanticHologramView extends ItemView {
 			const isHighlighted = this.hoverIndex === i || highlighted.has(i);
 			const isCandidate = this.candidateNode === node.path;
 			const isFaded = this.hoverIndex >= 0 && !isHighlighted;
+			const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
 			const r = Math.max(3, node.radius * this.viewScale * (isHighlighted ? 1.5 : 1.0));
 			
+			const viewSettings = this.plugin.settings;
+			const conf = node.confidence ?? viewSettings.defaultConfidence;
 			let alpha = 0.92;
-			if (node.confidence !== null && !isFaded && !node.pinned && !node.selected && !isHighlighted && !isCandidate) {
-				alpha = 0.3 + node.confidence * 0.6;
+			if (viewSettings.showGravitasColor && !isFaded && !isSpecial) {
+				alpha = 0.3 + conf * 0.6;
 			}
 
-			const typeEntry = this.plugin.settings.nodeTypes.find((t) => t.id === node.nodeType);
+			const typeEntry = viewSettings.nodeTypes.find((t) => t.id === node.nodeType);
 			const baseColor = typeEntry?.color ?? this.nodeColor;
-			const nodeColor = node.confidence !== null ? this.getSpectrumColor(node.confidence, alpha) : baseColor;
+			const nodeColor = viewSettings.showGravitasColor ? this.getSpectrumColor(conf, alpha) : baseColor;
 
-			if (node.confidence !== null && !isFaded) {
+			if (viewSettings.showConfidenceHalo && !isFaded) {
 				ctx.beginPath();
-				ctx.arc(sx, sy, r + 4 + node.confidence * 8, 0, Math.PI * 2);
-				ctx.strokeStyle = this.getSpectrumColor(node.confidence, Math.max(0.7, node.confidence));
+				ctx.arc(sx, sy, r + 4 + conf * 8, 0, Math.PI * 2);
+				ctx.strokeStyle = this.getSpectrumColor(conf, Math.max(0.7, conf));
 				ctx.lineWidth = 2.5;
 				ctx.stroke();
 			}
 
 			ctx.fillStyle = isFaded
 				? this.withAlpha(baseColor, 0.15)
-				: (node.pinned || node.selected || isHighlighted || isCandidate
+				: (isSpecial
 					? (isCandidate ? '#9B5DE5' : baseColor)
 					: this.withAlpha(nodeColor, alpha));
-			if (node.pinned || node.selected || isCandidate) {
+			if (isSpecial) {
 				ctx.beginPath();
 				ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
 				ctx.strokeStyle = isCandidate ? '#9B5DE5' : baseColor;

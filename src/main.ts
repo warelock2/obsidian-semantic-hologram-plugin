@@ -10,6 +10,7 @@ import {
 import { SemanticHologramControlsView, VIEW_TYPE_HOLOGRAM_CONTROLS } from './controlsView';
 import { SemanticHologramView, VIEW_TYPE_HOLOGRAM } from './view';
 import { syncIncomingRelationships } from './incoming';
+import { syncGravitasAndConfidence } from './gravitasSync';
 import { inScopePath, scanRelations } from './relations';
 import { RelationSuggest, relationGhostExtension } from './relationSuggest';
 import { ReviewConnectionsView, VIEW_TYPE_REVIEW_CONNECTIONS } from './reviewView';
@@ -43,6 +44,7 @@ export default class SemanticHologramPlugin extends Plugin {
 					// Only sync if it's a hologram note to avoid infinite loops and bloat
 					if (this.isInScope(file.path)) {
 						await this.refreshIncomingRelationships();
+						await this.refreshGravitasSections();
 					}
 				}
 				if (file.path === '.hologram-command.json') {
@@ -55,6 +57,7 @@ export default class SemanticHologramPlugin extends Plugin {
 				if (file instanceof TFile && this.isInScope(file.path)) {
 					void this.hologramService.loadCache();
 					await this.refreshIncomingRelationships();
+					await this.refreshGravitasSections();
 				}
 				if (file.path === '.hologram-command.json') {
 					void this.handleCommandFile();
@@ -66,6 +69,7 @@ export default class SemanticHologramPlugin extends Plugin {
 				void this.incomingIndex.update();
 				if (file instanceof TFile && this.isInScope(file.path)) {
 					await this.refreshIncomingRelationships();
+					await this.refreshGravitasSections();
 				}
 			})
 		);
@@ -103,6 +107,14 @@ export default class SemanticHologramPlugin extends Plugin {
 			name: 'Refresh incoming relationships in notes',
 			callback: async () => {
 				await this.refreshIncomingRelationships();
+			},
+		});
+
+		this.addCommand({
+			id: 'refresh-gravitas-confidence',
+			name: 'Refresh gravitas and confidence sections in notes',
+			callback: async () => {
+				await this.refreshGravitasSections();
 			},
 		});
 
@@ -381,6 +393,28 @@ export default class SemanticHologramPlugin extends Plugin {
 		}
 		// new Notice(`Updated incoming relationships in ${result.updated.length} hologram note(s).`);
 		console.log(`Updated incoming relationships in ${result.updated.length} hologram note(s).`);
+		await this.refreshGraphs();
+	}
+
+	async refreshGravitasSections(): Promise<void> {
+		const files = this.app.vault.getMarkdownFiles();
+		let result;
+		try {
+			result = await syncGravitasAndConfidence(
+				files,
+				this.app.vault,
+				this.app.metadataCache,
+				this.settings.sourceKinds,
+				this.settings.defaultConfidence,
+				this.settings.defaultRelStrength,
+				this.knownRelIds(),
+				(path) => this.isInScope(path),
+			);
+		} catch (e) {
+			new Notice(`Semantic Hologram: gravitas refresh failed: ${String(e)}`);
+			return;
+		}
+		console.log(`Updated gravitas/confidence sections in ${result.updated.length} hologram note(s).`);
 		await this.refreshGraphs();
 	}
 

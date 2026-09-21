@@ -1,30 +1,34 @@
 import { App, Modal, Notice, Setting, TFile } from 'obsidian';
 import type SemanticHologramPlugin from './main';
-import { scanRelations } from './relations';
-import { extractFrontmatter, parseNoteFrontmatter, formatStrength, RelationEdge } from './relations';
-import { HOLOGRAM_FOLDER } from './settings';
+import { scanRelations, extractFrontmatter, parseNoteFrontmatter, setGravitasRowsInContent, findGravitasSection } from './relations';
+import type { NodeStats } from './gravitas';
+import { computeNodeStats, isEvidenceType, readNodeMetasFresh, scanGravitas } from './gravitas';
 
-interface ConfidenceEntry {
-	file: TFile;
-	value: number;
-	topicAggregate: number | null;
-	subtreeSize: number;
-}
-
-/** Set (or add) the `confidence:` frontmatter field of a note body. */
+/** Set (or add) the `local-confidence:` frontmatter field of a note body. */
 export function setConfidenceInContent(content: string, value: number): string {
-	const v = formatStrength(Math.min(1, Math.max(0, value)));
+	const v = formatNumber(Math.min(1, Math.max(0, value)));
 	const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
 	if (!m) {
-		return `---\nconfidence: ${v}\n---\n\n${content}`;
+		return `---\nlocal-confidence: ${v}\n---\n\n${content}`;
 	}
 	let body = m[1]!;
-	if (/^confidence:/im.test(body)) {
-		body = body.replace(/^confidence:.*$/im, `confidence: ${v}`);
+	if (/^local-confidence:/im.test(body)) {
+		body = body.replace(/^local-confidence:.*$/im, `local-confidence: ${v}`);
 	} else {
-		body = `${body.trimEnd()}\nconfidence: ${v}`;
+		body = `${body.trimEnd()}\nlocal-confidence: ${v}`;
 	}
 	return `---\n${body}\n---${content.slice(m[0]!.length)}`;
+}
+
+function formatNumber(v: number): string {
+	const s = v.toFixed(2);
+	if (s.endsWith('.00')) {
+		return s.slice(0, s.length - 3);
+	}
+	if (s.endsWith('0')) {
+		return s.slice(0, s.length - 1);
+	}
+	return s;
 }
 
 interface ConfidenceMap {
@@ -37,46 +41,11 @@ export async function readConfidences(app: App, files: TFile[]): Promise<Confide
 	return files.map((f) => {
 		const cache = app.metadataCache.getFileCache(f);
 		const fm = cache?.frontmatter ?? {};
-		const confidence = typeof fm['confidence'] === 'number' ? Math.min(1, Math.max(0, fm['confidence'])) : null;
+		const local = typeof fm['local-confidence'] === 'number' ? fm['local-confidence'] : fm['confidence'];
+		const confidence = typeof local === 'number' ? Math.min(1, Math.max(0, local)) : null;
 		const nodeType = (typeof fm['node-type'] === 'string' ? fm['node-type'] : (typeof fm['note-type'] === 'string' ? fm['note-type'] : null)) ?? 'concept';
 		return { path: f.path, value: confidence, nodeType };
 	});
-}
-
-export async function computeGrounding(
-	plugin: SemanticHologramPlugin,
-	files: TFile[],
-	edges: RelationEdge[],
-): Promise<Set<string>> {
-	const confidences = await readConfidences(plugin.app, files);
-	const nodeTypes = new Map<string, string>();
-	for (const c of confidences) {
-		nodeTypes.set(c.path, c.nodeType);
-	}
-
-	const grounded = new Set<string>();
-	// 1. Initialise with all percept files
-	for (const f of files) {
-		if ((nodeTypes.get(f.path) ?? 'concept') === 'percept') {
-			grounded.add(f.path);
-		}
-	}
-
-	// 2. Iterate to find grounded nodes via relations
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (const e of edges) {
-			if (grounded.has(e.source) && !grounded.has(e.target)) {
-				// e.source is grounded, and supports e.target
-				if (e.relId === 'logic/supports' || e.relId === 'structural/subsumed-by' || e.relId === 'related') {
-					grounded.add(e.target);
-					changed = true;
-				}
-			}
-		}
-	}
-	return grounded;
 }
 
 /**
@@ -96,7 +65,6 @@ export async function computeTopicKnowledge(
 		plugin.settings.defaultRelStrength,
 		(path) => plugin.isInScope(path),
 	);
-	const grounded = await computeGrounding(plugin, files, scan.edges);
 
 	const childrenOf = new Map<string, string[]>();
 	for (const e of scan.edges) {
@@ -111,8 +79,7 @@ export async function computeTopicKnowledge(
 	const confidences = new Map<string, number>();
 	for (const c of await readConfidences(plugin.app, files)) {
 		if (c.value !== null) {
-			const isGrounded = grounded.has(c.path);
-			confidences.set(c.path, isGrounded ? c.value : 0);
+			confidences.set(c.path, c.value);
 		}
 	}
 
@@ -139,38 +106,110 @@ export async function computeTopicKnowledge(
 	return result;
 }
 
-/** Review all hologram nodes and set each node's confidence level. */
+interface GravitasRow {
+	targetName: string;
+	amount: number;
+}
+
+interface GravitasEntry {
+	file: TFile;
+	kind: string | null;
+	kindPercent: number;
+	rows: GravitasRow[];
+}
+
+/** Review all hologram nodes (Confidence tab) and evidence notes (Gravitas tab). */
 export class NodeConfidenceModal extends Modal {
-	private entries: ConfidenceEntry[] = [];
+	private plugin: SemanticHologramPlugin;
+	private stats: Map<string, NodeStats> = new Map();
+	private confEntries: Array<{ file: TFile; local: number; inherited: number; total: number; knowledgeTitle: string | null }> = [];
+	private gravEntries: GravitasEntry[] = [];
+	private activeTab: 'confidence' | 'gravitas' = 'confidence';
 
 	constructor(
 		app: App,
-		private plugin: SemanticHologramPlugin,
+		plugin: SemanticHologramPlugin,
 	) {
 		super(app);
+		this.plugin = plugin;
 	}
 
 	async onOpen(): Promise<void> {
-		const files = this.plugin.app.vault
-			.getMarkdownFiles()
-			.filter((f) => f.path.startsWith(`${HOLOGRAM_FOLDER}/`));
-		const confidences = await readConfidences(this.plugin.app, files);
-		const confMap = new Map<string, number>();
-		for (const c of confidences) {
-			if (c.value !== null) {
-				confMap.set(c.path, c.value);
-			}
+		const scope = new Set<string>();
+		const files = this.plugin.app.vault.getMarkdownFiles().filter((f) => this.plugin.isInScope(f.path));
+		for (const f of files) {
+			scope.add(f.path);
 		}
+		const metas = await readNodeMetasFresh(files, this.plugin.app.vault, this.plugin.settings.defaultConfidence);
+		const scan = await scanRelations(
+			files,
+			this.plugin.app.vault,
+			this.plugin.app.metadataCache,
+			this.plugin.knownRelIds(),
+			this.plugin.settings.defaultRelStrength,
+			(path) => this.plugin.isInScope(path),
+		);
+		const gscan = await scanGravitas(
+			files,
+			this.plugin.app.vault,
+			this.plugin.app.metadataCache,
+			(path) => this.plugin.isInScope(path),
+		);
+		this.stats = computeNodeStats(metas, scan.edges, gscan.edges, this.plugin.settings.sourceKinds, this.plugin.settings.defaultConfidence);
 		const topic = await computeTopicKnowledge(this.plugin, files);
 
-		this.entries = files
-			.map((f) => ({
-				file: f,
-				value: confMap.get(f.path) ?? this.plugin.settings.defaultRelStrength,
-				topicAggregate: topic.get(f.path)?.aggregate ?? null,
-				subtreeSize: topic.get(f.path)?.size ?? 0,
-			}))
+		const resolve = (name: string, sourcePath: string): string | null => {
+			const file = this.plugin.app.metadataCache.getFirstLinkpathDest(name, sourcePath);
+			if (file && this.plugin.isInScope(file.path)) {
+				return file.path;
+			}
+			return null;
+		};
+
+		this.confEntries = files
+			.filter((f) => !isEvidenceType(metas.get(f.path)?.nodeType))
+			.map((f) => {
+				const st = this.stats.get(f.path);
+				const knowledge = topic.get(f.path);
+				return {
+					file: f,
+					local: st?.confidenceLocal ?? this.plugin.settings.defaultConfidence,
+					inherited: st?.confidenceInherited ?? 0,
+					total: st?.confidenceTotal ?? this.plugin.settings.defaultConfidence,
+					knowledgeTitle:
+						knowledge && knowledge.aggregate !== null
+							? `Knowledge: ${Math.round(knowledge.aggregate * 100)}% (${knowledge.size} node${knowledge.size === 1 ? '' : 's'})`
+							: null,
+				};
+			})
 			.sort((a, b) => a.file.basename.localeCompare(b.file.basename));
+
+		this.gravEntries = [];
+		for (const f of files) {
+			const meta = metas.get(f.path);
+			if (!meta || !isEvidenceType(meta.nodeType)) {
+				continue;
+			}
+			let content = '';
+			try {
+				content = await this.plugin.app.vault.cachedRead(f);
+			} catch {
+				content = '';
+			}
+			const fm = parseNoteFrontmatter(extractFrontmatter(content));
+			const entries: GravitasRow[] = [];
+			if (findGravitasSection(content)) {
+				const parsed = parseGravitasSectionJson(content, resolve, f.path);
+				for (const e of parsed) {
+					entries.push({ targetName: targetLabel(e.target), amount: e.amount });
+				}
+			}
+			const kind = fm.sourceKind;
+			const kindPercent = this.plugin.settings.sourceKinds.find((k) => k.id === kind)?.percent ?? 0;
+			this.gravEntries.push({ file: f, kind, kindPercent, rows: entries });
+		}
+		this.gravEntries.sort((a, b) => a.file.basename.localeCompare(b.file.basename));
+
 		this.render();
 	}
 
@@ -178,85 +217,233 @@ export class NodeConfidenceModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass('sh-review-modal');
-		contentEl.createEl('h4', { text: 'Review node confidence' });
-		contentEl.createDiv({
-			cls: 'sh-review-sub',
-			text: `${this.entries.length} node(s). Confidence is read from each note's frontmatter; topic knowledge is the average confidence of everything subsumed under it.`,
-		});
 
-		const list = contentEl.createDiv({ cls: 'sh-review-list' });
-		for (const entry of this.entries) {
-			this.renderRow(list, entry);
-		}
-
-		new Setting(contentEl).addButton((b) => b.setButtonText('Done').setCta().onClick(() => this.close()));
-	}
-
-	private renderRow(list: HTMLElement, entry: ConfidenceEntry): void {
-		const row = list.createDiv({ cls: 'sh-review-row' });
-		const header = row.createDiv({ cls: 'sh-review-header' });
-		const name = header.createDiv({ cls: 'sh-review-names' });
-		const nameSpan = name.createSpan({ cls: 'sh-review-name', text: entry.file.basename, attr: { title: entry.file.basename } });
-		nameSpan.style.justifySelf = 'center';
-		if (entry.topicAggregate !== null) {
-			nameSpan.createEl('br');
-			const ag = nameSpan.createEl('span', {
-				cls: 'sh-conf-aggregate',
-				text: `Knowledge: ${Math.round(entry.topicAggregate * 100)}% (${entry.subtreeSize} node${entry.subtreeSize === 1 ? '' : 's'})`,
+		const tabs = contentEl.createDiv({ cls: 'sh-review-tabs' });
+		const mkTab = (key: 'confidence' | 'gravitas', label: string) => {
+			const btn = tabs.createEl('button', { text: label, cls: 'sh-review-tab' });
+			btn.addClass(this.activeTab === key ? 'is-active' : '');
+			btn.addEventListener('click', () => {
+				this.activeTab = key;
+				this.render();
 			});
-			ag.style.fontSize = '11px';
-			ag.style.color = 'var(--text-muted)';
+			return btn;
+		};
+		mkTab('confidence', `Confidence (${this.confEntries.length} nodes)`);
+		mkTab('gravitas', `Gravitas (${this.gravEntries.length} sources)`);
+
+		const panel = contentEl.createDiv({ cls: 'sh-review-panel' });
+		if (this.activeTab === 'confidence') {
+			this.renderConfidence(panel);
+		} else {
+			this.renderGravitas(panel);
 		}
-
-		const relsContainer = row.createDiv({ cls: 'sh-review-rels-container' });
-		const relRow = relsContainer.createDiv({ cls: 'sh-review-rel-row' });
-		const typeSpan = relRow.createSpan({ cls: 'sh-review-rel-type' });
-		typeSpan.style.flex = '1';
-		typeSpan.style.textAlign = 'left';
-
-		const current = typeSpan.createSpan({ text: `Confidence: ${formatStrength(entry.value)} ` });
-		current.style.color = 'var(--text-muted)';
-
-		const slider = relRow.createEl('input', {
-			type: 'range',
-			attr: { min: '0', max: '100', step: '1', value: String(Math.round((entry.value ?? 0.5) * 100)) },
-		});
-		slider.style.flex = '1';
-
-		const pct = relRow.createEl('span', { cls: 'sh-conf-pct', text: `${Math.round((entry.value ?? 0.5) * 100)}%` });
-		pct.style.minWidth = '44px';
-		pct.style.textAlign = 'right';
-
-		const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
-		controls.style.marginLeft = 'auto';
-		controls.style.display = 'flex';
-		controls.style.gap = '4px';
-
-		const save = controls.createEl('button', { text: '✓', cls: 'sh-review-btn sh-review-save-btn' });
-		save.setAttribute('title', 'Save confidence');
-		save.addEventListener('click', () => {
-			void this.save(entry);
-		});
-
-		slider.addEventListener('input', () => {
-			const v = parseInt(slider.value, 10) / 100;
-			entry.value = v;
-			current.setText(`Confidence: ${formatStrength(v)} `);
-			pct.setText(`${Math.round(v * 100)}%`);
-		});
 	}
 
-	private async save(entry: ConfidenceEntry): Promise<void> {
+	private renderConfidence(panel: HTMLElement): void {
+		panel.createDiv({
+			cls: 'sh-review-sub',
+			text: "Local confidence is user-set (#'.##' or slider). Inherited = Σ children's total confidence; total = local + inherited, capped at 1.",
+		});
+		const list = panel.createDiv({ cls: 'sh-review-list' });
+		for (const entry of this.confEntries) {
+			const row = list.createDiv({ cls: 'sh-review-row' });
+			const header = row.createDiv({ cls: 'sh-review-header' });
+			const name = header.createDiv({ cls: 'sh-review-names' });
+			name.createSpan({ cls: 'sh-review-name', text: entry.file.basename, attr: { title: entry.file.basename } });
+			if (entry.knowledgeTitle) {
+				name.createDiv({ cls: 'sh-conf-aggregate', text: entry.knowledgeTitle });
+			}
+
+			const relsContainer = row.createDiv({ cls: 'sh-review-rels-container' });
+			const relRow = relsContainer.createDiv({ cls: 'sh-review-rel-row' });
+
+			const localLabel = relRow.createSpan({ cls: 'sh-review-rel-type', text: `Local: ${formatNumber(entry.local)}` });
+			localLabel.style.flex = '0 0 auto';
+			localLabel.style.color = 'var(--text-muted)';
+
+			const slider = relRow.createEl('input', {
+				type: 'range',
+				attr: { min: '0', max: '100', step: '1', value: String(Math.round(entry.local * 100)) },
+			});
+			slider.style.flex = '1';
+
+			const text = relRow.createEl('input', {
+				type: 'number',
+				cls: 'sh-conf-input',
+				attr: { min: '0', max: '1', step: '0.01', value: String(entry.local) },
+			});
+			text.style.width = '60px';
+
+			const sync = (v: number) => {
+				entry.local = Math.min(1, Math.max(0, v));
+				slider.value = String(Math.round(entry.local * 100));
+				text.value = String(entry.local);
+				localLabel.setText(`Local: ${formatNumber(entry.local)}`);
+			};
+			slider.addEventListener('input', () => sync(parseInt(slider.value, 10) / 100));
+			text.addEventListener('change', () => {
+				const v = parseFloat(text.value);
+				if (!Number.isFinite(v)) {
+					text.value = String(entry.local);
+					return;
+				}
+				sync(v);
+			});
+
+			relRow.createSpan({ cls: 'sh-conf-pct', text: `Inherited ${formatNumber(entry.inherited)} / Total ${formatNumber(entry.total)}` });
+
+			const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
+			const save = controls.createEl('button', { text: '✓', cls: 'sh-review-btn sh-review-save-btn' });
+			save.setAttribute('title', 'Save local confidence');
+			save.addEventListener('click', () => {
+				void this.saveConfidence(entry.file, entry.local);
+			});
+		}
+		new Setting(panel).addButton((b) => b.setButtonText('Done').setCta().onClick(() => this.close()));
+	}
+
+	private renderGravitas(panel: HTMLElement): void {
+		panel.createDiv({
+			cls: 'sh-review-sub',
+			text: "Each evidence note lends gravitas to concepts via its ## Gravitas section. Effective lent gravitas = amount × source-kind modifier. 0% kinds lend nothing.",
+		});
+		const list = panel.createDiv({ cls: 'sh-review-list' });
+		for (const entry of this.gravEntries) {
+			const row = list.createDiv({ cls: 'sh-review-row' });
+			const header = row.createDiv({ cls: 'sh-review-header' });
+			const name = header.createDiv({ cls: 'sh-review-names' });
+			name.createSpan({ cls: 'sh-review-name', text: entry.file.basename, attr: { title: entry.file.basename } });
+			name.createDiv({
+				cls: 'sh-conf-aggregate',
+				text: `kind: ${entry.kind ?? '(unset → 0%)'} — modifier ${entry.kindPercent}%`,
+			});
+
+			for (const gravRow of entry.rows) {
+				const relsContainer = row.createDiv({ cls: 'sh-review-rels-container' });
+				const relRow = relsContainer.createDiv({ cls: 'sh-review-rel-row' });
+
+				relRow.createSpan({ cls: 'sh-review-rel-type', text: gravRow.targetName });
+				relRow.createSpan({
+					cls: 'sh-conf-aggregate',
+					text: `→ ${formatNumber(gravRow.amount * (entry.kindPercent / 100))} effective`,
+				});
+
+				const slider = relRow.createEl('input', {
+					type: 'range',
+					attr: { min: '10', max: '100', step: '1', value: String(Math.round(gravRow.amount * 100)) },
+				});
+				slider.style.flex = '1';
+
+				const text = relRow.createEl('input', {
+					type: 'number',
+					cls: 'sh-conf-input',
+					attr: { min: '0.1', max: '1', step: '0.01', value: gravRow.amount.toFixed(2) },
+				});
+				text.style.width = '60px';
+
+				const sync = (v: number) => {
+					gravRow.amount = Math.min(1, Math.max(0.1, v));
+					slider.value = String(Math.round(gravRow.amount * 100));
+					text.value = gravRow.amount.toFixed(2);
+				};
+				slider.addEventListener('input', () => sync(parseInt(slider.value, 10) / 100));
+				text.addEventListener('change', () => {
+					const v = parseFloat(text.value);
+					if (!Number.isFinite(v)) {
+						text.value = gravRow.amount.toFixed(2);
+						return;
+					}
+					sync(v);
+				});
+
+				const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
+				const del = controls.createEl('button', { text: '✕', cls: 'sh-review-btn' });
+				del.setAttribute('title', 'Remove support');
+				del.addEventListener('click', () => {
+					entry.rows = entry.rows.filter((r) => r !== gravRow);
+					this.render();
+				});
+			}
+
+			const addRow = row.createDiv({ cls: 'sh-review-rel-row' });
+			const addInput = addRow.createEl('input', {
+				type: 'text',
+				cls: 'sh-conf-input',
+				attr: { placeholder: 'Target note name…' },
+			});
+			addRow.createEl('button', { text: '+ Support', cls: 'sh-review-btn mod-cta' }).addEventListener('click', () => {
+				const targetName = addInput.value.trim();
+				if (!targetName) {
+					return;
+				}
+				entry.rows.push({ targetName, amount: 0.5 });
+				this.render();
+			});
+
+			const controls = row.createDiv({ cls: 'sh-review-header' });
+			const save = controls.createEl('button', { text: '✓ Save source', cls: 'sh-review-btn sh-review-save-btn' });
+			save.addEventListener('click', () => {
+				void this.saveGravitas(entry);
+			});
+		}
+		new Setting(panel).addButton((b) => b.setButtonText('Done').setCta().onClick(() => this.close()));
+	}
+
+	private async saveConfidence(file: TFile, value: number): Promise<void> {
+		try {
+			const content = await this.plugin.app.vault.read(file);
+			await this.plugin.app.vault.modify(file, setConfidenceInContent(content, value));
+			new Notice(`Saved local confidence for ${file.basename}.`);
+		} catch (e) {
+			new Notice(`Failed to save confidence for ${file.basename}: ${String(e)}`);
+		}
+	}
+
+	private async saveGravitas(entry: GravitasEntry): Promise<void> {
 		try {
 			const content = await this.plugin.app.vault.read(entry.file);
-			await this.plugin.app.vault.modify(entry.file, setConfidenceInContent(content, entry.value));
-			new Notice(`Saved confidence for ${entry.file.basename}.`);
+			const rows = entry.rows.map((r) => ({ targetName: r.targetName, amount: r.amount }));
+			await this.plugin.app.vault.modify(entry.file, setGravitasRowsInContent(content, rows));
+			new Notice(`Saved gravitas for ${entry.file.basename}.`);
 		} catch (e) {
-			new Notice(`Failed to save confidence for ${entry.file.basename}: ${String(e)}`);
+			new Notice(`Failed to save gravitas for ${entry.file.basename}: ${String(e)}`);
 		}
 	}
 
 	onClose(): void {
 		this.contentEl.empty();
 	}
+}
+
+/** Minimal internal re-parser of a note's Gravitas section for the modal. */
+function parseGravitasSectionJson(
+	content: string,
+	resolve: (name: string, sourcePath: string) => string | null,
+	sourcePath: string,
+): Array<{ target: string; amount: number }> {
+	const out: Array<{ target: string; amount: number }> = [];
+	const section = findGravitasSection(content);
+	if (!section) {
+		return out;
+	}
+	const lines = content.split(/\r?\n/);
+	for (let i = section.startLine + 1; i < section.endLine; i++) {
+		const trimmed = (lines[i] ?? '').trim();
+		if (!trimmed.startsWith('- lends-gravitas-to ')) {
+			continue;
+		}
+		const m = trimmed.match(/^-\s+lends-gravitas-to\s+\[\[([^\]]+)\]\]\s*\((\d{1,2}(?:\.\d{1,2})?)\)\s*$/);
+		if (!m) {
+			continue;
+		}
+		const target = resolve(m[1]!, sourcePath);
+		if (target) {
+			out.push({ target, amount: parseFloat(m[2]!) });
+		}
+	}
+	return out;
+}
+
+function targetLabel(path: string): string {
+	return path.split('/').pop()?.replace(/\.md$/i, '') ?? path;
 }

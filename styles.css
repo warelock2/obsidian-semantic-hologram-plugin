@@ -178,10 +178,10 @@
 }
 
 .sh-controls {
-	padding: 12px;
+	padding: 10px;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	gap: 6px;
 }
 
 .sh-controls-header h4 {
@@ -193,7 +193,11 @@
 	text-align: center;
 	font-size: 11px;
 	opacity: 0.6;
-	margin-bottom: 4px;
+	margin: 0 0 4px;
+}
+
+.sh-controls h5 {
+	margin: 8px 0 4px;
 }
 
 .sh-controls-row {
@@ -887,11 +891,17 @@
 }
 
 .sh-search-input {
-    width: 100%;
-    margin-bottom: 5px;
+    flex: 1;
+    min-width: 0;
     padding: 6px;
     border-radius: 4px;
     border: 1px solid var(--background-modifier-border);
+}
+
+.sh-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .sh-search-results {
@@ -912,8 +922,44 @@
     background: var(--background-modifier-hover);
 }
 
+.sh-hologram-list {
+    min-height: 96px;
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    background: var(--background-secondary);
+    padding: 4px;
+    margin-bottom: 8px;
+}
+
+.sh-hologram-row {
+    display: flex;
+    align-items: center;
+    padding: 5px 8px;
+    margin-bottom: 2px;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.sh-hologram-row:hover {
+    background: var(--background-modifier-hover);
+}
+
+.sh-hologram-row.is-active {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent);
+}
+
+.sh-hologram-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .sh-controls-search {
-    margin-bottom: 15px;
+    margin-bottom: 6px;
 }
 
 

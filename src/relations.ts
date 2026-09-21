@@ -33,6 +33,15 @@ export interface RelationScan {
 	conflicts: RelationConflict[];
 }
 
+/** A lends-gravitas-to edge authored in an evidence note's ## Gravitas section. */
+export interface GravitasEdge {
+	source: string; // path of the evidence note
+	target: string; // path of the concept note supported
+	amount: number; // 0.1..1 (pre-kind, pre-DAG)
+	authoredFrom: string;
+	raw: string;
+}
+
 export interface RelationsData {
 	outgoing: RelationEdge[];
 	malformed: MalformedRelation[];
@@ -42,6 +51,8 @@ export interface NoteFrontmatter {
 	hologramNode: boolean;
 	noteType: string | null;
 	confidence: number | null;
+	localConfidence: number | null;
+	sourceKind: string | null;
 	created: string | null;
 	groups: string[];
 	groupsExcluded: string[];
@@ -50,6 +61,8 @@ export interface NoteFrontmatter {
 
 export const RELATION_HEADER = /^#{1,6}\s+(Relations(?:hips)?|Relationship)\s*$/i;
 export const INCOMING_HEADER = /^#{1,6}\s+Incoming\s+Relations(?:hips)?\s*$/i;
+export const GRAVITAS_HEADER = /^#{1,6}\s+Gravitas\s*$/i;
+export const CONFIDENCE_HEADER = /^#{1,6}\s+Confidence\s*$/i;
 
 // - logic/supports [[Target]] {R}? (0.5)
 // - related [[Target]] (0.5)
@@ -78,6 +91,8 @@ export function parseNoteFrontmatter(frontmatter: string | null): NoteFrontmatte
 		hologramNode: false,
 		noteType: null,
 		confidence: null,
+		localConfidence: null,
+		sourceKind: null,
 		created: null,
 		groups: [],
 		groupsExcluded: [],
@@ -93,7 +108,10 @@ export function parseNoteFrontmatter(frontmatter: string | null): NoteFrontmatte
 			rawType = null;
 		}
 		out.noteType = typeof rawType === 'string' ? rawType : null;
-		out.confidence = typeof fm['confidence'] === 'number' ? Math.min(1, Math.max(0, fm['confidence'])) : null;
+		const clamp = (v: unknown): number | null => (typeof v === 'number' ? Math.min(1, Math.max(0, v)) : null);
+		out.confidence = clamp(fm['confidence']);
+		out.localConfidence = clamp(fm['local-confidence'] ?? fm['confidence']);
+		out.sourceKind = typeof fm['source-kind'] === 'string' ? fm['source-kind'] : null;
 		out.created = fm['created'] ? (typeof fm['created'] === 'object' ? JSON.stringify(fm['created']) : String(fm['created'])) : null;
 		if (Array.isArray(fm['groups'])) {
 			out.groups = fm['groups'].flatMap((g: any): string[] => {
@@ -166,6 +184,143 @@ export function findRelationsSection(content: string): { startLine: number; endL
 		}
 	}
 	return { startLine: start, endLine: end };
+}
+
+/** Find the line range of the `## Gravitas` section, if any. */
+export function findGravitasSection(content: string): { startLine: number; endLine: number } | null {
+	const lines = content.split(/\r?\n/);
+	let start = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (GRAVITAS_HEADER.test(lines[i]!.trim())) {
+			start = i;
+			break;
+		}
+	}
+	if (start < 0) {
+		return null;
+	}
+	let end = lines.length;
+	for (let i = start + 1; i < lines.length; i++) {
+		if (/^#{1,6}\s+/.test(lines[i]!.trim())) {
+			end = i;
+			break;
+		}
+	}
+	return { startLine: start, endLine: end };
+}
+
+/** Author-led line in an evidence note: `- lends-gravitas-to [[Target]] (0.8)`. */
+const GRAVITAS_LINE = /^-\s+lends-gravitas-to\s+\[\[([^\]]+)\]\]\s*\((\d{1,2}(?:\.\d{1,2})?)\)\s*$/;
+
+/**
+ * Parse a note's ## Gravitas section into lends-gravitas-to edges.
+ * Only authored lines count; mirror lines (`- ([[source]]) ...`) are skipped.
+ */
+export function parseGravitasSection(
+	path: string,
+	content: string,
+	resolve: (name: string, sourcePath: string) => string | null,
+): { edges: GravitasEdge[]; malformed: MalformedRelation[] } {
+	const edges: GravitasEdge[] = [];
+	const malformed: MalformedRelation[] = [];
+	const section = findGravitasSection(content);
+	if (!section) {
+		return { edges, malformed };
+	}
+	const lines = content.split(/\r?\n/);
+	for (let i = section.startLine + 1; i < section.endLine; i++) {
+		const line = lines[i] ?? '';
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('---') || trimmed.startsWith('- DEFUNCT:') || trimmed.startsWith('- (')) {
+			continue;
+		}
+		if (!trimmed.startsWith('-')) {
+			continue;
+		}
+		const m = trimmed.match(GRAVITAS_LINE);
+		if (!m) {
+			malformed.push({ path, line: i, text: trimmed, reason: 'unparsable gravitas line' });
+			continue;
+		}
+		const targetName = m[1]!;
+		const amount = parseFloat(m[2]!);
+		if (amount < 0.1 || amount > 1) {
+			malformed.push({ path, line: i, text: trimmed, reason: `lends-gravitas-to amount out of range [0.1,1]: ${m[2]}` });
+			continue;
+		}
+		const target = resolve(targetName, path);
+		if (!target || target === path) {
+			console.log(`[SH-Gravitas] Failed to resolve target '${targetName}' from source '${path}'`);
+			malformed.push({ path, line: i, text: trimmed, reason: `unresolved target '${targetName}'` });
+			continue;
+		}
+		edges.push({ source: path, target, amount, authoredFrom: path, raw: trimmed });
+	}
+	return { edges, malformed };
+}
+
+/** Replace the `## Gravitas` section body with authored lends-gravitas-to rows. */
+export function setGravitasRowsInContent(content: string, rows: Array<{ targetName: string; amount: number }>): string {
+	const header = '## Gravitas';
+	const body = rows
+		.map((r) => `- lends-gravitas-to [[${r.targetName}]] (${formatStrength(r.amount)})`)
+		.sort();
+	const section = findGravitasSection(content);
+	if (!section) {
+		if (body.length === 0) {
+			return content;
+		}
+		const ending = content.endsWith('\n') ? '\n' : '\n\n';
+		return content + ending + header + '\n\n' + body.join('\n') + '\n';
+	}
+	const lines = content.split(/\r?\n/);
+	if (body.length === 0) {
+		const newLines = [...lines.slice(0, section.startLine), ...lines.slice(section.endLine)];
+		return newLines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+	}
+	const newLines = [...lines.slice(0, section.startLine), header, ...body.map((b) => `  ${b}`), ...lines.slice(section.endLine)];
+	return newLines.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
+/** Find the line range of the `## Confidence` mirror section, if any. */
+export function findConfidenceSection(content: string): { startLine: number; endLine: number } | null {
+	const lines = content.split(/\r?\n/);
+	let start = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (CONFIDENCE_HEADER.test(lines[i]!.trim())) {
+			start = i;
+			break;
+		}
+	}
+	if (start < 0) {
+		return null;
+	}
+	let end = lines.length;
+	for (let i = start + 1; i < lines.length; i++) {
+		if (/^#{1,6}\s+/.test(lines[i]!.trim())) {
+			end = i;
+			break;
+		}
+	}
+	return { startLine: start, endLine: end };
+}
+
+/** Replace the read-only `## Confidence` mirror section (local / inherited / total). */
+export function setConfidenceFieldsInContent(content: string, local: number, inherited: number, total: number): string {
+	const header = '## Confidence';
+	const body = [
+		`- local-confidence: ${formatStrength(local)}`,
+		`- inherited-confidence: ${formatStrength(inherited)}`,
+		`- total-confidence: ${formatStrength(total)}`,
+	];
+	const section = findConfidenceSection(content);
+	if (!section) {
+		const ending = content.endsWith('\n') ? '\n' : '\n\n';
+		return content + ending + header + '\n\n' + body.join('\n') + '\n';
+	}
+	const lines = content.split(/\r?\n/);
+	const newLines = [...lines.slice(0, section.startLine), header, ...body.map((b) => `  ${b}`), ...lines.slice(section.endLine)];
+	return newLines.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
 /** Find the line range of the `## Incoming relationships` section, if any. */
@@ -333,7 +488,7 @@ export function findIncomingSection(content: string): { startLine: number; endLi
 						source: f.path,          // Lower-order concept (Child/Specialization)
 						target: parentPath,      // Higher-order concept (Parent)
 						relId: 'structural/subsumed-by',
-						strength: fm.confidence ?? defaultRelStrength, // Child's confidence level
+						strength: defaultRelStrength, // structural factor — keeps gravitas independent of confidence
 						reversed: false,
 						authoredFrom: f.path,
 						raw: `groups: ${group}`,

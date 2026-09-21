@@ -6,6 +6,7 @@ export const VIEW_TYPE_HOLOGRAM_CONTROLS = 'semantic-hologram-controls';
 
 export class SemanticHologramControlsView extends ItemView {
 	private plugin: SemanticHologramPlugin;
+	private lastHologramIndex = -1;
 
 	public updateLevelSlider(): void {
 		const levelSlider = this.containerEl.querySelector('.sh-level-slider') as HTMLInputElement | null;
@@ -60,6 +61,31 @@ export class SemanticHologramControlsView extends ItemView {
 		this.registerEvent(
 			this.app.vault.on('create', () => setTimeout(() => this.render(), 100)),
 		);
+
+		// Dismiss the search dropdown and clear hologram selection ("All")
+		// when clicking bare panel background.
+		this.registerDomEvent(this.contentEl, 'click', (e) => {
+			const target = e.target as HTMLElement | null;
+			if (!target) {
+				return;
+			}
+			if (target.closest('.sh-controls-search')) {
+				return;
+			}
+			const results = this.contentEl.querySelector<HTMLElement>('.sh-search-results');
+			if (results) {
+				results.style.display = 'none';
+			}
+			if (target.closest('.sh-hologram-list') || target.closest('button') || target.closest('input')) {
+				return;
+			}
+			if (this.plugin.settings.selectedHolograms.length === 0) {
+				return;
+			}
+			this.plugin.settings.selectedHolograms = [];
+			void this.plugin.saveSettings();
+			this.render();
+		});
 	}
 
 	onClose(): Promise<void> {
@@ -74,20 +100,21 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const header = contentEl.createDiv({ cls: 'sh-controls-header' });
 		header.createEl('h4', { text: 'Semantic Hologram' });
-		header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Open settings' } }, (btn) => {
+
+		const helpHint = contentEl.createDiv({ cls: 'sh-controls-help-hint' });
+		helpHint.setText("Press 'h' for help");
+
+		// Node Search Box (gear sits to the left of the field)
+		const searchContainer = contentEl.createDiv({ cls: 'sh-controls-search' });
+		const searchBar = searchContainer.createDiv({ cls: 'sh-search-bar' });
+		searchBar.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Open settings' } }, (btn) => {
 			setIcon(btn, 'settings');
 			btn.addEventListener('click', () => {
 				(this.app as any).setting.open();
 				(this.app as any).setting.openTabById(this.plugin.manifest.id);
 			});
 		});
-
-		const helpHint = contentEl.createDiv({ cls: 'sh-controls-help-hint' });
-		helpHint.setText("Press 'h' for help");
-
-		// Node Search Box
-		const searchContainer = contentEl.createDiv({ cls: 'sh-controls-search' });
-		const searchInput = searchContainer.createEl('input', {
+		const searchInput = searchBar.createEl('input', {
 			type: 'text',
 			placeholder: 'Search nodes...',
 			cls: 'sh-search-input',
@@ -145,6 +172,7 @@ export class SemanticHologramControlsView extends ItemView {
 				item.addEventListener('click', () => {
 					if (view) {
 						view.setCandidateNode(node.path);
+						view.focusGraph();
 						searchInput.value = node.label;
 						resultsContainer.style.display = 'none';
 					}
@@ -152,33 +180,74 @@ export class SemanticHologramControlsView extends ItemView {
 			}
 		});
 
-		this.contentEl.addEventListener('click', (e) => {
-			if (!(e.target as HTMLElement).closest('.sh-controls-search')) {
-				resultsContainer.style.display = 'none';
-			}
-		});
-
-		// Hologram Manager (integrated)
+	// Hologram Manager (integrated)
 		contentEl.createEl('h5', { text: 'Emulsified Holograms' });
 		const hologramList = contentEl.createDiv({ cls: 'sh-hologram-list' });
 		const allTags = this.plugin.hologramService.getAllTags();
-		
-		for (const tag of allTags) {
-			const row = hologramList.createDiv({ cls: 'sh-hologram-row' });
-			const cb = row.createEl('input', { type: 'checkbox' });
-			cb.checked = this.plugin.settings.selectedHolograms.includes(tag);
-			cb.addEventListener('change', () => {
-				if (cb.checked) {
-					this.plugin.settings.selectedHolograms.push(tag);
-				} else {
-					this.plugin.settings.selectedHolograms = this.plugin.settings.selectedHolograms.filter((t) => t !== tag);
-				}
-				void this.plugin.saveSettings();
-				// Refresh graph
-				this.plugin.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM).forEach(leaf => (leaf.view as any).render());
+		const selected = new Set(this.plugin.settings.selectedHolograms);
+
+		const refreshRows = () => {
+			hologramList.querySelectorAll<HTMLElement>('.sh-hologram-row').forEach((row) => {
+				const tag = row.getAttribute('data-tag');
+				row.toggleClass('is-active', tag !== null && selected.has(tag));
 			});
-			row.createSpan({ text: tag, cls: 'sh-hologram-label' });
+		};
+
+		const saveAndRefresh = () => {
+			this.plugin.settings.selectedHolograms = [...selected];
+			void this.plugin.saveSettings();
+			this.plugin.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM).forEach((leaf) => (leaf.view as any).render());
+		};
+
+		contentEl.createDiv({ cls: 'sh-controls-hint', text: 'Click: select · Shift+click: range · Ctrl+click: toggle' });
+
+		if (allTags.length === 0) {
+			hologramList.createDiv({ cls: 'sh-controls-hint', text: 'No hologram tags yet — add `holograms:` to a note in scope.' });
 		}
+		allTags.forEach((tag, i) => {
+			const row = hologramList.createDiv({
+				cls: 'sh-hologram-row',
+				attr: { role: 'button', tabindex: '0', 'data-tag': tag },
+			});
+			if (selected.has(tag)) {
+				row.addClass('is-active');
+			}
+			row.createSpan({ text: tag, cls: 'sh-hologram-label' });
+			row.addEventListener('click', (e) => {
+				if (e.ctrlKey || e.metaKey) {
+					if (selected.has(tag)) {
+						selected.delete(tag);
+					} else {
+						selected.add(tag);
+					}
+					this.lastHologramIndex = i;
+				} else if (e.shiftKey) {
+					const anchor = this.lastHologramIndex >= 0 ? this.lastHologramIndex : i;
+					const from = Math.min(anchor, i);
+					const to = Math.max(anchor, i);
+					selected.clear();
+					for (let k = from; k <= to; k++) {
+						const t = allTags[k];
+						if (t !== undefined) {
+							selected.add(t);
+						}
+					}
+					this.lastHologramIndex = i;
+				} else {
+					selected.clear();
+					selected.add(tag);
+					this.lastHologramIndex = i;
+				}
+				refreshRows();
+				saveAndRefresh();
+			});
+			row.addEventListener('keydown', (e) => {
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					row.click();
+				}
+			});
+		});
 
 		const mode = this.plugin.settings.hologramMode;
 

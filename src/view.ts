@@ -6,7 +6,7 @@ import type SemanticHologramPlugin from './main';
 import type { HologramTool, RelTypeEntry } from './settings';
 import type { RelationEdge } from './relations';
 import { inScopePath, scanRelations } from './relations';
-import { readConfidences } from './confidence';
+import { computeNodeStats, isEvidenceType, readNodeMetas, scanGravitas } from './gravitas';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
 
@@ -26,7 +26,11 @@ interface GraphNode {
 	pinned: boolean;
 	selected: boolean;
 	homeSet: boolean;
-	confidence: number | null;
+	gravitasDisplay: number;
+	gravitasReal: number;
+	confidenceLocal: number;
+	confidenceInherited: number;
+	confidenceTotal: number;
 	nodeType: string;
 }
 
@@ -61,6 +65,8 @@ const PHYS = {
 };
 
 const WHITE_EDGE = '#DDDDDD';
+
+const CANDIDATE_COLOR = '#9B5DE5';
 
 const ICON_ROTATE =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="3.6"/><ellipse cx="12" cy="12" rx="3.6" ry="9"/></svg>';
@@ -312,7 +318,7 @@ export class SemanticHologramView extends ItemView {
 			'<div class="sh-cursor-icon"></div>';
 		this.cursorOverlay.style.display = 'none';
 
-		this.canvas = container.createEl('canvas', { cls: 'sh-graph-canvas' });
+		this.canvas = container.createEl('canvas', { cls: 'sh-graph-canvas', attr: { tabindex: '0' } });
 		this.ctx = this.canvas.getContext('2d');
 		if (!this.ctx) {
 			return;
@@ -517,23 +523,58 @@ export class SemanticHologramView extends ItemView {
 		const existing = new Map<string, number>();
 		this.nodes.forEach((n, i) => existing.set(n.path, i));
 
+		const knownIds = new Set<string>();
+		const relById = new Map<string, RelTypeEntry>();
+		for (const rt of settings.relTypes) {
+			knownIds.add(rt.id);
+			relById.set(rt.id, rt);
+		}
+
+		const buildSeq = ++this.buildSeq;
+		const scan = await scanRelations(
+			files,
+			this.app.vault,
+			this.app.metadataCache,
+			knownIds,
+			settings.defaultRelStrength,
+			(path) => this.isInScope(path),
+		);
+		const gscan = await scanGravitas(files, this.app.vault, this.app.metadataCache, (path) => this.isInScope(path));
+		// A newer build may have started while we were reading; drop stale results.
+		if (buildSeq !== this.buildSeq) {
+			this.loadingNotice?.hide();
+			this.loadingNotice = null;
+			return;
+		}
+
+		const metas = readNodeMetas(files, this.app.metadataCache, settings.defaultConfidence);
+		const stats = computeNodeStats(metas, scan.edges, gscan.edges, settings.sourceKinds, settings.defaultConfidence);
+
 		const nodes: GraphNode[] = [];
 		const index = new Map<string, number>();
-
-		console.time('SH-Confidence-Load');
-		const confs = await readConfidences(this.plugin.app, files);
-		console.timeEnd('SH-Confidence-Load');
-		const confMap = new Map(confs.map((c) => [c.path, c.value]));
-		const nodeTypeMap = new Map(confs.map((c) => [c.path, c.nodeType]));
-		console.log('[SH] Loaded confidences (non-null entries):', Array.from(confMap.entries()).filter(([p, v]) => v !== null));
+		const stOf = (path: string) => stats.get(path);
 
 		for (const f of files) {
+			const meta = metas.get(f.path);
+			if (meta && isEvidenceType(meta.nodeType)) {
+				continue;
+			}
 			const oldIdx = existing.get(f.path);
+			const st = stOf(f.path);
+			const gd = st?.gravitasDisplay ?? 0;
+			const gr = st?.gravitasReal ?? 0;
+			const cl = st?.confidenceLocal ?? settings.defaultConfidence;
+			const ci = st?.confidenceInherited ?? 0;
+			const ct = st?.confidenceTotal ?? cl;
 			let node: GraphNode;
-			if (oldIdx !== undefined && incremental) {
+			if (oldIdx !== undefined && incremental && this.nodes[oldIdx]) {
 				node = this.nodes[oldIdx]!;
-				node.confidence = confMap.get(f.path) ?? null;
-				node.nodeType = nodeTypeMap.get(f.path) ?? 'concept';
+				node.gravitasDisplay = gd;
+				node.gravitasReal = gr;
+				node.confidenceLocal = cl;
+				node.confidenceInherited = ci;
+				node.confidenceTotal = ct;
+				node.nodeType = meta?.nodeType ?? 'concept';
 			} else {
 				node = {
 					path: f.path,
@@ -551,8 +592,12 @@ export class SemanticHologramView extends ItemView {
 					pinned: false,
 					selected: false,
 					homeSet: false,
-					confidence: confMap.get(f.path) ?? null,
-					nodeType: nodeTypeMap.get(f.path) ?? 'concept',
+					gravitasDisplay: gd,
+					gravitasReal: gr,
+					confidenceLocal: cl,
+					confidenceInherited: ci,
+					confidenceTotal: ct,
+					nodeType: meta?.nodeType ?? 'concept',
 				};
 			}
 			index.set(f.path, nodes.length);
@@ -577,29 +622,6 @@ export class SemanticHologramView extends ItemView {
 				node.vz = 0;
 			}
 		});
-
-		const knownIds = new Set<string>();
-		const relById = new Map<string, RelTypeEntry>();
-		for (const rt of settings.relTypes) {
-			knownIds.add(rt.id);
-			relById.set(rt.id, rt);
-		}
-
-		const buildSeq = ++this.buildSeq;
-		const scan = await scanRelations(
-			files,
-			this.app.vault,
-			this.app.metadataCache,
-			knownIds,
-			settings.defaultRelStrength,
-			(path) => this.isInScope(path),
-		);
-		// A newer build may have started while we were reading; drop stale results.
-		if (buildSeq !== this.buildSeq) {
-			this.loadingNotice?.hide();
-			this.loadingNotice = null;
-			return;
-		}
 
 		const links: GraphLink[] = [];
 		const covered = new Set<string>();
@@ -689,6 +711,17 @@ export class SemanticHologramView extends ItemView {
 					typed: false,
 					edgeColor: WHITE_EDGE,
 				});
+			}
+		}
+
+		// Zero-gravitas nodes float: their relationships carry effective strength
+		// zero, so those pairs get the weakest (longest) rest length.
+		for (const l of links) {
+			const aNode = nodes[l.a]!;
+			const bNode = nodes[l.b]!;
+			if (aNode.gravitasDisplay <= 0 || bNode.gravitasDisplay <= 0) {
+				l.strength = 0;
+				l.restLen = settings.edgeMaxLength;
 			}
 		}
 
@@ -1389,33 +1422,36 @@ export class SemanticHologramView extends ItemView {
 				const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
 				const r = this.nodeScreenRadius(node, p, maxAbsZ) * (isHighlighted ? 1.4 : 1.0);
 				const viewSettings = this.plugin.settings;
-				const conf = node.confidence ?? viewSettings.defaultConfidence;
+				const grav = node.gravitasDisplay;
+				const halo = node.confidenceTotal;
 				let alpha = isFaded ? 0.15 : (isSpecial ? 0.9 : (0.45 + depth * 0.55));
 				if (viewSettings.showGravitasColor && !isFaded && !isSpecial) {
-					alpha = 0.3 + conf * 0.6;
+					alpha = 0.35 + depth * 0.4;
 				}
 
 				const typeEntry = viewSettings.nodeTypes.find((t) => t.id === node.nodeType);
 				const baseColor = typeEntry?.color ?? this.nodeColor;
-				const nodeColor = viewSettings.showGravitasColor ? this.getSpectrumColor(conf, alpha) : baseColor;
+				const nodeColor = viewSettings.showGravitasColor ? this.getSpectrumColor(grav, alpha) : baseColor;
 
 				if (viewSettings.showConfidenceHalo && !isFaded) {
 					ctx.beginPath();
-					ctx.arc(sx, sy, r + 4 + conf * 8, 0, Math.PI * 2);
-					ctx.strokeStyle = this.getSpectrumColor(conf, Math.max(0.7, conf));
+					ctx.arc(sx, sy, r + 4 + halo * 8, 0, Math.PI * 2);
+					ctx.strokeStyle = isCandidate
+						? this.withAlpha(CANDIDATE_COLOR, 0.9)
+						: this.getSpectrumColor(halo, Math.max(0.7, halo));
 					ctx.lineWidth = 2.5;
 					ctx.stroke();
 				}
 
 				ctx.fillStyle = isFaded
-					? this.withAlpha(baseColor, 0.15)
-					: (isSpecial
-						? (isCandidate ? '#9B5DE5' : baseColor)
-						: this.withAlpha(nodeColor, alpha));
-				if (isSpecial) {
+					? this.withAlpha(isCandidate ? CANDIDATE_COLOR : baseColor, 0.15)
+					: (isCandidate
+						? CANDIDATE_COLOR
+						: (isSpecial ? baseColor : this.withAlpha(nodeColor, alpha)));
+				if (isSpecial && !isCandidate) {
 					ctx.beginPath();
 					ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
-					ctx.strokeStyle = isCandidate ? '#9B5DE5' : baseColor;
+					ctx.strokeStyle = baseColor;
 					ctx.lineWidth = 1.5;
 					ctx.stroke();
 				}
@@ -1483,33 +1519,33 @@ export class SemanticHologramView extends ItemView {
 			const r = Math.max(3, node.radius * this.viewScale * (isHighlighted ? 1.5 : 1.0));
 			
 			const viewSettings = this.plugin.settings;
-			const conf = node.confidence ?? viewSettings.defaultConfidence;
+			const grav = node.gravitasDisplay;
+			const halo = node.confidenceTotal;
 			let alpha = 0.92;
-			if (viewSettings.showGravitasColor && !isFaded && !isSpecial) {
-				alpha = 0.3 + conf * 0.6;
-			}
 
 			const typeEntry = viewSettings.nodeTypes.find((t) => t.id === node.nodeType);
 			const baseColor = typeEntry?.color ?? this.nodeColor;
-			const nodeColor = viewSettings.showGravitasColor ? this.getSpectrumColor(conf, alpha) : baseColor;
+			const nodeColor = viewSettings.showGravitasColor ? this.getSpectrumColor(grav, alpha) : baseColor;
 
 			if (viewSettings.showConfidenceHalo && !isFaded) {
 				ctx.beginPath();
-				ctx.arc(sx, sy, r + 4 + conf * 8, 0, Math.PI * 2);
-				ctx.strokeStyle = this.getSpectrumColor(conf, Math.max(0.7, conf));
+				ctx.arc(sx, sy, r + 4 + halo * 8, 0, Math.PI * 2);
+				ctx.strokeStyle = isCandidate
+					? this.withAlpha(CANDIDATE_COLOR, 0.9)
+					: this.getSpectrumColor(halo, Math.max(0.7, halo));
 				ctx.lineWidth = 2.5;
 				ctx.stroke();
 			}
 
 			ctx.fillStyle = isFaded
-				? this.withAlpha(baseColor, 0.15)
-				: (isSpecial
-					? (isCandidate ? '#9B5DE5' : baseColor)
-					: this.withAlpha(nodeColor, alpha));
-			if (isSpecial) {
+				? this.withAlpha(isCandidate ? CANDIDATE_COLOR : baseColor, 0.15)
+				: (isCandidate
+					? CANDIDATE_COLOR
+					: (isSpecial ? baseColor : this.withAlpha(nodeColor, alpha)));
+			if (isSpecial && !isCandidate) {
 				ctx.beginPath();
 				ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
-				ctx.strokeStyle = isCandidate ? '#9B5DE5' : baseColor;
+				ctx.strokeStyle = baseColor;
 				ctx.lineWidth = 1.5;
 				ctx.stroke();
 			}
@@ -1547,7 +1583,108 @@ export class SemanticHologramView extends ItemView {
 		this.drawLiveSelection();
 		this.drawSelectionArea();
 		this.drawOriginIndicator();
+		this.drawHoverTooltip();
 		this.updateCursor();
+	}
+
+	private drawHoverTooltip(): void {
+		const ctx = this.ctx;
+		const canvas = this.canvas;
+		if (!ctx || !canvas) {
+			return;
+		}
+		if (!this.pointerInside || this.hoverIndex < 0) {
+			return;
+		}
+		if (this.rotating || this.panning || this.pinnedIndex >= 0 || this.selecting || this.selectMode || this.groupDragging) {
+			return;
+		}
+		const node = this.nodes[this.hoverIndex];
+		if (!node) {
+			return;
+		}
+
+		const cs = getComputedStyle(this.contentEl);
+		const fontFamily = cs.getPropertyValue('--font-interface').trim() || cs.fontFamily;
+		const labelFont = `600 12px ${fontFamily}`;
+		const bodyFont = `10px ${fontFamily}`;
+
+		const typeEntry = this.plugin.settings.nodeTypes.find((t) => t.id === node.nodeType);
+		const typeName = typeEntry ? typeEntry.name : node.nodeType;
+		const pct = (v: number) => `${Math.round(v * 100)}%`;
+		const meta =
+			(typeName ? typeName + ' · ' : '') +
+			`Confidence ${pct(node.confidenceTotal)}` +
+			` · Gravitas ${pct(node.gravitasDisplay)}`;
+		const pathText = node.path.length > 64 ? node.path.slice(0, 61) + '...' : node.path;
+
+		const lines: Array<{ text: string; font: string; dim?: boolean }> = [
+			{ text: node.label, font: labelFont },
+			{ text: pathText, font: bodyFont, dim: true },
+			{ text: meta, font: bodyFont },
+		];
+
+		const padX = 10;
+		const padY = 8;
+		const lineH = 15;
+		let boxW = 0;
+		for (const l of lines) {
+			ctx.font = l.font;
+			boxW = Math.max(boxW, ctx.measureText(l.text).width);
+		}
+		const boxH = lines.length * lineH + padY * 2;
+		boxW += padX * 2;
+
+		const rect = canvas.getBoundingClientRect();
+		let x = this.pointerX - rect.left + 14;
+		let y = this.pointerY - rect.top + 16;
+		if (x + boxW > rect.width - 8) {
+			x = this.pointerX - rect.left - boxW - 12;
+		}
+		if (y + boxH > rect.height - 8) {
+			y = this.pointerY - rect.top - boxH - 14;
+		}
+		x = Math.max(4, x);
+		y = Math.max(4, y);
+
+		ctx.save();
+		ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+		ctx.shadowBlur = 10;
+		const bg = cs.getPropertyValue('--background-primary').trim() || '#1e1e1e';
+		const border = cs.getPropertyValue('--background-modifier-border').trim() || '#555';
+		ctx.fillStyle = bg;
+		this.roundRect(ctx, x, y, boxW, boxH, 6);
+		ctx.fill();
+		ctx.shadowBlur = 0;
+		ctx.strokeStyle = border;
+		ctx.lineWidth = 1;
+		this.roundRect(ctx, x, y, boxW, boxH, 6);
+		ctx.stroke();
+
+		ctx.textAlign = 'left';
+		ctx.textBaseline = 'middle';
+		for (let i = 0; i < lines.length; i++) {
+			const l = lines[i];
+			if (!l) {
+				continue;
+			}
+			ctx.font = l.font;
+			ctx.globalAlpha = l.dim ? 0.65 : 1;
+			ctx.fillStyle = cs.color || '#ccc';
+			ctx.fillText(l.text, x + padX, y + padY + i * lineH + lineH / 2);
+		}
+		ctx.globalAlpha = 1;
+		ctx.restore();
+	}
+
+	private roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+		ctx.beginPath();
+		ctx.moveTo(x + r, y);
+		ctx.arcTo(x + w, y, x + w, y + h, r);
+		ctx.arcTo(x + w, y + h, x, y + h, r);
+		ctx.arcTo(x, y + h, x, y, r);
+		ctx.arcTo(x, y, x + w, y, r);
+		ctx.closePath();
 	}
 
 	private nodeScreenRadius(node: GraphNode, p: { x: number; y: number; z: number }, R: number): number {
@@ -1924,7 +2061,7 @@ export class SemanticHologramView extends ItemView {
 		if (tool === 'select') {
 			this.selecting = true;
 			this.toggleIndex = idx;
-			this.clearOnUp = idx < 0 && this.selected.size > 0;
+			this.clearOnUp = idx < 0 && (this.selected.size > 0 || this.candidateNode !== null);
 			this.selectAnchorX = e.clientX - rect.left;
 			this.selectAnchorY = e.clientY - rect.top;
 			this.selectCurX = this.selectAnchorX;
@@ -1979,7 +2116,7 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		this.panning = true;
-		this.clearOnUp = this.selected.size > 0;
+		this.clearOnUp = this.selected.size > 0 || this.candidateNode !== null;
 		this.panStartX = e.clientX;
 		this.panStartY = e.clientY;
 		this.panViewX = this.viewX;
@@ -2143,7 +2280,7 @@ export class SemanticHologramView extends ItemView {
 			this.downX = e.clientX;
 			this.downY = e.clientY;
 			this.toggleIndex = this.hitTest(e);
-			this.clearOnUp = this.toggleIndex < 0 && this.selected.size > 0;
+			this.clearOnUp = this.toggleIndex < 0 && (this.selected.size > 0 || this.candidateNode !== null);
 			this.selectAnchorX = e.clientX - (rect?.left ?? 0);
 			this.selectAnchorY = e.clientY - (rect?.top ?? 0);
 			this.selectCurX = this.selectAnchorX;
@@ -2205,7 +2342,7 @@ export class SemanticHologramView extends ItemView {
 			this.canvas?.setPointerCapture(e.pointerId);
 		} else {
 			this.panning = true;
-			this.clearOnUp = this.selected.size > 0;
+			this.clearOnUp = this.selected.size > 0 || this.candidateNode !== null;
 			this.panStartX = e.clientX;
 			this.panStartY = e.clientY;
 			this.panViewX = this.viewX;
@@ -2359,6 +2496,7 @@ export class SemanticHologramView extends ItemView {
 		if (!node) {
 			return;
 		}
+		this.candidateNode = null;
 		if (this.selected.has(i)) {
 			this.selected.delete(i);
 			node.selected = false;
@@ -2817,6 +2955,11 @@ export class SemanticHologramView extends ItemView {
 			}
 		}
 		this.requestRedraw();
+	}
+
+	/** Move keyboard focus onto the graph canvas so hotkeys (e.g. `c`) respond. */
+	focusGraph(): void {
+		(this.canvas ?? this.contentEl).focus();
 	}
 
 	requestRedraw(): void {

@@ -29,6 +29,13 @@ export interface LevelEntry {
 	level: number; // 0
 }
 
+export interface SourceKindEntry {
+	id: string; // 'source/web', 'source/literature'
+	name: string;
+	percent: number; // 0..100 credibility modifier
+	description?: string;
+}
+
 export interface SemanticHologramSettings {
 	hologramMode: HologramMode;
 	hologramTool: HologramTool;
@@ -37,6 +44,7 @@ export interface SemanticHologramSettings {
 	nodeTypes: NodeTypeEntry[];
 	relTypes: RelTypeEntry[];
 	levels: LevelEntry[];
+	sourceKinds: SourceKindEntry[];
 	edgeMinLength: number;
 	edgeMaxLength: number;
 	hoverDepth: number;
@@ -112,6 +120,20 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 		{ id: 'domain', name: 'Domain', color: '#E76F51', description: 'A subject domain or field of study.', enabled: true, level: 5 },
 		{ id: 'field', name: 'Field', color: '#90BE6D', description: 'A high-level academic or professional field.', enabled: true, level: 6 },
 		{ id: 'source', name: 'Source', color: '#8AC926', description: 'A source document: book, paper, video, interview, article.', enabled: true, level: 0 },
+		{ id: 'authority', name: 'Authority', color: '#E9C46A', description: 'A subject-matter expert (SME) lending authority as evidence (no level).', enabled: true, level: undefined },
+		{ id: 'data', name: 'Data', color: '#4D9DE0', description: 'Quantitative/qualitative measurement of objectively existing things (no level).', enabled: true, level: undefined },
+	],
+	sourceKinds: [
+		{ id: 'source/data', name: 'Data & measurement', percent: 95, description: 'Quantitative or measurable observation of objective reality.' },
+		{ id: 'source/scientific', name: 'Scientific / peer-reviewed', percent: 90, description: 'Inductively well-supported scientific evidence.' },
+		{ id: 'source/literature', name: 'Literature / reference', percent: 70, description: 'Books, papers, documentaries, reference works.' },
+		{ id: 'source/education', name: 'Formal education', percent: 80, description: 'Course material, curriculum, structured instruction.' },
+		{ id: 'source/authority', name: 'Expert / authority', percent: 60, description: 'Subject-matter expert statements.' },
+		{ id: 'source/documentary', name: 'Documentary', percent: 45 },
+		{ id: 'source/news', name: 'Reporting / news', percent: 35 },
+		{ id: 'source/practitioner', name: 'Practitioner account', percent: 25 },
+		{ id: 'source/social', name: 'Social media', percent: 10 },
+		{ id: 'source/unverified', name: 'Opinion / anecdote', percent: 0, description: 'Not rooted in objective reality or fact — lends no gravitas.' },
 	],
 	relTypes: [
 		{ id: 'logic/supports', color: '#4D9DE0', description: 'Provides support for the target.', enabled: true },
@@ -404,12 +426,12 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Confidence & gravitas')
-			.setDesc('How each node\'s confidence is shown on the graph. Colors range from red (0) to yellow (0.5) to green (1).')
+			.setDesc('Gravitas is a calculated structural strength (red 0 → yellow 0.5 → green 1), independent of confidence. Confidence is user-set: local-confidence plus inherited confidence from a node\'s children, shown as a halo.')
 			.setHeading();
 
 		new Setting(containerEl)
 			.setName('Show Gravitas as a node color')
-			.setDesc('Fill each node with the confidence spectrum: red (confidence 0) → yellow (0.5) → green (1). Nodes without a confidence frontmatter value use the default confidence.')
+			.setDesc('Fill each node with the gravitas spectrum: red (gravitas 0) → yellow (0.5) → green (1). A zero-gravitas node floats — its relationships are treated as strength zero until evidence lends it gravitas.')
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.showGravitasColor).onChange(async (v) => {
 					this.plugin.settings.showGravitasColor = v;
@@ -419,7 +441,7 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Show confidence level as a node halo')
-			.setDesc('Draw a colored ring around each node matching its confidence level using the same red → yellow → green spectrum.')
+			.setDesc('Draw a colored ring around each node matching its total confidence (local + inherited) using the same red → yellow → green spectrum.')
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.showConfidenceHalo).onChange(async (v) => {
 					this.plugin.settings.showConfidenceHalo = v;
@@ -429,7 +451,7 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Default confidence')
-			.setDesc('Confidence used for nodes that do not have a confidence frontmatter value. Range 0 (red) to 1 (green).')
+			.setDesc('Local confidence used for nodes that do not have a local-confidence frontmatter value. Range 0 (red) to 1 (green). Inherited confidence is the sum of children\'s total confidence; total = local + inherited (capped at 1).')
 			.addSlider((s) =>
 				s
 					.setLimits(0, 1, 0.01)
@@ -554,6 +576,7 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 		this.renderLevelsGlossary(containerEl);
 		this.renderNodeGlossary(containerEl);
 		this.renderRelGlossary(containerEl);
+		this.renderSourceKinds(containerEl);
 	}
 
 	private renderLevelsGlossary(containerEl: HTMLElement): void {
@@ -960,6 +983,84 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 						}).open();
 					}),
 			);
+	}
+
+	private renderSourceKinds(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName('Gravitas source kinds')
+			.setDesc('Credibility modifier (%) for each kind of evidence note. An evidence note\'s `source-kind` frontmatter value picks a row here; the percent multiplies the amount it lends (lends-gravitas-to). 0% = rooted in nothing objective — lends no gravitas.')
+			.setHeading();
+
+		const headerRow = containerEl.createDiv({ cls: 'sh-glossary-row sh-glossary-header' });
+		headerRow.createDiv({ cls: 'sh-glossary-info' }).createEl('b', { text: 'Kind' });
+		headerRow.createDiv({ cls: 'sh-glossary-move' }).createEl('b', { text: 'Modifier %' });
+
+		const listEl = containerEl.createDiv({ cls: 'sh-glossary-list' });
+		this.plugin.settings.sourceKinds.forEach((sk, i) => {
+			const row = listEl.createDiv({ cls: 'sh-glossary-row' });
+			const info = row.createDiv({ cls: 'sh-glossary-info' });
+			const title = info.createDiv({ cls: 'sh-glossary-title' }).createEl('input', { type: 'text', value: sk.id, cls: 'sh-glossary-title' });
+			title.style.fontWeight = '600';
+			title.addEventListener('change', () => {
+				const newId = title.value.trim();
+				if (!newId) {
+					title.value = sk.id;
+					return;
+				}
+				if (newId !== sk.id && this.plugin.settings.sourceKinds.some((k) => k.id === newId)) {
+					new Notice(`Source kind "${newId}" already exists.`);
+					title.value = sk.id;
+					return;
+				}
+				sk.id = newId;
+				void this.persist();
+			});
+			if (sk.description) {
+				info.createDiv({ cls: 'sh-glossary-desc' }).setText(sk.description);
+			}
+			const move = row.createDiv({ cls: 'sh-glossary-move' });
+			const pctLabel = move.createSpan({ cls: 'sh-conf-pct', text: `${sk.percent}%` });
+			pctLabel.style.minWidth = '44px';
+			pctLabel.style.textAlign = 'right';
+			const slider = move.createEl('input', {
+				type: 'range',
+				attr: { min: '0', max: '100', step: '1', value: String(sk.percent) },
+			});
+			slider.style.flex = '1';
+			slider.addEventListener('input', () => {
+				const v = parseInt(slider.value, 10);
+				sk.percent = v;
+				pctLabel.setText(`${v}%`);
+				void this.persist();
+			});
+
+			const controls = row.createDiv({ cls: 'sh-glossary-controls' });
+			const del = controls.createEl('button', { cls: 'sh-glossary-del', attr: { 'aria-label': 'Delete' } });
+			del.setText('✕');
+			del.addEventListener('click', () => {
+				this.plugin.settings.sourceKinds.splice(i, 1);
+				void this.persist();
+				this.display();
+			});
+		});
+
+		const addRow = containerEl.createDiv({ cls: 'sh-glossary-add' });
+		const addBtn = addRow.createEl('button', { text: 'Add source kind', cls: 'mod-cta' });
+		addBtn.addEventListener('click', () => {
+			new EntryModal(this.app, 'rel', (r) => {
+				if (!r.type) {
+					return;
+				}
+				const id = r.type.startsWith('source/') ? r.type : `source/${r.type}`;
+				if (this.plugin.settings.sourceKinds.some((k) => k.id === id)) {
+					new Notice(`Source kind "${id}" already exists.`);
+					return;
+				}
+				this.plugin.settings.sourceKinds.push({ id, name: id, percent: 50, description: r.description });
+				void this.persist();
+				this.display();
+			}).open();
+		});
 	}
 }
 class DeleteRelationshipModal extends Modal {

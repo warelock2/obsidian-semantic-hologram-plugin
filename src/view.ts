@@ -94,6 +94,7 @@ export class SemanticHologramView extends ItemView {
 	private modeBanner: HTMLElement | null = null;
 	private nodes: GraphNode[] = [];
 	private links: GraphLink[] = [];
+	private faces: number[][] = [];
 	private loadingNotice: Notice | null = null;
 	private raf = 0;
 	private settled = false;
@@ -739,7 +740,8 @@ export class SemanticHologramView extends ItemView {
 		this.loadingNotice = null;
 		this.nodes = nodes;
 		this.links = links;
-		console.log(`[SH] buildGraph: nodes=${nodes.length} links=${links.length} settled=${this.settled}`);
+		this.calculateFaces();
+		console.log(`[SH] buildGraph: nodes=${nodes.length} links=${links.length} faces=${this.faces.length} settled=${this.settled}`);
 		if (!incremental) {
 			this.settled = false;
 			this.settleCount = 0;
@@ -747,6 +749,37 @@ export class SemanticHologramView extends ItemView {
 			this.selected.clear();
 			this.fitToView();
 		}
+	}
+
+	/** Closed triangles of interconnected nodes, deduplicated. */
+	private calculateFaces(): void {
+		const adjacency = new Map<number, Set<number>>();
+		for (const l of this.links) {
+			if (!adjacency.has(l.a)) adjacency.set(l.a, new Set());
+			if (!adjacency.has(l.b)) adjacency.set(l.b, new Set());
+			adjacency.get(l.a)!.add(l.b);
+			adjacency.get(l.b)!.add(l.a);
+		}
+
+		const faces: number[][] = [];
+		const seenFaces = new Set<string>();
+
+		for (const [nodeA, neighbors] of adjacency) {
+			for (const nodeB of neighbors) {
+				if (nodeB <= nodeA) continue;
+				const common = [...neighbors].filter(n => adjacency.get(nodeB)?.has(n));
+				for (const nodeC of common) {
+					if (nodeC <= nodeB) continue;
+					const face = [nodeA, nodeB, nodeC].sort((a, b) => a - b);
+					const key = face.join(',');
+					if (!seenFaces.has(key)) {
+						seenFaces.add(key);
+						faces.push(face);
+					}
+				}
+			}
+		}
+		this.faces = faces;
 	}
 
 	/** Stronger relationships are shorter: lerp(max, min, strength). */
@@ -1405,6 +1438,27 @@ export class SemanticHologramView extends ItemView {
 			const R = this.worldR();
 			const rotated = this.nodes.map((n) => this.rotatePoint(n.x, n.y, n.z, this.rotCx, this.rotCy, this.rotCz));
 			const maxAbsZ = Math.max(...rotated.map(p => Math.abs(p.z)), 1);
+
+			if (this.plugin.settings.facesEnabled && this.faces.length > 0) {
+				const renderables: { type: 'face'; face: number[]; z: number }[] = [];
+				for (const face of this.faces) {
+					const z = (rotated[face[0]!]!.z + rotated[face[1]!]!.z + rotated[face[2]!]!.z) / 3;
+					renderables.push({ type: 'face', face, z });
+				}
+				renderables.sort((a, b) => a.z - b.z);
+				ctx.fillStyle = this.withAlpha(this.plugin.settings.facesColor, this.plugin.settings.facesOpacity);
+				for (const item of renderables) {
+					const pA = rotated[item.face[0]!]!;
+					const pB = rotated[item.face[1]!]!;
+					const pC = rotated[item.face[2]!]!;
+					ctx.beginPath();
+					ctx.moveTo(this.toScreenX(pA.x), this.toScreenY(pA.y));
+					ctx.lineTo(this.toScreenX(pB.x), this.toScreenY(pB.y));
+					ctx.lineTo(this.toScreenX(pC.x), this.toScreenY(pC.y));
+					ctx.closePath();
+					ctx.fill();
+				}
+			}
 
 			const order = rotated
 				.map((p, i) => ({ p, i }))
@@ -2650,8 +2704,12 @@ export class SemanticHologramView extends ItemView {
 			this.showHelp();
 		} else if (key === 'c') {
 			this.centerSelectedOnOrigin();
-		} else if (key === 'f') {
+		} else if (key === 'f' && e.shiftKey) {
 			this.fitToView();
+		} else if (key === 'f' && !e.repeat) {
+			this.plugin.settings.facesEnabled = !this.plugin.settings.facesEnabled;
+			void this.plugin.saveSettings();
+			this.showToast(this.plugin.settings.facesEnabled ? 'Faces on' : 'Faces off');
 		} else if (key === 'r' && e.shiftKey) {
 			this.resetView();
 		} else if (key === 'r' && !e.repeat) {
@@ -2820,7 +2878,8 @@ export class SemanticHologramView extends ItemView {
 			'<div class="sh-help-row"><span class="sh-help-key">h</span><span class="sh-help-desc">show / hide help</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">c</span><span class="sh-help-desc">center hovered node on rotation origin</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+a</span><span class="sh-help-desc">select all nodes</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">f</span><span class="sh-help-desc">fit graph to view</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">f</span><span class="sh-help-desc">toggle faces (3D)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Shift+f</span><span class="sh-help-desc">fit graph to view</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">r</span><span class="sh-help-desc">cycle rotation: off → clockwise → counter-clockwise</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+r</span><span class="sh-help-desc">reset (fit to view, rotation to 0)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">s</span><span class="sh-help-desc">hold: box/lasso select, tap: select hovered node</span></div>' +

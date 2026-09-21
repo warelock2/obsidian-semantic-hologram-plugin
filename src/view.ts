@@ -468,6 +468,21 @@ export class SemanticHologramView extends ItemView {
 		return `rgba(${m[0]}, ${m[1]}, ${m[2]}, ${alpha})`;
 	}
 
+	private getSpectrumColor(value: number, alpha = 1.0): string {
+		const clamped = Math.max(0, Math.min(1, value));
+		let r = 0;
+		let g = 0;
+		let b = 0;
+		if (clamped <= 0.5) {
+			r = 255;
+			g = Math.round((clamped / 0.5) * 255);
+		} else {
+			r = Math.round((1 - (clamped - 0.5) / 0.5) * 255);
+			g = 255;
+		}
+		return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+	}
+
 	private resize(): void {
 		if (!this.canvas || !this.ctx) {
 			return;
@@ -1367,25 +1382,26 @@ export class SemanticHologramView extends ItemView {
 				}
 
 				const typeEntry = this.plugin.settings.nodeTypes.find((t) => t.id === node.nodeType);
-				const nodeColor = typeEntry?.color ?? this.nodeColor;
+				const baseColor = typeEntry?.color ?? this.nodeColor;
+				const nodeColor = node.confidence !== null ? this.getSpectrumColor(node.confidence, alpha) : baseColor;
 
 				if (node.confidence !== null && !isFaded) {
 					ctx.beginPath();
 					ctx.arc(sx, sy, r + 4 + node.confidence * 8, 0, Math.PI * 2);
-					ctx.strokeStyle = this.withAlpha(nodeColor, Math.max(0.6, node.confidence));
+					ctx.strokeStyle = this.getSpectrumColor(node.confidence, Math.max(0.7, node.confidence));
 					ctx.lineWidth = 2.5;
 					ctx.stroke();
 				}
 
 				ctx.fillStyle = isFaded
-					? this.withAlpha(nodeColor, 0.15)
+					? this.withAlpha(baseColor, 0.15)
 					: ((node.pinned || node.selected || isHighlighted || isCandidate)
-						? (isCandidate ? '#9B5DE5' : nodeColor)
+						? (isCandidate ? '#9B5DE5' : baseColor)
 						: this.withAlpha(nodeColor, alpha));
 				if (node.pinned || node.selected || isCandidate) {
 					ctx.beginPath();
 					ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
-					ctx.strokeStyle = isCandidate ? '#9B5DE5' : nodeColor;
+					ctx.strokeStyle = isCandidate ? '#9B5DE5' : baseColor;
 					ctx.lineWidth = 1.5;
 					ctx.stroke();
 				}
@@ -1456,23 +1472,27 @@ export class SemanticHologramView extends ItemView {
 				alpha = 0.3 + node.confidence * 0.6;
 			}
 
+			const typeEntry = this.plugin.settings.nodeTypes.find((t) => t.id === node.nodeType);
+			const baseColor = typeEntry?.color ?? this.nodeColor;
+			const nodeColor = node.confidence !== null ? this.getSpectrumColor(node.confidence, alpha) : baseColor;
+
 			if (node.confidence !== null && !isFaded) {
 				ctx.beginPath();
-				ctx.arc(sx, sy, r + 2 + node.confidence * 6, 0, Math.PI * 2);
-				ctx.strokeStyle = this.withAlpha(this.nodeColor, node.confidence * 0.4);
-				ctx.lineWidth = 1;
+				ctx.arc(sx, sy, r + 4 + node.confidence * 8, 0, Math.PI * 2);
+				ctx.strokeStyle = this.getSpectrumColor(node.confidence, Math.max(0.7, node.confidence));
+				ctx.lineWidth = 2.5;
 				ctx.stroke();
 			}
 
 			ctx.fillStyle = isFaded
-				? this.withAlpha(this.nodeColor, 0.15)
+				? this.withAlpha(baseColor, 0.15)
 				: (node.pinned || node.selected || isHighlighted || isCandidate
-					? (isCandidate ? '#9B5DE5' : this.nodeColor)
-					: this.withAlpha(this.nodeColor, alpha));
+					? (isCandidate ? '#9B5DE5' : baseColor)
+					: this.withAlpha(nodeColor, alpha));
 			if (node.pinned || node.selected || isCandidate) {
 				ctx.beginPath();
 				ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
-				ctx.strokeStyle = isCandidate ? '#9B5DE5' : this.nodeColor;
+				ctx.strokeStyle = isCandidate ? '#9B5DE5' : baseColor;
 				ctx.lineWidth = 1.5;
 				ctx.stroke();
 			}

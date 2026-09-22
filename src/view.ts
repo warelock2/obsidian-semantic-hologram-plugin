@@ -4,13 +4,15 @@ import * as gifenc from 'gifenc';
 const { GIFEncoder, quantize, applyPalette } = gifenc;
 import type SemanticHologramPlugin from './main';
 import type { HologramTool, RelTypeEntry } from './settings';
-import type { RelationEdge } from './relations';
+import type { SemanticHologramSettings } from './settings';
+import type { RelationEdge, RelationScan } from './relations';
 import { inScopePath, scanRelations } from './relations';
 import { computeNodeStats, isEvidenceType, readNodeMetas, scanGravitas } from './gravitas';
+import type { GravitasScan } from './gravitas';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
 
-interface GraphNode {
+export interface GraphNode {
 	path: string;
 	label: string;
 	x: number;
@@ -42,6 +44,46 @@ interface GraphLink {
 	strength: number;
 	typed: boolean;
 	edgeColor: string;
+}
+
+export interface SearchIndexEntry {
+	path: string;
+	label: string;
+	nodeType: string;
+	nodeTypeName: string;
+	nodeTypeDesc: string;
+	relIds: string[];
+	relDescs: string[];
+	content: string;
+	confidenceTotal: number;
+	gravitasDisplay: number;
+}
+
+/** Shared node-preview content: the same card shape everywhere (graph hover, search hover). */
+export interface NodePreviewModel {
+	label: string;
+	path: string;
+	typeName: string;
+	confidencePct: number;
+	gravitasPct: number;
+	contentSnippet: string;
+	content: string;
+}
+
+export function buildNodePreviewModel(
+	node: { label: string; path: string; nodeType: string; confidenceTotal: number; gravitasDisplay: number; content?: string },
+	settings: SemanticHologramSettings,
+): NodePreviewModel {
+	const typeEntry = settings.nodeTypes.find((t) => t.id === node.nodeType);
+	return {
+		label: node.label,
+		path: node.path,
+		typeName: typeEntry ? typeEntry.name : node.nodeType,
+		confidencePct: Math.round(node.confidenceTotal * 100),
+		gravitasPct: Math.round(node.gravitasDisplay * 100),
+		contentSnippet: node.content ? (node.content.slice(0, 150) + (node.content.length > 150 ? '...' : '')) : '',
+		content: node.content ?? '',
+	};
 }
 
 const PHYS = {
@@ -94,6 +136,7 @@ export class SemanticHologramView extends ItemView {
 	private modeBanner: HTMLElement | null = null;
 	private nodes: GraphNode[] = [];
 	private links: GraphLink[] = [];
+	private searchIndex: Map<string, SearchIndexEntry> = new Map();
 	private faces: number[][] = [];
 	private loadingNotice: Notice | null = null;
 	private raf = 0;
@@ -101,6 +144,7 @@ export class SemanticHologramView extends ItemView {
 	private settleCount = 0;
 	private layoutFrames = 0;
 	private scale = 1;
+	private pressedKeys = new Set<string>();
 	private panning = false;
 	private panStartX = 0;
 	private panStartY = 0;
@@ -169,7 +213,7 @@ export class SemanticHologramView extends ItemView {
 	private touchDownY = 0;
 	private touchTappedNode = -1;
 	private touchGesture: 'none' | 'pan' | 'pin' | 'group' | 'select' | 'rotate' = 'none';
-	private candidateNode: string | null = null;
+	private candidateNodes: Set<string> = new Set();
 	private isRecording = false;
 	private isEncoding = false;
 	private recordingFrames: ImageData[] = [];
@@ -291,6 +335,32 @@ export class SemanticHologramView extends ItemView {
 		this.fitToView();
 	}
 
+	public zoomIn(): void {
+		if (!this.canvas) return;
+		const sx = this.canvas.clientWidth / 2;
+		const sy = this.canvas.clientHeight / 2;
+		const factor = 1.25; 
+		const worldX = this.toWorldX(sx);
+		const worldY = this.toWorldY(sy);
+		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.viewScale * factor));
+		this.viewX = worldX - sx / this.viewScale;
+		this.viewY = worldY - sy / this.viewScale;
+		this.autoFitCooldown = PHYS.fitCooldown;
+	}
+
+	public zoomOut(): void {
+		if (!this.canvas) return;
+		const sx = this.canvas.clientWidth / 2;
+		const sy = this.canvas.clientHeight / 2;
+		const factor = 1 / 1.25; 
+		const worldX = this.toWorldX(sx);
+		const worldY = this.toWorldY(sy);
+		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.viewScale * factor));
+		this.viewX = worldX - sx / this.viewScale;
+		this.viewY = worldY - sy / this.viewScale;
+		this.autoFitCooldown = PHYS.fitCooldown;
+	}
+
 	rebuildGraph(): Promise<void> {
 		return this.buildGraph(false);
 	}
@@ -319,6 +389,19 @@ export class SemanticHologramView extends ItemView {
 			'<div class="sh-cursor-icon"></div>';
 		this.cursorOverlay.style.display = 'none';
 
+		const zoomControls = container.createDiv({ cls: 'sh-map-zoom-controls' });
+		const btnIn = zoomControls.createEl('button', { text: '+', cls: 'sh-map-zoom-btn' });
+		btnIn.title = 'Zoom In';
+		btnIn.addEventListener('click', () => this.zoomIn());
+
+		const btnFit = zoomControls.createEl('button', { text: '⌖', cls: 'sh-map-zoom-btn' });
+		btnFit.title = 'Fit to View';
+		btnFit.addEventListener('click', () => this.fitToView());
+
+		const btnOut = zoomControls.createEl('button', { text: '−', cls: 'sh-map-zoom-btn' });
+		btnOut.title = 'Zoom Out';
+		btnOut.addEventListener('click', () => this.zoomOut());
+
 		this.canvas = container.createEl('canvas', { cls: 'sh-graph-canvas', attr: { tabindex: '0' } });
 		this.ctx = this.canvas.getContext('2d');
 		if (!this.ctx) {
@@ -338,7 +421,7 @@ export class SemanticHologramView extends ItemView {
 		this.canvas.addEventListener('pointerleave', this.onPointerLeave);
 		this.canvas.addEventListener('pointercancel', this.onPointerUp);
 		this.canvas.addEventListener('wheel', this.onWheel, { passive: false });
-		window.addEventListener('keydown', this.onKeyDown);
+		window.addEventListener('keydown', this.onKeyDown, true);
 		window.addEventListener('keyup', this.onKeyUp);
 
 		this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -368,7 +451,7 @@ export class SemanticHologramView extends ItemView {
 			this.canvas.removeEventListener('pointercancel', this.onPointerUp);
 			this.canvas.removeEventListener('wheel', this.onWheel);
 		}
-		window.removeEventListener('keydown', this.onKeyDown);
+		window.removeEventListener('keydown', this.onKeyDown, true);
 		window.removeEventListener('keyup', this.onKeyUp);
 		this.contentEl.empty();
 		return Promise.resolve();
@@ -448,6 +531,14 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
+	public focusSearchInput(): void {
+		const searchInput = document.querySelector('.sh-search-input') as HTMLInputElement | null;
+		if (searchInput) {
+			searchInput.focus();
+			searchInput.select();
+		}
+	}
+
 	private readColors(): void {
 		const cs = getComputedStyle(document.body);
 		const accent = cs.getPropertyValue('--interactive-accent').trim();
@@ -512,8 +603,7 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	private async buildGraph(incremental = false): Promise<void> {
-		if (!incremental) {
-			this.loadingNotice?.hide();
+		if (!incremental && !this.loadingNotice) {
 			this.loadingNotice = new Notice('Loading hologram…', 0);
 		}
 		const allFiles = this.app.vault.getMarkdownFiles();
@@ -543,8 +633,6 @@ export class SemanticHologramView extends ItemView {
 		const gscan = await scanGravitas(files, this.app.vault, this.app.metadataCache, (path) => this.isInScope(path));
 		// A newer build may have started while we were reading; drop stale results.
 		if (buildSeq !== this.buildSeq) {
-			this.loadingNotice?.hide();
-			this.loadingNotice = null;
 			return;
 		}
 
@@ -554,6 +642,16 @@ export class SemanticHologramView extends ItemView {
 		const nodes: GraphNode[] = [];
 		const index = new Map<string, number>();
 		const stOf = (path: string) => stats.get(path);
+
+        // Pre-fetch all file contents
+        const contentMap = new Map<string, string>();
+        await Promise.all(files.map(async (f) => {
+            try {
+                contentMap.set(f.path, await this.app.vault.cachedRead(f));
+            } catch {
+                contentMap.set(f.path, '');
+            }
+        }));
 
 		for (const f of files) {
 			const meta = metas.get(f.path);
@@ -736,6 +834,30 @@ export class SemanticHologramView extends ItemView {
 			node.radius = 3 + Math.min(7, Math.sqrt(degree[i] ?? 0) * 2.2 * Math.sqrt(maxDeg) / Math.sqrt(maxDeg));
 		});
 
+		// Populate initial synchronous search index so search works immediately
+		const initialIndex = new Map<string, SearchIndexEntry>();
+		for (const node of nodes) {
+			const type = settings.nodeTypes.find((t) => t.id === node.nodeType);
+			initialIndex.set(node.path, {
+				path: node.path,
+				label: node.label,
+				nodeType: node.nodeType,
+				nodeTypeName: type?.name ?? node.nodeType,
+				nodeTypeDesc: type?.description ?? '',
+				relIds: [],
+				relDescs: [],
+				content: contentMap.get(node.path) ?? '',
+				confidenceTotal: node.confidenceTotal,
+				gravitasDisplay: node.gravitasDisplay,
+			});
+		}
+		this.searchIndex = initialIndex;
+
+		this.searchIndex = await this.buildSearchIndex(nodes, scan, gscan, contentMap);
+		if (buildSeq !== this.buildSeq) {
+			return;
+		}
+
 		this.loadingNotice?.hide();
 		this.loadingNotice = null;
 		this.nodes = nodes;
@@ -748,6 +870,65 @@ export class SemanticHologramView extends ItemView {
 			this.layoutFrames = 0;
 			this.selected.clear();
 			this.fitToView();
+		}
+	}
+
+	/** Per-node search cart: label/path/type/relationship/content for the controls search box. */
+	private async buildSearchIndex(
+		nodes: GraphNode[],
+		scan: RelationScan,
+		gscan: GravitasScan,
+        contentMap: Map<string, string>
+	): Promise<Map<string, SearchIndexEntry>> {
+		const settings = this.plugin.settings;
+		const nodeTypes = settings.nodeTypes;
+		const relTypes = settings.relTypes;
+		const index = new Map<string, SearchIndexEntry>();
+
+		const relIdsByPath = new Map<string, Set<string>>();
+		for (const e of scan.edges) {
+			const a = relIdsByPath.get(e.source) ?? new Set<string>();
+			a.add(e.relId);
+			relIdsByPath.set(e.source, a);
+			const b = relIdsByPath.get(e.target) ?? new Set<string>();
+			b.add(e.relId);
+			relIdsByPath.set(e.target, b);
+		}
+		for (const e of gscan.edges) {
+			for (const p of [e.source, e.target]) {
+				const s = relIdsByPath.get(p) ?? new Set<string>();
+				s.add('gravitas');
+				relIdsByPath.set(p, s);
+			}
+		}
+
+		for (const node of nodes) {
+			const type = nodeTypes.find((t) => t.id === node.nodeType);
+			const relIds = relIdsByPath.get(node.path) ?? new Set<string>();
+			index.set(node.path, {
+				path: node.path,
+				label: node.label,
+				nodeType: node.nodeType,
+				nodeTypeName: type?.name ?? node.nodeType,
+				nodeTypeDesc: type?.description ?? '',
+				relIds: [...relIds],
+				relDescs: [...relIds]
+					.map((id) => relTypes.find((r) => r.id === id)?.description ?? '')
+					.filter((d) => d),
+				content: contentMap.get(node.path) ?? '',
+				confidenceTotal: node.confidenceTotal,
+				gravitasDisplay: node.gravitasDisplay,
+			});
+		}
+		return index;
+	}
+
+	private async readNodeContent(path: string): Promise<string> {
+		try {
+			const f = this.app.vault.getFileByPath(path);
+			return f ? await this.app.vault.cachedRead(f) : '';
+		} catch {
+			return '';
 		}
 	}
 
@@ -969,6 +1150,43 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	private step(): void {
+		// Handle continuous keyboard panning / rotation
+		if (this.pressedKeys.size > 0 && this.app.workspace.getActiveViewOfType(SemanticHologramView) === this) {
+			const panSpeed = 5 / this.viewScale;
+			const rotSpeed = 0.01;
+			const isShift = this.shiftDown;
+
+			if (this.pressedKeys.has('ArrowLeft')) {
+				if (isShift) {
+					this.rotY -= rotSpeed;
+				} else {
+					this.viewX += panSpeed;
+				}
+			}
+			if (this.pressedKeys.has('ArrowRight')) {
+				if (isShift) {
+					this.rotY += rotSpeed;
+				} else {
+					this.viewX -= panSpeed;
+				}
+			}
+			if (this.pressedKeys.has('ArrowUp')) {
+				if (isShift) {
+					this.rotX += rotSpeed;
+				} else {
+					this.viewY += panSpeed;
+				}
+			}
+			if (this.pressedKeys.has('ArrowDown')) {
+				if (isShift) {
+					this.rotX -= rotSpeed;
+				} else {
+					this.viewY -= panSpeed;
+				}
+			}
+			this.autoFitCooldown = PHYS.fitCooldown;
+		}
+
 		const { nodes, links } = this;
 		const R = this.worldR();
 		const is3D = this.is3D;
@@ -1471,10 +1689,10 @@ export class SemanticHologramView extends ItemView {
 				const sy = this.toScreenY(p.y);
 				const depth = (p.z + R) / (2 * R || 1);
 				const isHighlighted = this.hoverIndex === i || highlighted.has(i);
-				const isCandidate = this.candidateNode === node.path;
-				const isFaded = this.hoverIndex >= 0 && !isHighlighted;
-				const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
-				const r = this.nodeScreenRadius(node, p, maxAbsZ) * (isHighlighted ? 1.4 : 1.0);
+const isCandidate = this.candidateNodes.has(node.path);
+			const isFaded = this.hoverIndex >= 0 && !isHighlighted;
+			const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
+			const r = this.nodeScreenRadius(node, p, maxAbsZ) * (isHighlighted ? 1.4 : 1.0);
 				const viewSettings = this.plugin.settings;
 				const grav = node.gravitasDisplay;
 				const halo = node.confidenceTotal;
@@ -1489,7 +1707,7 @@ export class SemanticHologramView extends ItemView {
 
 				if (viewSettings.showConfidenceHalo && !isFaded) {
 					ctx.beginPath();
-					ctx.arc(sx, sy, r + 4 + halo * 8, 0, Math.PI * 2);
+					ctx.arc(sx, sy, r * 1.25, 0, Math.PI * 2);
 					ctx.strokeStyle = isCandidate
 						? this.withAlpha(CANDIDATE_COLOR, 0.9)
 						: this.getSpectrumColor(halo, Math.max(0.7, halo));
@@ -1567,7 +1785,7 @@ export class SemanticHologramView extends ItemView {
 			const sx = this.toScreenX(node.x);
 			const sy = this.toScreenY(node.y);
 			const isHighlighted = this.hoverIndex === i || highlighted.has(i);
-			const isCandidate = this.candidateNode === node.path;
+			const isCandidate = this.candidateNodes.has(node.path);
 			const isFaded = this.hoverIndex >= 0 && !isHighlighted;
 			const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
 			const r = Math.max(3, node.radius * this.viewScale * (isHighlighted ? 1.5 : 1.0));
@@ -1583,7 +1801,7 @@ export class SemanticHologramView extends ItemView {
 
 			if (viewSettings.showConfidenceHalo && !isFaded) {
 				ctx.beginPath();
-				ctx.arc(sx, sy, r + 4 + halo * 8, 0, Math.PI * 2);
+				ctx.arc(sx, sy, r * 1.25, 0, Math.PI * 2);
 				ctx.strokeStyle = isCandidate
 					? this.withAlpha(CANDIDATE_COLOR, 0.9)
 					: this.getSpectrumColor(halo, Math.max(0.7, halo));
@@ -1663,19 +1881,23 @@ export class SemanticHologramView extends ItemView {
 		const labelFont = `600 12px ${fontFamily}`;
 		const bodyFont = `10px ${fontFamily}`;
 
-		const typeEntry = this.plugin.settings.nodeTypes.find((t) => t.id === node.nodeType);
-		const typeName = typeEntry ? typeEntry.name : node.nodeType;
-		const pct = (v: number) => `${Math.round(v * 100)}%`;
+		const entry = this.searchIndex.get(node.path);
+		const preview = buildNodePreviewModel(
+			{ ...node, content: entry?.content },
+			this.plugin.settings,
+		);
+		const typeName = preview.typeName;
 		const meta =
 			(typeName ? typeName + ' · ' : '') +
-			`Confidence ${pct(node.confidenceTotal)}` +
-			` · Gravitas ${pct(node.gravitasDisplay)}`;
-		const pathText = node.path.length > 64 ? node.path.slice(0, 61) + '...' : node.path;
+			`Confidence ${preview.confidencePct}%` +
+			` · Gravitas ${preview.gravitasPct}%`;
+		const pathText = preview.path.length > 64 ? preview.path.slice(0, 61) + '...' : preview.path;
 
 		const lines: Array<{ text: string; font: string; dim?: boolean }> = [
-			{ text: node.label, font: labelFont },
+			{ text: preview.label, font: labelFont },
 			{ text: pathText, font: bodyFont, dim: true },
 			{ text: meta, font: bodyFont },
+			{ text: preview.contentSnippet, font: bodyFont, dim: true },
 		];
 
 		const padX = 10;
@@ -2115,7 +2337,7 @@ export class SemanticHologramView extends ItemView {
 		if (tool === 'select') {
 			this.selecting = true;
 			this.toggleIndex = idx;
-			this.clearOnUp = idx < 0 && (this.selected.size > 0 || this.candidateNode !== null);
+			this.clearOnUp = idx < 0 && (this.selected.size > 0 || this.candidateNodes.size > 0);
 			this.selectAnchorX = e.clientX - rect.left;
 			this.selectAnchorY = e.clientY - rect.top;
 			this.selectCurX = this.selectAnchorX;
@@ -2170,7 +2392,7 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		this.panning = true;
-		this.clearOnUp = this.selected.size > 0 || this.candidateNode !== null;
+		this.clearOnUp = this.selected.size > 0 || this.candidateNodes.size > 0;
 		this.panStartX = e.clientX;
 		this.panStartY = e.clientY;
 		this.panViewX = this.viewX;
@@ -2209,10 +2431,10 @@ export class SemanticHologramView extends ItemView {
 		if (this.rotating) {
 			const dx = e.clientX - this.rotateStartX;
 			const dy = e.clientY - this.rotateStartY;
-			this.rotY = this.rotateStartRotY + dx * 0.00125;
+			this.rotY = this.rotateStartRotY + dx * 0.005;
 			this.rotX = Math.max(
 				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX + dy * 0.00125),
+				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.005),
 			);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
@@ -2334,7 +2556,7 @@ export class SemanticHologramView extends ItemView {
 			this.downX = e.clientX;
 			this.downY = e.clientY;
 			this.toggleIndex = this.hitTest(e);
-			this.clearOnUp = this.toggleIndex < 0 && (this.selected.size > 0 || this.candidateNode !== null);
+			this.clearOnUp = this.toggleIndex < 0 && (this.selected.size > 0 || this.candidateNodes.size > 0);
 			this.selectAnchorX = e.clientX - (rect?.left ?? 0);
 			this.selectAnchorY = e.clientY - (rect?.top ?? 0);
 			this.selectCurX = this.selectAnchorX;
@@ -2396,7 +2618,7 @@ export class SemanticHologramView extends ItemView {
 			this.canvas?.setPointerCapture(e.pointerId);
 		} else {
 			this.panning = true;
-			this.clearOnUp = this.selected.size > 0 || this.candidateNode !== null;
+			this.clearOnUp = this.selected.size > 0 || this.candidateNodes.size > 0;
 			this.panStartX = e.clientX;
 			this.panStartY = e.clientY;
 			this.panViewX = this.viewX;
@@ -2438,10 +2660,10 @@ export class SemanticHologramView extends ItemView {
 		if (this.rotating) {
 			const dx = e.clientX - this.rotateStartX;
 			const dy = e.clientY - this.rotateStartY;
-			this.rotY = this.rotateStartRotY + dx * 0.00125;
+			this.rotY = this.rotateStartRotY + dx * 0.005;
 			this.rotX = Math.max(
 				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX + dy * 0.00125),
+				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.005),
 			);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
@@ -2550,7 +2772,7 @@ export class SemanticHologramView extends ItemView {
 		if (!node) {
 			return;
 		}
-		this.candidateNode = null;
+		this.candidateNodes.clear();
 		if (this.selected.has(i)) {
 			this.selected.delete(i);
 			node.selected = false;
@@ -2569,7 +2791,7 @@ export class SemanticHologramView extends ItemView {
 			}
 		}
 		this.selected.clear();
-		this.candidateNode = null;
+		this.candidateNodes.clear();
 		this.updateCursor();
 	}
 
@@ -2686,6 +2908,11 @@ export class SemanticHologramView extends ItemView {
 				this.showToast(`Selected all ${this.nodes.length} nodes`);
 				return;
 			}
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !e.repeat) {
+				e.preventDefault();
+				this.focusSearchInput();
+				return;
+			}
 			return;
 		}
 		const target = e.target as HTMLElement | null;
@@ -2729,7 +2956,17 @@ export class SemanticHologramView extends ItemView {
 			this.selectMode = true;
 			this.selectDragOccurred = false;
 			this.updateCursor();
+		} else if (e.key.startsWith('Arrow')) {
+			e.preventDefault();
+			this.pressedKeys.add(e.key);
+		} else if (e.key === ' ' && !e.repeat) {
+			if (this.autoRotating !== 'off') {
+				e.preventDefault();
+				this.autoRotating = 'off';
+				this.showToast('Rotation off');
+			}
 		}
+
 	};
 
 	private selectHovered(): void {
@@ -2876,6 +3113,7 @@ export class SemanticHologramView extends ItemView {
 		el.innerHTML =
 			'<div class="sh-help-title">Semantic Hologram</div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">h</span><span class="sh-help-desc">show / hide help</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+f</span><span class="sh-help-desc">focus search</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">c</span><span class="sh-help-desc">center hovered node on rotation origin</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+a</span><span class="sh-help-desc">select all nodes</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">f</span><span class="sh-help-desc">toggle faces (3D)</span></div>' +
@@ -2925,6 +3163,8 @@ export class SemanticHologramView extends ItemView {
 				this.clearOnUp = false;
 			}
 			this.updateCursor();
+		} else if (e.key.startsWith('Arrow')) {
+			this.pressedKeys.delete(e.key);
 		}
 	};
 
@@ -3004,16 +3244,40 @@ export class SemanticHologramView extends ItemView {
 		void this.app.workspace.openLinkText(node.label, '');
 	}
 
-	setCandidateNode(path: string | null): void {
-		this.candidateNode = path;
-		if (path) {
-			const node = this.nodes.find((n) => n.path === path);
-			if (node) {
-				this.viewX = node.x - (this.canvas?.clientWidth ?? 0) / (2 * this.viewScale);
-				this.viewY = node.y - (this.canvas?.clientHeight ?? 0) / (2 * this.viewScale);
-			}
+	setCandidateNodes(paths: string[]): void {
+		this.candidateNodes = new Set(paths);
+		const node = this.nodes.find((n) => paths.length > 0 && n.path === paths[paths.length - 1]);
+		if (node) {
+			this.viewX = node.x - (this.canvas?.clientWidth ?? 0) / (2 * this.viewScale);
+			this.viewY = node.y - (this.canvas?.clientHeight ?? 0) / (2 * this.viewScale);
 		}
 		this.requestRedraw();
+	}
+
+	toggleCandidateNode(path: string): void {
+		if (this.candidateNodes.has(path)) {
+			this.candidateNodes.delete(path);
+		} else {
+			this.candidateNodes.add(path);
+		}
+		this.requestRedraw();
+	}
+
+	clearCandidateNodes(): void {
+		if (this.candidateNodes.size === 0) {
+			return;
+		}
+		this.candidateNodes.clear();
+		this.requestRedraw();
+	}
+
+	getCandidateNodes(): ReadonlySet<string> {
+		return this.candidateNodes;
+	}
+
+	/** Searchable per-node metadata for the controls search box. */
+	getSearchIndex(): Map<string, SearchIndexEntry> {
+		return this.searchIndex;
 	}
 
 	/** Move keyboard focus onto the graph canvas so hotkeys (e.g. `c`) respond. */

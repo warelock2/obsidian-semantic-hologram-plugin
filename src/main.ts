@@ -155,6 +155,36 @@ export default class SemanticHologramPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'zoom-in',
+			name: 'Zoom In',
+			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: '=' }],
+			callback: () => {
+				const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
+				view?.zoomIn();
+			},
+		});
+
+		this.addCommand({
+			id: 'zoom-out',
+			name: 'Zoom Out',
+			hotkeys: [{ modifiers: ['Mod'], key: '-' }],
+			callback: () => {
+				const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
+				view?.zoomOut();
+			},
+		});
+
+		this.addCommand({
+			id: 'fit-to-view',
+			name: 'Fit To View',
+			hotkeys: [{ modifiers: ['Mod'], key: '=' }],
+			callback: () => {
+				const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
+				view?.fitToViewPublic();
+			},
+		});
+
+		this.addCommand({
 			id: 'create-hologram-node',
 			name: 'Create hologram node',
 			callback: () => {
@@ -236,6 +266,26 @@ export default class SemanticHologramPlugin extends Plugin {
 			name: 'Show Hologram controls',
 			callback: () => {
 				void this.activateControlsView();
+			},
+		});
+
+		this.addCommand({
+			id: 'focus-search',
+			name: 'Focus node search',
+			callback: () => {
+				const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM);
+				if (leaves.length > 0) {
+					const view = leaves[0]?.view as any;
+					if (view && typeof view.focusSearchInput === 'function') {
+						view.focusSearchInput();
+						return;
+					}
+				}
+				const searchInput = document.querySelector('.sh-search-input') as HTMLInputElement | null;
+				if (searchInput) {
+					searchInput.focus();
+					searchInput.select();
+				}
 			},
 		});
 

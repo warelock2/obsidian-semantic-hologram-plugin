@@ -1,12 +1,15 @@
 import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
 import type SemanticHologramPlugin from './main';
-import { SemanticHologramView, VIEW_TYPE_HOLOGRAM } from './view';
+import { SemanticHologramView, VIEW_TYPE_HOLOGRAM, buildNodePreviewModel } from './view';
+import type { SearchIndexEntry } from './view';
+import { parseSearchQuery, matchEntry } from './searchLogic';
 
 export const VIEW_TYPE_HOLOGRAM_CONTROLS = 'semantic-hologram-controls';
 
 export class SemanticHologramControlsView extends ItemView {
 	private plugin: SemanticHologramPlugin;
 	private lastHologramIndex = -1;
+	private searchQuery: string = '';
 
 	public updateLevelSlider(): void {
 		const levelSlider = this.containerEl.querySelector('.sh-level-slider') as HTMLInputElement | null;
@@ -62,7 +65,7 @@ export class SemanticHologramControlsView extends ItemView {
 			this.app.vault.on('create', () => setTimeout(() => this.render(), 100)),
 		);
 
-		// Dismiss the search dropdown and clear hologram selection ("All")
+		// Dismiss the search dropdown and clear candidates
 		// when clicking bare panel background.
 		this.registerDomEvent(this.contentEl, 'click', (e) => {
 			const target = e.target as HTMLElement | null;
@@ -76,6 +79,12 @@ export class SemanticHologramControlsView extends ItemView {
 			if (results) {
 				results.style.display = 'none';
 			}
+
+			const view = this.getView();
+			if (view) {
+				view.clearCandidateNodes();
+			}
+
 			if (target.closest('.sh-hologram-list') || target.closest('button') || target.closest('input')) {
 				return;
 			}
@@ -97,6 +106,7 @@ export class SemanticHologramControlsView extends ItemView {
 		console.log('Rendering controls view, settings:', this.plugin.settings);
 		const { contentEl } = this;
 		contentEl.empty();
+		document.querySelectorAll('.sh-node-preview-card').forEach(el => el.remove());
 
 		const header = contentEl.createDiv({ cls: 'sh-controls-header' });
 		header.createEl('h4', { text: 'Semantic Hologram' });
@@ -119,13 +129,21 @@ export class SemanticHologramControlsView extends ItemView {
 			placeholder: 'Search nodes...',
 			cls: 'sh-search-input',
 		});
+		if (this.searchQuery) {
+			searchInput.value = this.searchQuery;
+		}
 		const resultsContainer = searchContainer.createDiv({ cls: 'sh-search-results' });
 		resultsContainer.style.display = 'none';
+
+		if (this.searchQuery) {
+			setTimeout(() => searchInput.dispatchEvent(new Event('input')), 0);
+		}
 
 		let selectedResultIndex = -1;
 
 		searchInput.addEventListener('keydown', (e) => {
 			const items = resultsContainer.querySelectorAll('.sh-search-item');
+			const view = this.getView();
 			if (e.key === 'ArrowDown') {
 				e.preventDefault();
 				selectedResultIndex = Math.min(selectedResultIndex + 1, items.length - 1);
@@ -134,10 +152,32 @@ export class SemanticHologramControlsView extends ItemView {
 				e.preventDefault();
 				selectedResultIndex = Math.max(selectedResultIndex - 1, 0);
 				updateHighlight();
+			} else if (e.key === ' ') {
+				if (selectedResultIndex >= 0 && selectedResultIndex < items.length) {
+					e.preventDefault();
+					const item = items[selectedResultIndex] as HTMLElement;
+					const path = item.getAttribute('data-path');
+					if (path && view) {
+						view.toggleCandidateNode(path);
+						updateCandidateStates();
+					}
+				}
 			} else if (e.key === 'Enter') {
 				e.preventDefault();
 				if (selectedResultIndex >= 0 && selectedResultIndex < items.length) {
-					(items[selectedResultIndex] as HTMLElement).click();
+					const item = items[selectedResultIndex] as HTMLElement;
+					const path = item.getAttribute('data-path');
+					if (path && view) {
+						view.setCandidateNodes([path]);
+						view.focusGraph();
+						resultsContainer.style.display = 'none';
+					}
+				} else {
+					// Center view on all candidates
+					if (view) {
+						view.focusGraph();
+						resultsContainer.style.display = 'none';
+					}
 				}
 			}
 		});
@@ -149,17 +189,124 @@ export class SemanticHologramControlsView extends ItemView {
 			});
 		};
 
+		const updateCandidateStates = () => {
+			const view = this.getView();
+			const candidates = view ? view.getCandidateNodes() : new Set<string>();
+			resultsContainer.querySelectorAll('.sh-search-item').forEach((item) => {
+				const path = item.getAttribute('data-path');
+				if (path) {
+					item.toggleClass('is-chosen', candidates.has(path));
+				}
+			});
+		};
+
+		let activePreview: HTMLElement | null = null;
+		let previewTimer: number | null = null;
+
+		const hidePreview = () => {
+			if (activePreview) {
+				activePreview.remove();
+				activePreview = null;
+			}
+			if (previewTimer) {
+				clearTimeout(previewTimer);
+				previewTimer = null;
+			}
+		};
+
+		const showPreview = (itemEl: HTMLElement, entry: SearchIndexEntry) => {
+			if (previewTimer) {
+				clearTimeout(previewTimer);
+				previewTimer = null;
+			}
+			if (activePreview && activePreview.getAttribute('data-path') === entry.path) {
+				return;
+			}
+			if (activePreview) {
+				activePreview.remove();
+			}
+			const view = this.getView();
+			if (!view) return;
+			const previewData = buildNodePreviewModel(entry, this.plugin.settings);
+
+			activePreview = document.body.createDiv({ cls: 'sh-node-preview-card' });
+			activePreview.setAttribute('data-path', entry.path);
+			activePreview.style.position = 'fixed';
+			activePreview.style.zIndex = '1000';
+			
+			activePreview.addEventListener('mouseenter', () => {
+				if (previewTimer) clearTimeout(previewTimer);
+			});
+			activePreview.addEventListener('mouseleave', (e) => {
+                const related = e.relatedTarget as HTMLElement | null;
+                // Don't close if moving into the search item OR if moving to something else that is part of the preview card
+                if (related && (itemEl.contains(related) || activePreview?.contains(related))) return;
+				previewTimer = window.setTimeout(hidePreview, 300);
+			});
+
+			activePreview.createDiv({ cls: 'sh-preview-label', text: previewData.label });
+			activePreview.createDiv({ cls: 'sh-preview-path', text: entry.path });
+			const metaText = `${previewData.typeName} · Confidence ${previewData.confidencePct}% · Gravitas ${previewData.gravitasPct}%`;
+			activePreview.createDiv({ cls: 'sh-preview-meta', text: metaText });
+			activePreview.createDiv({ cls: 'sh-preview-content', text: previewData.content });
+
+			// Position to the left of the item
+			const rect = itemEl.getBoundingClientRect();
+			const viewportWidth = window.innerWidth;
+			const viewportHeight = window.innerHeight;
+			const cardWidth = 320; // Matches CSS
+			
+			let left = rect.left - cardWidth - 16; // Increased gap to ensure no overlap
+			let top = rect.top;
+
+			// Flip if too close to left edge
+			if (left < 8) {
+				left = rect.right + 16;
+			}
+
+			// Clamp top
+			const cardHeight = activePreview.getBoundingClientRect().height;
+			if (top + cardHeight > viewportHeight - 8) {
+				top = viewportHeight - cardHeight - 8;
+			}
+			if (top < 8) top = 8;
+
+			activePreview.style.left = `${left}px`;
+			activePreview.style.top = `${top}px`;
+		};
+
+
 		searchInput.addEventListener('input', () => {
+			this.searchQuery = searchInput.value;
 			selectedResultIndex = -1;
-			const query = searchInput.value.trim().toLowerCase();
+			const query = searchInput.value.trim();
 			resultsContainer.empty();
+			hidePreview();
+
 			if (!query) {
 				resultsContainer.style.display = 'none';
 				return;
 			}
+
 			const view = this.getView();
-			const nodes = view?.['nodes'] ?? [];
-			const matches = nodes.filter(n => n.label.toLowerCase().includes(query) || n.path.toLowerCase().includes(query)).slice(0, 10);
+			const index = view?.getSearchIndex() ?? new Map<string, SearchIndexEntry>();
+			const { field, term } = parseSearchQuery(query);
+
+			if (index.size === 0) {
+				resultsContainer.style.display = 'none';
+				return;
+			}
+
+			const matches: Array<{ entry: SearchIndexEntry; matched: Set<string> }> = [];
+			for (const entry of index.values()) {
+				const matched = matchEntry(entry, field, term);
+				if (matched.size > 0) {
+					matches.push({ entry, matched });
+				}
+			}
+
+            matches.sort((a, b) => a.entry.label.localeCompare(b.entry.label));
+            const finalMatches = matches.slice(0, 15);
 
 			if (matches.length === 0) {
 				resultsContainer.style.display = 'none';
@@ -167,17 +314,48 @@ export class SemanticHologramControlsView extends ItemView {
 			}
 
 			resultsContainer.style.display = 'block';
-			for (const node of matches) {
-				const item = resultsContainer.createDiv({ cls: 'sh-search-item', text: node.label });
-				item.addEventListener('click', () => {
-					if (view) {
-						view.setCandidateNode(node.path);
-						view.focusGraph();
-						searchInput.value = node.label;
-						resultsContainer.style.display = 'none';
+			const candidates = view ? view.getCandidateNodes() : new Set<string>();
+
+			for (const { entry, matched } of finalMatches) {
+				const item = resultsContainer.createDiv({
+					cls: `sh-search-item ${candidates.has(entry.path) ? 'is-chosen' : ''}`,
+					attr: { 'data-path': entry.path },
+				});
+
+				const titleEl = item.createDiv({ cls: 'sh-search-item-title', text: entry.label });
+
+				item.addEventListener('mouseenter', () => {
+					showPreview(item, entry);
+				});
+
+				item.addEventListener('mouseleave', (e) => {
+					const related = e.relatedTarget as HTMLElement | null;
+					if (activePreview && related && activePreview.contains(related)) return;
+					if (!previewTimer) {
+						previewTimer = window.setTimeout(hidePreview, 300);
 					}
 				});
+
+				item.addEventListener('click', (e) => {
+					if (!view) return;
+					if (e.ctrlKey || e.metaKey) {
+						// Deselect or toggle individual
+						view.toggleCandidateNode(entry.path);
+					} else {
+						// Toggle immediately per pick
+						view.toggleCandidateNode(entry.path);
+					}
+					updateCandidateStates();
+				});
 			}
+
+			resultsContainer.addEventListener('mouseleave', (e) => {
+				const related = e.relatedTarget as HTMLElement | null;
+				if (activePreview && related && activePreview.contains(related)) return;
+				if (!previewTimer) {
+					previewTimer = window.setTimeout(hidePreview, 300);
+				}
+			});
 		});
 
 	// Hologram Manager (integrated)

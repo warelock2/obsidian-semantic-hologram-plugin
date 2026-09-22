@@ -64,6 +64,7 @@ export interface SemanticHologramSettings {
 	showGravitasColor: boolean;
 	showConfidenceHalo: boolean;
 	selectedHolograms: string[];
+	rotationMode: 'absolute' | 'apparent';
 }
 
 export const PALETTE = [
@@ -147,6 +148,7 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	showGravitasColor: true,
 	showConfidenceHalo: true,
 	selectedHolograms: [],
+	rotationMode: 'apparent',
 };
 
 export function validateHex(hex: string): boolean {

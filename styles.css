@@ -1200,4 +1200,16 @@
 	background: var(--background-modifier-hover);
 }
 
+.sh-rot-mode-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.sh-rot-mode-row .sh-controls-label {
+	font-size: 11px;
+	opacity: 0.85;
+}
+
 

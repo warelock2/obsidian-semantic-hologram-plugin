@@ -179,9 +179,18 @@ export class SemanticHologramView extends ItemView {
 	private hoverIndex = -1;
 	private resizeObserver: ResizeObserver | null = null;
 	private autoRotating: 'off' | 'cw' | 'ccw' = 'off';
-	private rotX = 0;
-	private rotY = 0;
-	private rotZ = -Math.PI / 2;
+	private rotM: number[] = [
+		0,  1,  0,
+	   -1,  0,  0,
+		0,  0,  1
+	];
+	private rotateStartRotM: number[] = [
+		0,  1,  0,
+	   -1,  0,  0,
+		0,  0,  1
+	];
+	private rotateStartSpin = 0;
+	private totalSpin = 0;
 	private buildSeq = 0;
 	private rotCx = 0;
 	private rotCy = 0;
@@ -189,8 +198,6 @@ export class SemanticHologramView extends ItemView {
 	private rotating = false;
 	private rotateStartX = 0;
 	private rotateStartY = 0;
-	private rotateStartRotX = 0;
-	private rotateStartRotY = 0;
 	private cursorOverlay: HTMLElement | null = null;
 	private helpOverlay: HTMLElement | null = null;
 	private toastEl: HTMLElement | null = null;
@@ -217,7 +224,7 @@ export class SemanticHologramView extends ItemView {
 	private isRecording = false;
 	private isEncoding = false;
 	private recordingFrames: ImageData[] = [];
-	private recordingRotYStart = 0;
+	private recordingSpinStart = 0;
 	private recordingProgressEl: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: SemanticHologramPlugin) {
@@ -255,6 +262,44 @@ export class SemanticHologramView extends ItemView {
 		};
 	}
 
+	private multiplyMatrices(A: number[], B: number[]): number[] {
+		const out = new Array(9);
+		for (let i = 0; i < 3; i++) {
+			for (let j = 0; j < 3; j++) {
+				out[i * 3 + j] =
+					(A[i * 3 + 0] ?? 0) * (B[0 * 3 + j] ?? 0) +
+					(A[i * 3 + 1] ?? 0) * (B[1 * 3 + j] ?? 0) +
+					(A[i * 3 + 2] ?? 0) * (B[2 * 3 + j] ?? 0);
+			}
+		}
+		return out;
+	}
+
+	private getRotationMatrixAboutAxis(axis: [number, number, number], delta: number): number[] {
+		const len = Math.hypot(axis[0] ?? 0, axis[1] ?? 0, axis[2] ?? 0);
+		if (len < 1e-6) {
+			return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+		}
+		const ux = (axis[0] ?? 0) / len;
+		const uy = (axis[1] ?? 0) / len;
+		const uz = (axis[2] ?? 0) / len;
+
+		const c = Math.cos(delta);
+		const s = Math.sin(delta);
+		const t = 1 - c;
+
+		return [
+			c + ux * ux * t,     ux * uy * t - uz * s,  ux * uz * t + uy * s,
+			uy * ux * t + uz * s, c + uy * uy * t,     uy * uz * t - ux * s,
+			uz * ux * t - uy * s, uz * uy * t + ux * s, c + uz * uz * t
+		];
+	}
+
+	private rotateAboutAxis(axis: [number, number, number], delta: number): void {
+		const R = this.getRotationMatrixAboutAxis(axis, delta);
+		this.rotM = this.multiplyMatrices(R, this.rotM);
+	}
+
 	private rotatePoint(
 		x: number,
 		y: number,
@@ -263,26 +308,13 @@ export class SemanticHologramView extends ItemView {
 		cy = 0,
 		cz = 0,
 	): { x: number; y: number; z: number } {
-		const cosZ = Math.cos(this.rotZ);
-		const sinZ = Math.sin(this.rotZ);
-		const cosX = Math.cos(this.rotX);
-		const sinX = Math.sin(this.rotX);
-		const cosY = Math.cos(this.rotY);
-		const sinY = Math.sin(this.rotY);
 		const px = x - cx;
 		const py = y - cy;
 		const pz = z - cz;
-		// Roll about the view axis first: maps world +x to screen-up when
-		// rotZ = -90°, so at rest x points up, y points right, z stays out.
-		const xr = px * cosZ - py * sinZ;
-		const yr = px * sinZ + py * cosZ;
-		const zr = pz;
-		const y1 = yr * cosX - zr * sinX;
-		const z1 = yr * sinX + zr * cosX;
-		const x1 = xr;
-		const x2 = x1 * cosY + z1 * sinY;
-		const z2 = -x1 * sinY + z1 * cosY;
-		const y2 = y1;
+		const m = this.rotM;
+		const x2 = (m[0] ?? 0) * px + (m[1] ?? 0) * py + (m[2] ?? 0) * pz;
+		const y2 = (m[3] ?? 0) * px + (m[4] ?? 0) * py + (m[5] ?? 0) * pz;
+		const z2 = (m[6] ?? 0) * px + (m[7] ?? 0) * py + (m[8] ?? 0) * pz;
 		return { x: x2 + cx, y: y2 + cy, z: z2 + cz };
 	}
 
@@ -294,24 +326,15 @@ export class SemanticHologramView extends ItemView {
 		cy = 0,
 		cz = 0,
 	): { x: number; y: number; z: number } {
-		const cosY = Math.cos(this.rotY);
-		const sinY = Math.sin(this.rotY);
-		const cosX = Math.cos(this.rotX);
-		const sinX = Math.sin(this.rotX);
-		const cosZ = Math.cos(this.rotZ);
-		const sinZ = Math.sin(this.rotZ);
 		const px = x - cx;
 		const py = y - cy;
 		const pz = z - cz;
-		const x1 = px * cosY - pz * sinY;
-		const z1 = px * sinY + pz * cosY;
-		const y1 = py;
-		const y0 = y1 * cosX + z1 * sinX;
-		const z0 = -y1 * sinX + z1 * cosX;
-		const x0 = x1;
-		const xf = x0 * cosZ + y0 * sinZ;
-		const yf = -x0 * sinZ + y0 * cosZ;
-		return { x: xf + cx, y: yf + cy, z: z0 + cz };
+		// Transpose of rotM is inverse for orthogonal rotation matrix
+		const m = this.rotM;
+		const x2 = (m[0] ?? 0) * px + (m[3] ?? 0) * py + (m[6] ?? 0) * pz;
+		const y2 = (m[1] ?? 0) * px + (m[4] ?? 0) * py + (m[7] ?? 0) * pz;
+		const z2 = (m[2] ?? 0) * px + (m[5] ?? 0) * py + (m[8] ?? 0) * pz;
+		return { x: x2 + cx, y: y2 + cy, z: z2 + cz };
 	}
 
 	setMode(mode: '2d' | '3d'): void {
@@ -1003,7 +1026,7 @@ export class SemanticHologramView extends ItemView {
 		this.isRecording = true;
 		this.isEncoding = false;
 		this.recordingFrames = [];
-		this.recordingRotYStart = this.rotY;
+		this.recordingSpinStart = this.totalSpin;
 		this.showToast('Recording 3D rotation...');
 
 		if (!this.recordingProgressEl) {
@@ -1055,7 +1078,7 @@ export class SemanticHologramView extends ItemView {
 		this.updateProgressUI(this.recordingFrames.length, totalExpected / 2);
 
 		// Stop after one full rotation (approx 2π / 0.005)
-		if (Math.abs(this.rotY - this.recordingRotYStart) >= Math.PI * 2 || this.recordingFrames.length >= totalExpected / 2) {
+		if (Math.abs(this.totalSpin - this.recordingSpinStart) >= Math.PI * 2 || this.recordingFrames.length >= totalExpected / 2) {
 			this.stopAndEncode();
 		}
 	}
@@ -1158,28 +1181,54 @@ export class SemanticHologramView extends ItemView {
 
 			if (this.pressedKeys.has('ArrowLeft')) {
 				if (isShift) {
-					this.rotY -= rotSpeed;
+					const delta = -rotSpeed;
+					if (this.plugin.settings.rotationMode === 'apparent') {
+						const apparentVertical: [number, number, number] = [this.rotM[1] ?? 0, this.rotM[4] ?? 0, this.rotM[7] ?? 0];
+						this.rotateAboutAxis(apparentVertical, delta);
+					} else {
+						this.rotateAboutAxis([0, 1, 0], delta);
+					}
+					this.totalSpin += delta;
 				} else {
 					this.viewX += panSpeed;
 				}
 			}
 			if (this.pressedKeys.has('ArrowRight')) {
 				if (isShift) {
-					this.rotY += rotSpeed;
+					const delta = rotSpeed;
+					if (this.plugin.settings.rotationMode === 'apparent') {
+						const apparentVertical: [number, number, number] = [this.rotM[1] ?? 0, this.rotM[4] ?? 0, this.rotM[7] ?? 0];
+						this.rotateAboutAxis(apparentVertical, delta);
+					} else {
+						this.rotateAboutAxis([0, 1, 0], delta);
+					}
+					this.totalSpin += delta;
 				} else {
 					this.viewX -= panSpeed;
 				}
 			}
 			if (this.pressedKeys.has('ArrowUp')) {
 				if (isShift) {
-					this.rotX += rotSpeed;
+					const delta = rotSpeed;
+					if (this.plugin.settings.rotationMode === 'apparent') {
+						const apparentHorizontal: [number, number, number] = [this.rotM[0] ?? 0, this.rotM[3] ?? 0, this.rotM[6] ?? 0];
+						this.rotateAboutAxis(apparentHorizontal, delta);
+					} else {
+						this.rotateAboutAxis([1, 0, 0], delta);
+					}
 				} else {
 					this.viewY += panSpeed;
 				}
 			}
 			if (this.pressedKeys.has('ArrowDown')) {
 				if (isShift) {
-					this.rotX -= rotSpeed;
+					const delta = -rotSpeed;
+					if (this.plugin.settings.rotationMode === 'apparent') {
+						const apparentHorizontal: [number, number, number] = [this.rotM[0] ?? 0, this.rotM[3] ?? 0, this.rotM[6] ?? 0];
+						this.rotateAboutAxis(apparentHorizontal, delta);
+					} else {
+						this.rotateAboutAxis([1, 0, 0], delta);
+					}
 				} else {
 					this.viewY -= panSpeed;
 				}
@@ -1258,9 +1307,11 @@ export class SemanticHologramView extends ItemView {
 		}
 
 		if (this.autoRotating === 'ccw' && this.nodes.length > 0) {
-			this.rotY -= 0.005;
+			this.rotateAboutAxis([0, 1, 0], -0.005);
+			this.totalSpin -= 0.005;
 		} else if (this.autoRotating === 'cw' && this.nodes.length > 0) {
-			this.rotY += 0.005;
+			this.rotateAboutAxis([0, 1, 0], 0.005);
+			this.totalSpin += 0.005;
 		}
 		if (!this.settled) {
 			this.layoutFrames++;
@@ -1388,9 +1439,12 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	private resetView(): void {
-		this.rotX = 0;
-		this.rotY = 0;
-		this.rotZ = -Math.PI / 2;
+		this.rotM = [
+			0,  1,  0,
+		   -1,  0,  0,
+			0,  0,  1
+		];
+		this.totalSpin = 0;
 		this.fitToView();
 	}
 
@@ -2191,8 +2245,8 @@ const isCandidate = this.candidateNodes.has(node.path);
 			ctx.stroke();
 
 			// Draw orbiting node on the X-Z track (driven by rotY rotation around Y axis)
-			const dotSx = cx + rx * Math.cos(-this.rotY);
-			const dotSy = cy + ry * Math.sin(-this.rotY);
+			const dotSx = cx + rx * Math.cos(-this.totalSpin);
+			const dotSy = cy + ry * Math.sin(-this.totalSpin);
 			const dotRadius = 4.5;
 
 			ctx.fillStyle = this.nodeColor;
@@ -2324,8 +2378,8 @@ const isCandidate = this.candidateNodes.has(node.path);
 			this.rotating = true;
 			this.rotateStartX = e.clientX;
 			this.rotateStartY = e.clientY;
-			this.rotateStartRotX = this.rotX;
-			this.rotateStartRotY = this.rotY;
+			this.rotateStartRotM = [...this.rotM];
+			this.rotateStartSpin = this.totalSpin;
 			this.autoFitCooldown = PHYS.fitCooldown;
 			this.touchGesture = 'rotate';
 			return;
@@ -2431,11 +2485,12 @@ const isCandidate = this.candidateNodes.has(node.path);
 		if (this.rotating) {
 			const dx = e.clientX - this.rotateStartX;
 			const dy = e.clientY - this.rotateStartY;
-			this.rotY = this.rotateStartRotY + dx * 0.005;
-			this.rotX = Math.max(
-				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.005),
-			);
+			const screenVertical: [number, number, number] = [this.rotateStartRotM[1] ?? 0, this.rotateStartRotM[4] ?? 0, this.rotateStartRotM[7] ?? 0];
+			const screenHorizontal: [number, number, number] = [this.rotateStartRotM[0] ?? 0, this.rotateStartRotM[3] ?? 0, this.rotateStartRotM[6] ?? 0];
+			const Ry = this.getRotationMatrixAboutAxis(screenVertical, -dx * 0.005);
+			const Rx = this.getRotationMatrixAboutAxis(screenHorizontal, dy * 0.005);
+			this.rotM = this.multiplyMatrices(Rx, this.multiplyMatrices(Ry, this.rotateStartRotM));
+			this.totalSpin = this.rotateStartSpin + dx * 0.005;
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
 		}
@@ -2543,8 +2598,8 @@ const isCandidate = this.candidateNodes.has(node.path);
 			this.downY = e.clientY;
 			this.rotateStartX = e.clientX;
 			this.rotateStartY = e.clientY;
-			this.rotateStartRotX = this.rotX;
-			this.rotateStartRotY = this.rotY;
+			this.rotateStartRotM = [...this.rotM];
+			this.rotateStartSpin = this.totalSpin;
 			this.canvas?.setPointerCapture(e.pointerId);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			this.hoverIndex = -1;
@@ -2660,11 +2715,12 @@ const isCandidate = this.candidateNodes.has(node.path);
 		if (this.rotating) {
 			const dx = e.clientX - this.rotateStartX;
 			const dy = e.clientY - this.rotateStartY;
-			this.rotY = this.rotateStartRotY + dx * 0.005;
-			this.rotX = Math.max(
-				-Math.PI / 2 + 0.05,
-				Math.min(Math.PI / 2 - 0.05, this.rotateStartRotX - dy * 0.005),
-			);
+			const screenVertical: [number, number, number] = [this.rotateStartRotM[1] ?? 0, this.rotateStartRotM[4] ?? 0, this.rotateStartRotM[7] ?? 0];
+			const screenHorizontal: [number, number, number] = [this.rotateStartRotM[0] ?? 0, this.rotateStartRotM[3] ?? 0, this.rotateStartRotM[6] ?? 0];
+			const Ry = this.getRotationMatrixAboutAxis(screenVertical, -dx * 0.005);
+			const Rx = this.getRotationMatrixAboutAxis(screenHorizontal, dy * 0.005);
+			this.rotM = this.multiplyMatrices(Rx, this.multiplyMatrices(Ry, this.rotateStartRotM));
+			this.totalSpin = this.rotateStartSpin + dx * 0.005;
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
 		}
@@ -3309,8 +3365,8 @@ const isCandidate = this.candidateNodes.has(node.path);
 				dpr: window.devicePixelRatio,
 			},
 			mode: this.plugin.settings.hologramMode,
-			rotX: Math.round(this.rotX * 1000) / 1000,
-			rotY: Math.round(this.rotY * 1000) / 1000,
+			rotM: this.rotM.map(v => Math.round(v * 1000) / 1000),
+			totalSpin: Math.round(this.totalSpin * 1000) / 1000,
 			nodeCount: this.nodes.length,
 			linkCount: this.links.length,
 			avgEdgeLength: Math.round(this.avgEdgeLength() * 10) / 10,

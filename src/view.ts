@@ -198,6 +198,8 @@ export class SemanticHologramView extends ItemView {
 	private rotating = false;
 	private rotateStartX = 0;
 	private rotateStartY = 0;
+	private lastRotX = 0;
+	private lastRotY = 0;
 	private cursorOverlay: HTMLElement | null = null;
 	private helpOverlay: HTMLElement | null = null;
 	private toastEl: HTMLElement | null = null;
@@ -1172,9 +1174,27 @@ export class SemanticHologramView extends ItemView {
 		}, 50);
 	}
 
+	private relativeTrackballAxis(sx: number, sy: number): [number, number, number] {
+		const fx = this.rotM[2] ?? 0;
+		const fy = this.rotM[5] ?? 0;
+		const fz = this.rotM[8] ?? 0;
+		const ax = -fz * sy;
+		const ay = fz * sx;
+		const az = fx * sy - fy * sx;
+		const len = Math.hypot(ax, ay, az);
+		if (len < 1e-6) {
+			return Math.abs(sy) < Math.abs(sx) ? [0, 1, 0] : [1, 0, 0];
+		}
+		return [ax / len, ay / len, az / len];
+	}
+
 	private step(): void {
 		// Handle continuous keyboard panning / rotation
-		if (this.pressedKeys.size > 0 && this.app.workspace.getActiveViewOfType(SemanticHologramView) === this) {
+		const activeView = this.app.workspace.activeLeaf?.view;
+		const pluginPaneActive =
+			activeView === this ||
+			activeView?.getViewType() === 'semantic-hologram-controls';
+		if (this.pressedKeys.size > 0 && pluginPaneActive) {
 			const panSpeed = 5 / this.viewScale;
 			const rotSpeed = 0.01;
 			const isShift = this.shiftDown;
@@ -1182,9 +1202,8 @@ export class SemanticHologramView extends ItemView {
 			if (this.pressedKeys.has('ArrowLeft')) {
 				if (isShift) {
 					const delta = -rotSpeed;
-					if (this.plugin.settings.rotationMode === 'apparent') {
-						const apparentVertical: [number, number, number] = [this.rotM[1] ?? 0, this.rotM[4] ?? 0, this.rotM[7] ?? 0];
-						this.rotateAboutAxis(apparentVertical, delta);
+					if (this.plugin.settings.rotationMode === 'relative') {
+						this.rotateAboutAxis(this.relativeTrackballAxis(-1, 0), rotSpeed);
 					} else {
 						this.rotateAboutAxis([0, 1, 0], delta);
 					}
@@ -1196,9 +1215,8 @@ export class SemanticHologramView extends ItemView {
 			if (this.pressedKeys.has('ArrowRight')) {
 				if (isShift) {
 					const delta = rotSpeed;
-					if (this.plugin.settings.rotationMode === 'apparent') {
-						const apparentVertical: [number, number, number] = [this.rotM[1] ?? 0, this.rotM[4] ?? 0, this.rotM[7] ?? 0];
-						this.rotateAboutAxis(apparentVertical, delta);
+					if (this.plugin.settings.rotationMode === 'relative') {
+						this.rotateAboutAxis(this.relativeTrackballAxis(1, 0), rotSpeed);
 					} else {
 						this.rotateAboutAxis([0, 1, 0], delta);
 					}
@@ -1210,9 +1228,8 @@ export class SemanticHologramView extends ItemView {
 			if (this.pressedKeys.has('ArrowUp')) {
 				if (isShift) {
 					const delta = rotSpeed;
-					if (this.plugin.settings.rotationMode === 'apparent') {
-						const apparentHorizontal: [number, number, number] = [this.rotM[0] ?? 0, this.rotM[3] ?? 0, this.rotM[6] ?? 0];
-						this.rotateAboutAxis(apparentHorizontal, delta);
+					if (this.plugin.settings.rotationMode === 'relative') {
+						this.rotateAboutAxis(this.relativeTrackballAxis(0, -1), rotSpeed);
 					} else {
 						this.rotateAboutAxis([1, 0, 0], delta);
 					}
@@ -1223,9 +1240,8 @@ export class SemanticHologramView extends ItemView {
 			if (this.pressedKeys.has('ArrowDown')) {
 				if (isShift) {
 					const delta = -rotSpeed;
-					if (this.plugin.settings.rotationMode === 'apparent') {
-						const apparentHorizontal: [number, number, number] = [this.rotM[0] ?? 0, this.rotM[3] ?? 0, this.rotM[6] ?? 0];
-						this.rotateAboutAxis(apparentHorizontal, delta);
+					if (this.plugin.settings.rotationMode === 'relative') {
+						this.rotateAboutAxis(this.relativeTrackballAxis(0, 1), rotSpeed);
 					} else {
 						this.rotateAboutAxis([1, 0, 0], delta);
 					}
@@ -2380,6 +2396,8 @@ const isCandidate = this.candidateNodes.has(node.path);
 			this.rotateStartY = e.clientY;
 			this.rotateStartRotM = [...this.rotM];
 			this.rotateStartSpin = this.totalSpin;
+			this.lastRotX = 0;
+			this.lastRotY = 0;
 			this.autoFitCooldown = PHYS.fitCooldown;
 			this.touchGesture = 'rotate';
 			return;
@@ -2483,14 +2501,20 @@ const isCandidate = this.candidateNodes.has(node.path);
 			return;
 		}
 		if (this.rotating) {
-			const dx = e.clientX - this.rotateStartX;
-			const dy = e.clientY - this.rotateStartY;
-			const screenVertical: [number, number, number] = [this.rotateStartRotM[1] ?? 0, this.rotateStartRotM[4] ?? 0, this.rotateStartRotM[7] ?? 0];
-			const screenHorizontal: [number, number, number] = [this.rotateStartRotM[0] ?? 0, this.rotateStartRotM[3] ?? 0, this.rotateStartRotM[6] ?? 0];
-			const Ry = this.getRotationMatrixAboutAxis(screenVertical, -dx * 0.005);
-			const Rx = this.getRotationMatrixAboutAxis(screenHorizontal, dy * 0.005);
-			this.rotM = this.multiplyMatrices(Rx, this.multiplyMatrices(Ry, this.rotateStartRotM));
-			this.totalSpin = this.rotateStartSpin + dx * 0.005;
+			const dxNow = e.clientX - this.rotateStartX;
+			const dyNow = e.clientY - this.rotateStartY;
+			const ddx = dxNow - this.lastRotX;
+			const ddy = dyNow - this.lastRotY;
+			this.lastRotX = dxNow;
+			this.lastRotY = dyNow;
+			const scale = 0.005;
+			if (this.plugin.settings.rotationMode === 'relative') {
+				this.rotateAboutAxis(this.relativeTrackballAxis(ddx, ddy), Math.hypot(ddx, ddy) * scale);
+			} else {
+				this.rotateAboutAxis([0, 1, 0], ddx * scale);
+				this.rotateAboutAxis([1, 0, 0], -ddy * scale);
+			}
+			this.totalSpin += ddx * scale;
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
 		}
@@ -2600,6 +2624,8 @@ const isCandidate = this.candidateNodes.has(node.path);
 			this.rotateStartY = e.clientY;
 			this.rotateStartRotM = [...this.rotM];
 			this.rotateStartSpin = this.totalSpin;
+			this.lastRotX = 0;
+			this.lastRotY = 0;
 			this.canvas?.setPointerCapture(e.pointerId);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			this.hoverIndex = -1;
@@ -2713,14 +2739,20 @@ const isCandidate = this.candidateNodes.has(node.path);
 			return;
 		}
 		if (this.rotating) {
-			const dx = e.clientX - this.rotateStartX;
-			const dy = e.clientY - this.rotateStartY;
-			const screenVertical: [number, number, number] = [this.rotateStartRotM[1] ?? 0, this.rotateStartRotM[4] ?? 0, this.rotateStartRotM[7] ?? 0];
-			const screenHorizontal: [number, number, number] = [this.rotateStartRotM[0] ?? 0, this.rotateStartRotM[3] ?? 0, this.rotateStartRotM[6] ?? 0];
-			const Ry = this.getRotationMatrixAboutAxis(screenVertical, -dx * 0.005);
-			const Rx = this.getRotationMatrixAboutAxis(screenHorizontal, dy * 0.005);
-			this.rotM = this.multiplyMatrices(Rx, this.multiplyMatrices(Ry, this.rotateStartRotM));
-			this.totalSpin = this.rotateStartSpin + dx * 0.005;
+			const dxNow = e.clientX - this.rotateStartX;
+			const dyNow = e.clientY - this.rotateStartY;
+			const ddx = dxNow - this.lastRotX;
+			const ddy = dyNow - this.lastRotY;
+			this.lastRotX = dxNow;
+			this.lastRotY = dyNow;
+			const scale = 0.005;
+			if (this.plugin.settings.rotationMode === 'relative') {
+				this.rotateAboutAxis(this.relativeTrackballAxis(ddx, ddy), Math.hypot(ddx, ddy) * scale);
+			} else {
+				this.rotateAboutAxis([0, 1, 0], ddx * scale);
+				this.rotateAboutAxis([1, 0, 0], -ddy * scale);
+			}
+			this.totalSpin += ddx * scale;
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
 		}

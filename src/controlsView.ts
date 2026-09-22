@@ -436,7 +436,7 @@ export class SemanticHologramControlsView extends ItemView {
 		rotToggle.checked = this.plugin.settings.rotationMode === 'absolute';
 		switchLabel.createEl('span', { cls: 'sh-slider' });
 		rotToggle.addEventListener('change', () => {
-			this.plugin.settings.rotationMode = rotToggle.checked ? 'absolute' : 'apparent';
+			this.plugin.settings.rotationMode = rotToggle.checked ? 'absolute' : 'relative';
 			void this.plugin.saveSettings();
 		});
 		rotModeRow.createEl('span', { text: 'Absolute', cls: 'sh-controls-label' });

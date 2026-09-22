@@ -608,6 +608,9 @@ export default class SemanticHologramPlugin extends Plugin {
 	async loadSettings() {
 		const saved = (await this.loadData()) as Partial<SemanticHologramSettings> | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {});
+		if (this.settings.rotationMode !== 'absolute') {
+			this.settings.rotationMode = 'relative';
+		}
 		if ((this.settings.hoverDepth ?? 0) === 0 && (saved as any)?.maxDepth) {
 			this.settings.hoverDepth = (saved as any).maxDepth;
 			this.settings.maxDepth = (saved as any).maxDepth;

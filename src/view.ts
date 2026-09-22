@@ -223,6 +223,7 @@ export class SemanticHologramView extends ItemView {
 	private touchTappedNode = -1;
 	private touchGesture: 'none' | 'pan' | 'pin' | 'group' | 'select' | 'rotate' = 'none';
 	private candidateNodes: Set<string> = new Set();
+	private lastSearchPickPath: string | null = null;
 	private isRecording = false;
 	private isEncoding = false;
 	private recordingFrames: ImageData[] = [];
@@ -3064,11 +3065,16 @@ const isCandidate = this.candidateNodes.has(node.path);
 	};
 
 	private selectHovered(): void {
-		if (this.hoverIndex < 0) return;
-		const toSelect: number[] = [this.hoverIndex];
+		let pivot = this.hoverIndex;
+		if (pivot < 0 && this.lastSearchPickPath) {
+			const found = this.nodes.findIndex((n) => n.path === this.lastSearchPickPath);
+			pivot = found >= 0 ? found : -1;
+		}
+		if (pivot < 0) return;
+		const toSelect: number[] = [pivot];
 		if (this.plugin.settings.hoverDepth > 0) {
-			const d = this.getDistances(this.hoverIndex);
-			for (const idx of d.keys()) if (idx !== this.hoverIndex) toSelect.push(idx);
+			const d = this.getDistances(pivot);
+			for (const idx of d.keys()) if (idx !== pivot) toSelect.push(idx);
 		}
 		const allAlready = toSelect.every((i) => this.selected.has(i));
 		if (allAlready) {
@@ -3340,6 +3346,9 @@ const isCandidate = this.candidateNodes.has(node.path);
 
 	setCandidateNodes(paths: string[]): void {
 		this.candidateNodes = new Set(paths);
+		if (paths.length > 0) {
+			this.lastSearchPickPath = paths[paths.length - 1] ?? null;
+		}
 		const node = this.nodes.find((n) => paths.length > 0 && n.path === paths[paths.length - 1]);
 		if (node) {
 			this.viewX = node.x - (this.canvas?.clientWidth ?? 0) / (2 * this.viewScale);
@@ -3351,8 +3360,12 @@ const isCandidate = this.candidateNodes.has(node.path);
 	toggleCandidateNode(path: string): void {
 		if (this.candidateNodes.has(path)) {
 			this.candidateNodes.delete(path);
+			if (this.lastSearchPickPath === path) {
+				this.lastSearchPickPath = null;
+			}
 		} else {
 			this.candidateNodes.add(path);
+			this.lastSearchPickPath = path;
 		}
 		this.requestRedraw();
 	}

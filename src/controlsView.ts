@@ -344,6 +344,8 @@ export class SemanticHologramControlsView extends ItemView {
 					} else {
 						// Toggle immediately per pick
 						view.toggleCandidateNode(entry.path);
+						view.focusGraph();
+						resultsContainer.style.display = 'none';
 					}
 					updateCandidateStates();
 				});

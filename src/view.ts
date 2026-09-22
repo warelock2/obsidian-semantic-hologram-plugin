@@ -3004,10 +3004,16 @@ const isCandidate = this.candidateNodes.has(node.path);
 			return;
 		}
 		const target = e.target as HTMLElement | null;
-		if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+		const tag = target?.tagName;
+		const inp = target as HTMLInputElement;
+		const isCheckbox = tag === 'INPUT' && inp?.type === 'checkbox';
+		const inTypingContext =
+			tag === 'TEXTAREA' || !!target?.isContentEditable || (tag === 'INPUT' && !isCheckbox);
+		if (inTypingContext) {
 			return;
 		}
-		if (this.app.workspace.getActiveViewOfType(SemanticHologramView) !== this) {
+		const activeView = this.app.workspace.activeLeaf?.view;
+		if (activeView !== this && activeView?.getViewType() !== 'semantic-hologram-controls') {
 			return;
 		}
 		const key = e.key.toLowerCase();
@@ -3047,7 +3053,7 @@ const isCandidate = this.candidateNodes.has(node.path);
 		} else if (e.key.startsWith('Arrow')) {
 			e.preventDefault();
 			this.pressedKeys.add(e.key);
-		} else if (e.key === ' ' && !e.repeat) {
+		} else if (e.key === ' ' && !e.repeat && target?.tagName !== 'INPUT' && target?.tagName !== 'TEXTAREA') {
 			if (this.autoRotating !== 'off') {
 				e.preventDefault();
 				this.autoRotating = 'off';

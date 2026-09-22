@@ -1212,4 +1212,50 @@
 	opacity: 0.85;
 }
 
+.sh-switch {
+	position: relative;
+	display: inline-block;
+	width: 36px;
+	height: 20px;
+	flex-shrink: 0;
+}
+
+.sh-switch input {
+	opacity: 0;
+	width: 0;
+	height: 0;
+}
+
+.sh-slider {
+	position: absolute;
+	cursor: pointer;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background-color: var(--background-modifier-border);
+	transition: .2s;
+	border-radius: 20px;
+}
+
+.sh-slider:before {
+	position: absolute;
+	content: "";
+	height: 16px;
+	width: 16px;
+	left: 2px;
+	bottom: 2px;
+	background-color: white;
+	transition: .2s;
+	border-radius: 50%;
+}
+
+.sh-switch input:checked + .sh-slider {
+	background-color: var(--interactive-accent);
+}
+
+.sh-switch input:checked + .sh-slider:before {
+	transform: translateX(16px);
+}
+
 

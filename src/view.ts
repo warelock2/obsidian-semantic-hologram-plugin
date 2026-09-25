@@ -1,4 +1,4 @@
-import { ItemView, Notice, Platform, WorkspaceLeaf } from 'obsidian';
+import { App, ItemView, Modal, Notice, Platform, TFile, TextComponent, WorkspaceLeaf } from 'obsidian';
 // @ts-ignore
 import * as gifenc from 'gifenc';
 const { GIFEncoder, quantize, applyPalette } = gifenc;
@@ -8,6 +8,7 @@ import type { SemanticHologramSettings } from './settings';
 import type { RelationEdge, RelationScan } from './relations';
 import { inScopePath, scanRelations } from './relations';
 import { computeNodeStats, isEvidenceType, readNodeMetas, scanGravitas } from './gravitas';
+import { ReviewConnectionsModal } from './review';
 import type { GravitasScan } from './gravitas';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
@@ -171,6 +172,11 @@ export class SemanticHologramView extends ItemView {
 	private groupStartX = 0;
 	private groupStartY = 0;
 	private groupOrigins = new Map<number, { x: number; y: number; z: number }>();
+	private groupStartCentroid: { x: number; y: number; z: number } | null = null;
+
+	private lastRestDistance = 0;
+	private dragSplitHandled = false;
+	private splitPromptOpen = false;
 	private clearOnUp = false;
 	private toggleIndex = -1;
 	private nodeColor = 'rgba(124, 111, 246, 1)';
@@ -888,6 +894,12 @@ export class SemanticHologramView extends ItemView {
 		this.loadingNotice = null;
 		this.nodes = nodes;
 		this.links = links;
+		for (const i of this.selected) {
+			const nd = this.nodes[i];
+			if (nd) {
+				nd.selected = true;
+			}
+		}
 		this.calculateFaces();
 		console.log(`[SH] buildGraph: nodes=${nodes.length} links=${links.length} faces=${this.faces.length} settled=${this.settled}`);
 		if (!incremental) {
@@ -1756,14 +1768,17 @@ export class SemanticHologramView extends ItemView {
 			ctx.textBaseline = 'middle';
 			for (const { p, i } of order) {
 				const node = this.nodes[i]!;
+				if (!this.nodeMatchesSelectedHolograms(node)) {
+					continue;
+				}
 				const sx = this.toScreenX(p.x);
 				const sy = this.toScreenY(p.y);
 				const depth = (p.z + R) / (2 * R || 1);
 				const isHighlighted = this.hoverIndex === i || highlighted.has(i);
-const isCandidate = this.candidateNodes.has(node.path);
-			const isFaded = this.hoverIndex >= 0 && !isHighlighted;
-			const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
-			const r = this.nodeScreenRadius(node, p, maxAbsZ) * (isHighlighted ? 1.4 : 1.0);
+				const isCandidate = this.candidateNodes.has(node.path);
+				const isFaded = this.hoverIndex >= 0 && !isHighlighted;
+				const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
+				const r = this.nodeScreenRadius(node, p, maxAbsZ) * (isHighlighted ? 1.4 : 1.0);
 				const viewSettings = this.plugin.settings;
 				const grav = node.gravitasDisplay;
 				const halo = node.confidenceTotal;
@@ -1805,6 +1820,9 @@ const isCandidate = this.candidateNodes.has(node.path);
 
 			for (const { p, i } of order) {
 				const node = this.nodes[i]!;
+				if (!this.nodeMatchesSelectedHolograms(node)) {
+					continue;
+				}
 				const normZ = p.z / maxAbsZ;
 				let scale: number;
 				if (normZ <= 0) {
@@ -1825,7 +1843,7 @@ const isCandidate = this.candidateNodes.has(node.path);
 				const b = this.nodes[l.b];
 				const ra = rotated[l.a];
 				const rb = rotated[l.b];
-				if (!a || !b || !ra || !rb) {
+				if (!a || !b || !ra || !rb || !this.nodeMatchesSelectedHolograms(a) || !this.nodeMatchesSelectedHolograms(b)) {
 					continue;
 				}
 				const sel = (a.selected ? 1 : 0) + (b.selected ? 1 : 0);
@@ -1852,6 +1870,9 @@ const isCandidate = this.candidateNodes.has(node.path);
 		ctx.textAlign = 'left';
 		ctx.textBaseline = 'middle';
 		for (const node of this.nodes) {
+			if (!this.nodeMatchesSelectedHolograms(node)) {
+				continue;
+			}
 			const i = this.nodes.indexOf(node);
 			const sx = this.toScreenX(node.x);
 			const sy = this.toScreenY(node.y);
@@ -1899,6 +1920,9 @@ const isCandidate = this.candidateNodes.has(node.path);
 
 		ctx.font = '10px var(--font-interface)';
 		for (const node of this.nodes) {
+			if (!this.nodeMatchesSelectedHolograms(node)) {
+				continue;
+			}
 			ctx.fillStyle = this.labelColor;
 			ctx.fillText(node.label, this.toScreenX(node.x) + node.radius + 3, this.toScreenY(node.y));
 		}
@@ -1907,7 +1931,7 @@ const isCandidate = this.candidateNodes.has(node.path);
 		for (const l of this.links) {
 			const a = this.nodes[l.a];
 			const b = this.nodes[l.b];
-			if (!a || !b) {
+			if (!a || !b || !this.nodeMatchesSelectedHolograms(a) || !this.nodeMatchesSelectedHolograms(b)) {
 				continue;
 			}
 			const sel = (a.selected ? 1 : 0) + (b.selected ? 1 : 0);
@@ -2498,6 +2522,7 @@ const isCandidate = this.candidateNodes.has(node.path);
 			const dx = e.clientX - this.groupStartX;
 			const dy = e.clientY - this.groupStartY;
 			this.moveSelectedGroup(dx, dy);
+			this.checkDragSeparation();
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
 		}
@@ -2649,18 +2674,7 @@ const isCandidate = this.candidateNodes.has(node.path);
 			return;
 		}
 		if (this.selectionHandleHit(e)) {
-			this.groupDragging = true;
-			this.groupStartX = e.clientX;
-			this.groupStartY = e.clientY;
-			this.groupOrigins.clear();
-			for (const i of this.selected) {
-				const n = this.nodes[i];
-				if (n) {
-					this.groupOrigins.set(i, { x: n.x, y: n.y, z: n.z });
-				}
-			}
-			this.canvas?.setPointerCapture(e.pointerId);
-			this.pointerDown = true;
+			this.beginGroupDrag(e);
 			return;
 		}
 		this.pointerDown = true;
@@ -2674,17 +2688,7 @@ const isCandidate = this.candidateNodes.has(node.path);
 		if (idx >= 0) {
 			const node = this.nodes[idx];
 			if (node && node.selected) {
-				this.groupDragging = true;
-				this.groupStartX = e.clientX;
-				this.groupStartY = e.clientY;
-				this.groupOrigins.clear();
-				for (const i of this.selected) {
-					const n = this.nodes[i];
-					if (n) {
-						this.groupOrigins.set(i, { x: n.x, y: n.y, z: n.z });
-					}
-				}
-				this.canvas?.setPointerCapture(e.pointerId);
+				this.beginGroupDrag(e);
 				this.hoverIndex = idx;
 				return;
 			}
@@ -2736,6 +2740,7 @@ const isCandidate = this.candidateNodes.has(node.path);
 			const dx = e.clientX - this.groupStartX;
 			const dy = e.clientY - this.groupStartY;
 			this.moveSelectedGroup(dx, dy);
+			this.checkDragSeparation();
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
 		}
@@ -2821,6 +2826,8 @@ const isCandidate = this.candidateNodes.has(node.path);
 		if (this.groupDragging) {
 			this.groupDragging = false;
 			this.groupOrigins.clear();
+			this.groupStartCentroid = null;
+			this.dragSplitHandled = false;
 			this.pointerDown = false;
 			this.updateCursor();
 			return;
@@ -2971,6 +2978,246 @@ const isCandidate = this.candidateNodes.has(node.path);
 		}
 	}
 
+	private beginGroupDrag(e: PointerEvent): void {
+		this.groupDragging = true;
+		this.groupStartX = e.clientX;
+		this.groupStartY = e.clientY;
+		this.groupOrigins.clear();
+		for (const i of this.selected) {
+			const n = this.nodes[i];
+			if (n) {
+				this.groupOrigins.set(i, { x: n.x, y: n.y, z: n.z });
+			}
+		}
+		this.dragSplitHandled = false;
+		this.groupStartCentroid = this.centroidOf(this.selected);
+		const restC = this.centroidOfRest();
+		this.lastRestDistance = restC ? this.dist3(this.groupStartCentroid, restC) : 0;
+		this.canvas?.setPointerCapture(e.pointerId);
+		this.pointerDown = true;
+	}
+
+	private centroidOf(indices: Set<number> | Iterable<number>): { x: number; y: number; z: number } {
+		let x = 0;
+		let y = 0;
+		let z = 0;
+		let n = 0;
+		for (const i of indices) {
+			const node = this.nodes[i];
+			if (!node) {
+				continue;
+			}
+			x += node.x;
+			y += node.y;
+			z += node.z;
+			n++;
+		}
+		if (n === 0) {
+			return { x: 0, y: 0, z: 0 };
+		}
+		return { x: x / n, y: y / n, z: z / n };
+	}
+
+	private dist3(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
+		return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+	}
+
+	private centroidOfRest(): { x: number; y: number; z: number } | null {
+		const rest = new Set<number>();
+		for (let i = 0; i < this.nodes.length; i++) {
+			if (!this.selected.has(i)) {
+				rest.add(i);
+			}
+		}
+		if (rest.size === 0) {
+			return null;
+		}
+		return this.centroidOf(rest);
+	}
+
+	/** During a group drag: split when the dragged set leaves the rest; merge when it reaches another hologram. */
+	private checkDragSeparation(): void {
+		const sd = this.plugin.settings.separationDistance;
+		if (sd <= 0 || this.splitPromptOpen || this.dragSplitHandled) {
+			return;
+		}
+		if (this.selected.size === 0 || this.selected.size >= this.nodes.length) {
+			return;
+		}
+		const selCentroid = this.centroidOf(this.selected);
+		const restC = this.centroidOfRest();
+		if (restC) {
+			const dRest = this.dist3(selCentroid, restC);
+			if (dRest > sd && dRest > this.lastRestDistance + 1) {
+				this.dragSplitHandled = true;
+				void this.beginSplit();
+				return;
+			}
+			this.lastRestDistance = dRest;
+		}
+
+		this.maybeMergeIntoHologram(selCentroid);
+	}
+
+	private nodeMatchesSelectedHolograms(node: GraphNode): boolean {
+		const sel = this.plugin.settings.selectedHolograms;
+		if (!sel || sel.length === 0) {
+			return true;
+		}
+		const tags = this.plugin.hologramService.getTags(node.path);
+		return [...tags].some((t) => sel.includes(t));
+	}
+
+	private canMerge(selectedIndices: Set<number>, targetGroup: Set<number>): boolean {
+		for (const i of selectedIndices) {
+			const n1 = this.nodes[i];
+			if (!n1) continue;
+			for (const j of targetGroup) {
+				const n2 = this.nodes[j];
+				if (!n2) continue;
+				if (n1.path === n2.path || (n1.nodeType === n2.nodeType && n1.label === n2.label)) {
+					return true;
+				}
+			}
+		}
+		for (const l of this.links) {
+			if ((selectedIndices.has(l.a) && targetGroup.has(l.b)) || (selectedIndices.has(l.b) && targetGroup.has(l.a))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private openReviewModal(): Promise<void> {
+		return new Promise((resolve) => {
+			const modal = new ReviewConnectionsModal(this.app, this.plugin, undefined, () => {
+				resolve();
+			});
+			modal.open();
+		});
+	}
+
+	private maybeMergeIntoHologram(selCentroid: { x: number; y: number; z: number }): void {
+		const sd = this.plugin.settings.separationDistance;
+		const mergeDist = sd * 0.35;
+		const draggedTags = new Set<string>();
+		for (const i of this.selected) {
+			const n = this.nodes[i];
+			if (n) {
+				for (const t of this.plugin.hologramService.getTags(n.path)) {
+					draggedTags.add(t);
+				}
+			}
+		}
+		for (const tag of this.plugin.hologramService.getAllTags()) {
+			if (draggedTags.has(tag)) {
+				continue;
+			}
+			const group = new Set<number>();
+			for (let i = 0; i < this.nodes.length; i++) {
+				const n = this.nodes[i];
+				if (!n || this.selected.has(i)) {
+					continue;
+				}
+				if (this.plugin.hologramService.getTags(n.path).has(tag)) {
+					group.add(i);
+				}
+			}
+			if (group.size === 0) {
+				continue;
+			}
+			const target = this.centroidOf(group);
+			const d = this.dist3(selCentroid, target);
+			const start = this.dist3(this.groupStartCentroid ?? selCentroid, target);
+			if (d < mergeDist && d < start) {
+				if (!this.canMerge(this.selected, group)) {
+					this.dragSplitHandled = true;
+					this.showToast('No relationships or shared nodes between holograms. Please review connections.');
+					void this.openReviewModal().then(() => {
+						if (this.canMerge(this.selected, group)) {
+							void this.applyMerge(tag);
+						}
+					});
+					return;
+				}
+				this.dragSplitHandled = true;
+				void this.applyMerge(tag);
+				return;
+			}
+		}
+	}
+
+	private async beginSplit(): Promise<void> {
+		this.splitPromptOpen = true;
+		const newTag = await this.promptNewHologramTag();
+		this.splitPromptOpen = false;
+		if (!newTag) {
+			return;
+		}
+		const mode = this.plugin.settings.splitMode ?? 'move';
+		const files: TFile[] = [];
+		for (const i of this.selected) {
+			const n = this.nodes[i];
+			if (!n) {
+				continue;
+			}
+			const f = this.app.vault.getAbstractFileByPath(n.path);
+			if (f instanceof TFile) {
+				files.push(f);
+			}
+		}
+		for (const f of files) {
+			const cur = this.plugin.hologramService.getTags(f.path);
+			const next = mode === 'move' ? new Set([newTag]) : new Set(cur);
+			if (mode === 'copy') {
+				next.add(newTag);
+			}
+			await this.plugin.hologramService.setTags(f, next);
+		}
+		this.showToast(
+			mode === 'move'
+				? `Moved ${files.length} node${files.length === 1 ? '' : 's'} → "${newTag}"`
+				: `Copied ${files.length} node${files.length === 1 ? '' : 's'} → "${newTag}"`,
+		);
+	}
+
+	private async applyMerge(targetTag: string): Promise<void> {
+		const mode = this.plugin.settings.mergeMode ?? 'emulsify';
+		const files: TFile[] = [];
+		for (const i of this.selected) {
+			const n = this.nodes[i];
+			if (!n) {
+				continue;
+			}
+			const f = this.app.vault.getAbstractFileByPath(n.path);
+			if (f instanceof TFile) {
+				files.push(f);
+			}
+		}
+		for (const f of files) {
+			const cur = this.plugin.hologramService.getTags(f.path);
+			const next = mode === 'absorb' ? new Set([targetTag]) : new Set(cur);
+			if (mode === 'emulsify') {
+				next.add(targetTag);
+			}
+			await this.plugin.hologramService.setTags(f, next);
+		}
+		this.showToast(
+			mode === 'absorb'
+				? `Absorbed ${files.length} node${files.length === 1 ? '' : 's'} into "${targetTag}"`
+				: `Emulsified ${files.length} node${files.length === 1 ? '' : 's'} into "${targetTag}"`,
+		);
+	}
+
+	private promptNewHologramTag(): Promise<string | null> {
+		return new Promise((resolve) => {
+			const modal = new HologramSplitModal(this.app, (name) => {
+				resolve(name);
+			});
+			modal.open();
+		});
+	}
+
 	private onPointerLeave = (): void => {
 		this.hoverIndex = -1;
 		this.pointerInside = false;
@@ -3047,6 +3294,18 @@ const isCandidate = this.candidateNodes.has(node.path);
 			} else {
 				this.startRecording();
 			}
+		} else if (key === 's' && e.shiftKey && !e.repeat) {
+			e.preventDefault();
+			this.plugin.settings.splitMode = this.plugin.settings.splitMode === 'move' ? 'copy' : 'move';
+			void this.plugin.saveSettings();
+			this.showToast(this.plugin.settings.splitMode === 'move' ? 'Split mode: Move' : 'Split mode: Copy');
+			this.refreshControlsPanel();
+		} else if (key === 'm' && e.shiftKey && !e.repeat) {
+			e.preventDefault();
+			this.plugin.settings.mergeMode = this.plugin.settings.mergeMode === 'absorb' ? 'emulsify' : 'absorb';
+			void this.plugin.saveSettings();
+			this.showToast(this.plugin.settings.mergeMode === 'absorb' ? 'Merge mode: Absorb' : 'Merge mode: Emulsify');
+			this.refreshControlsPanel();
 		} else if (key === 's' && !e.repeat) {
 			this.selectMode = true;
 			this.selectDragOccurred = false;
@@ -3064,7 +3323,7 @@ const isCandidate = this.candidateNodes.has(node.path);
 
 	};
 
-	private selectHovered(): void {
+private selectHovered(): void {
 		let pivot = this.hoverIndex;
 		if (pivot < 0 && this.lastSearchPickPath) {
 			const found = this.nodes.findIndex((n) => n.path === this.lastSearchPickPath);
@@ -3308,6 +3567,9 @@ const isCandidate = this.candidateNodes.has(node.path);
 		let bestD = Infinity;
 		if (this.is3D) {
 			this.nodes.forEach((node, i) => {
+				if (!this.nodeMatchesSelectedHolograms(node)) {
+					return;
+				}
 				const r = this.rotatePoint(node.x, node.y, node.z, this.rotCx, this.rotCy, this.rotCz);
 				const sx = this.toScreenX(r.x);
 				const sy = this.toScreenY(r.y);
@@ -3323,6 +3585,9 @@ const isCandidate = this.candidateNodes.has(node.path);
 			return best;
 		}
 		this.nodes.forEach((node, i) => {
+			if (!this.nodeMatchesSelectedHolograms(node)) {
+				return;
+			}
 			const sx = this.toScreenX(node.x);
 			const sy = this.toScreenY(node.y);
 			const r = Math.max(3, node.radius * this.viewScale);
@@ -3392,6 +3657,13 @@ const isCandidate = this.candidateNodes.has(node.path);
 		(this.canvas ?? this.contentEl).focus();
 	}
 
+	/** Re-render the controls panel so its merge/split mode buttons reflect hotkey toggles. */
+	refreshControlsPanel(): void {
+		for (const leaf of this.app.workspace.getLeavesOfType('semantic-hologram-controls')) {
+			(leaf.view as { render?: () => void }).render?.();
+		}
+	}
+
 	requestRedraw(): void {
 		this.settled = false;
 	}
@@ -3447,5 +3719,60 @@ const isCandidate = this.candidateNodes.has(node.path);
 		};
 		await this.app.vault.adapter.write(path, JSON.stringify(state, null, 2));
 		return path;
+	}
+}
+/** Asks for the name of a new hologram when a dragged set separates from the graph. */
+class HologramSplitModal extends Modal {
+	private resolveFirst: (name: string | null) => void;
+	private done = false;
+
+	constructor(app: App, resolve: (name: string | null) => void) {
+		super(app);
+		this.resolveFirst = resolve;
+	}
+
+	private finish(name: string | null): void {
+		if (this.done) {
+			return;
+		}
+		this.done = true;
+		this.resolveFirst(name);
+		this.close();
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.addClass('sh-split-modal');
+		this.titleEl.setText('Separate into a new hologram');
+		contentEl.createDiv({ cls: 'sh-split-desc', text: 'Name the new hologram for the separated nodes.' });
+		const input = new TextComponent(contentEl);
+		input.setPlaceholder('e.g. Linux Kernel Signals');
+		input.inputEl.addClass('sh-split-input');
+		contentEl.createDiv({ cls: 'sh-split-buttons' }, (el) => {
+			el.createEl('button', { text: 'Cancel', cls: 'mod-cta' }, (btn) => {
+				btn.addEventListener('click', () => this.finish(null));
+			});
+			el.createEl('button', { text: 'Split', cls: 'mod-cta sh-split-ok' }, (btn) => {
+				btn.addEventListener('click', () => this.finish(input.getValue().trim() || null));
+			});
+		});
+		input.inputEl.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				this.finish(input.getValue().trim() || null);
+			}
+		});
+		window.setTimeout(() => {
+			input.inputEl.focus();
+			input.inputEl.select();
+		}, 50);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+		if (!this.done) {
+			this.done = true;
+			this.resolveFirst(null);
+		}
 	}
 }

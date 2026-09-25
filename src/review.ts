@@ -229,6 +229,7 @@ export class ReviewConnectionsModal extends Modal {
 		app: App,
 		private plugin: SemanticHologramPlugin,
 		_sources?: TFile[],
+		private onCloseCallback?: () => void,
 	) {
 		super(app);
 	}
@@ -712,6 +713,7 @@ export class ReviewConnectionsModal extends Modal {
 
 	onClose(): void {
 		this.contentEl.empty();
+		this.onCloseCallback?.();
 	}
 }
 

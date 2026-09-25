@@ -65,6 +65,9 @@ export interface SemanticHologramSettings {
 	showConfidenceHalo: boolean;
 	selectedHolograms: string[];
 	rotationMode: 'absolute' | 'relative';
+	separationDistance: number;
+	mergeMode: 'absorb' | 'emulsify';
+	splitMode: 'move' | 'copy';
 }
 
 export const PALETTE = [
@@ -149,6 +152,9 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	showConfidenceHalo: true,
 	selectedHolograms: [],
 	rotationMode: 'relative',
+	separationDistance: 500,
+	mergeMode: 'emulsify',
+	splitMode: 'move',
 };
 
 export function validateHex(hex: string): boolean {
@@ -425,6 +431,52 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 					s.setValue(v);
 				}),
 		);
+
+		new Setting(containerEl)
+			.setName('Drag to separate & merge')
+			.setDesc('Select a set of nodes (hover a hologram tag and press "s", or drag a selected node), then drag the set. Beyond the separation distance the plugin prompts for a new hologram tag to split it into. Within it of another hologram group, the dragged set merges onto that group — Absorb replaces its tags, Emulsify keeps the dragged nodes as dual-tagged bridges.')
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName('Merge mode')
+			.setDesc('Absorb: the dragged set\'s hologram tags are replaced with the target hologram\'s. Emulsify: only the dragged (bridging) nodes get the extra target tag, so the two holograms stay separable.')
+			.addDropdown((d) =>
+				d
+					.addOptions({ absorb: 'Absorb (replace tags)', emulsify: 'Emulsify (bridge nodes)' })
+					.setValue(this.plugin.settings.mergeMode)
+					.onChange(async (v) => {
+						this.plugin.settings.mergeMode = v as 'absorb' | 'emulsify';
+						await this.persist();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Split mode')
+			.setDesc('Move: the dragged set\'s old hologram tags are replaced by the new one. Copy: the new hologram tag is added while the old tags are kept.')
+			.addDropdown((d) =>
+				d
+					.addOptions({ move: 'Move (replace tags)', copy: 'Copy (keep tags)' })
+					.setValue(this.plugin.settings.splitMode)
+					.onChange(async (v) => {
+						this.plugin.settings.splitMode = v as 'move' | 'copy';
+						await this.persist();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Separation distance')
+			.setDesc('Centroid distance (world units) a dragged set must cross from the rest of the graph to trigger a split — and how close two hologram centroids must get to merge. 0 disables drag-separate/merge.')
+			.addSlider((s) =>
+				s
+					.setLimits(0, 1200, 25)
+					.setValue(this.plugin.settings.separationDistance)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.separationDistance = v;
+						await this.persist();
+						s.setValue(v);
+					}),
+			);
 
 		new Setting(containerEl)
 			.setName('Confidence & gravitas')

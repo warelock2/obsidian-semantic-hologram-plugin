@@ -66,6 +66,13 @@ export class HologramService {
 		await this.writeTagsToFile(file, tags);
 	}
 
+	/** Replace a node's full hologram-tag set (write-through to the note file). */
+	async setTags(file: TFile, tags: ReadonlySet<string> | string[]): Promise<void> {
+		const clean = new Set(Array.from(tags).map((t) => t.trim()).filter(Boolean));
+		this.cache.set(file.path, new Set(clean));
+		await this.writeTagsToFile(file, clean);
+	}
+
 	private async writeTagsToFile(file: TFile, tags: Set<string>): Promise<void> {
 		const vault = this.plugin.app.vault;
 		const content = await vault.read(file);

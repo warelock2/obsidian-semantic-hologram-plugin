@@ -465,17 +465,6 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const mode = this.plugin.settings.hologramMode;
 
-		const rotModeRow = contentEl.createDiv({ cls: 'sh-controls-row sh-rot-mode-row' });
-		rotModeRow.createEl('span', { text: 'Relative', cls: 'sh-controls-label' });
-		const switchLabel = rotModeRow.createEl('label', { cls: 'sh-switch' });
-		const rotToggle = switchLabel.createEl('input', { type: 'checkbox' }) as HTMLInputElement;
-		rotToggle.checked = this.plugin.settings.rotationMode === 'absolute';
-		switchLabel.createEl('span', { cls: 'sh-slider' });
-		rotToggle.addEventListener('change', () => {
-			this.plugin.settings.rotationMode = rotToggle.checked ? 'absolute' : 'relative';
-			void this.plugin.saveSettings();
-		});
-		rotModeRow.createEl('span', { text: 'Absolute', cls: 'sh-controls-label' });
 
 		const modeRow = contentEl.createDiv({ cls: 'sh-controls-row' });
 		modeRow.createEl('span', { text: 'Mode', cls: 'sh-controls-label' });

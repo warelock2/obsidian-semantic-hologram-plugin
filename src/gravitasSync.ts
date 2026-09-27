@@ -116,21 +116,35 @@ function applyGravitasMirror(content: string, backers: GravitasBacker[]): string
 /** Read-only mirror section listing local / inherited / total confidence. */
 function applyConfidenceSection(content: string, local: number, inherited: number, total: number): string {
 	const lines = content.split(/\r?\n/);
-	const headerIdx = lines.findIndex((l) => /^#{1,6}\s+Confidence\s*$/i.test(l.trim()));
+	const CONFIDENCE_REGEX = /^#{1,6}\s+Confidence\s*$/i;
+
+	// Remove all existing ## Confidence sections
+	const cleanLines: string[] = [];
+	let inConfidenceSection = false;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i]!;
+		if (CONFIDENCE_REGEX.test(line.trim())) {
+			inConfidenceSection = true;
+			continue;
+		}
+		if (inConfidenceSection) {
+			if (line.trim() === '' || /^\s+-\s+/.test(line)) {
+				continue;
+			} else {
+				inConfidenceSection = false;
+			}
+		}
+		if (!inConfidenceSection) {
+			cleanLines.push(line);
+		}
+	}
+
 	const body = [
 		`  - local-confidence: ${formatStrength(local)}`,
 		`  - inherited-confidence: ${formatStrength(inherited)}`,
 		`  - total-confidence: ${formatStrength(total)}`,
 	];
 
-	if (headerIdx < 0) {
-		const ending = content.endsWith('\n') ? '\n' : '\n\n';
-		return content + ending + CONFIDENCE_SECTION_HEADER + '\n\n' + body.join('\n') + '\n';
-	}
-	let end = headerIdx + 1;
-	while (end < lines.length && /^\s+-\s+/.test(lines[end]!)) {
-		end++;
-	}
-	const newLines = [...lines.slice(0, headerIdx), CONFIDENCE_SECTION_HEADER, ...body, ...lines.slice(end)];
-	return newLines.join('\n').replace(/\n{3,}/g, '\n\n');
+	const ending = cleanLines.length > 0 && cleanLines[cleanLines.length - 1]!.trim() !== '' ? '\n\n' : '\n';
+	return cleanLines.join('\n') + ending + CONFIDENCE_SECTION_HEADER + '\n\n' + body.join('\n') + '\n';
 }

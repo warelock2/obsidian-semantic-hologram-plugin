@@ -64,7 +64,8 @@ export interface SemanticHologramSettings {
 	showGravitasColor: boolean;
 	showConfidenceHalo: boolean;
 	selectedHolograms: string[];
-	rotationMode: 'absolute' | 'relative';
+	incomingFolderPath: string;
+
 	separationDistance: number;
 	mergeMode: 'absorb' | 'emulsify';
 	splitMode: 'move' | 'copy';
@@ -94,6 +95,7 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	hologramTool: 'navigate',
 	hologramType: 'Conceptual',
 	showRotationCenter: true,
+	incomingFolderPath: 'Incoming',
 	edgeMinLength: 120,
 	edgeMaxLength: 280,
 	hoverDepth: 1,
@@ -117,6 +119,7 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	facesColor: '#277DA1',
 	nodeTypes: [
 		{ id: 'percept', name: 'Percept', color: '#B5838D', description: 'A base-level observed percept or raw data point (Level 0).', enabled: true, level: 0 },
+		{ id: 'thought', name: 'Thought', color: '#B5838D', description: 'Unstructured zettelkasten thought or brainstorming note.', enabled: true, level: undefined },
 		{ id: 'concept', name: 'Concept', color: '#7C6FF6', description: 'A single foundational concept.', enabled: true, level: 1 },
 		{ id: 'idea', name: 'Idea', color: '#4D9DE0', description: 'An emerging idea or thought.', enabled: true, level: 2 },
 		{ id: 'pattern', name: 'Pattern', color: '#F4A261', description: 'A recognized recurring pattern.', enabled: true, level: 3 },
@@ -151,7 +154,7 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	showGravitasColor: true,
 	showConfidenceHalo: true,
 	selectedHolograms: [],
-	rotationMode: 'relative',
+
 	separationDistance: 500,
 	mergeMode: 'emulsify',
 	splitMode: 'move',

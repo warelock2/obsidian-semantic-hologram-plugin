@@ -19,6 +19,7 @@ import { ImportNoteModal, importNoteIntoHolograms } from './importNote';
 import { FolderPickModal } from './review';
 import { auditHologramNodes, HologramAuditModal } from './audit';
 import { NodeConfidenceModal } from './confidence';
+import { IncomingImportModal } from './incomingImportModal';
 
 import { IncomingIndex } from './incomingIndex';
 import { HologramService } from './hologramService';
@@ -250,6 +251,14 @@ export default class SemanticHologramPlugin extends Plugin {
 			name: 'Scan hologram relations (diagnostics)',
 			callback: () => {
 				void this.scanForInvalidHolograms();
+			},
+		});
+
+		this.addCommand({
+			id: 'import-incoming-notes',
+			name: 'Import incoming Zettelkasten notes',
+			callback: () => {
+				new IncomingImportModal(this.app, this).open();
 			},
 		});
 
@@ -608,9 +617,6 @@ export default class SemanticHologramPlugin extends Plugin {
 	async loadSettings() {
 		const saved = (await this.loadData()) as Partial<SemanticHologramSettings> | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {});
-		if (this.settings.rotationMode !== 'absolute') {
-			this.settings.rotationMode = 'relative';
-		}
 		if ((this.settings.hoverDepth ?? 0) === 0 && (saved as any)?.maxDepth) {
 			this.settings.hoverDepth = (saved as any).maxDepth;
 			this.settings.maxDepth = (saved as any).maxDepth;

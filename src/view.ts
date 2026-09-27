@@ -151,10 +151,15 @@ export class SemanticHologramView extends ItemView {
 	private panStartY = 0;
 	private panViewX = 0;
 	private panViewY = 0;
+	private panRotCx = 0;
+	private panRotCy = 0;
+	private panRotCz = 0;
 	private autoFitCooldown = 0;
 	private viewX = 0;
 	private viewY = 0;
 	private viewScale = 1;
+	private baseCameraDistance = 1000;
+	private cameraDistance = 1000;
 	private pinnedIndex = -1;
 	private pointerDown = false;
 	private downX = 0;
@@ -213,7 +218,6 @@ export class SemanticHologramView extends ItemView {
 	private pointerY = 0;
 	private pointerInside = false;
 	private shiftDown = false;
-	private originFollowView = true;
 	private touch = false;
 	private toolDock: HTMLElement | null = null;
 	private actionBar: HTMLElement | null = null;
@@ -264,10 +268,14 @@ export class SemanticHologramView extends ItemView {
 	private viewCenterWorld(): { x: number; y: number; z: number } {
 		const w = this.canvas?.clientWidth ?? 1;
 		const h = this.canvas?.clientHeight ?? 1;
+		const camX = this.viewX + w / (2 * this.viewScale);
+		const camY = this.viewY + h / (2 * this.viewScale);
+		const camZ = 0;
+		const m = this.rotM;
 		return {
-			x: this.viewX + w / (2 * this.viewScale),
-			y: this.viewY + h / (2 * this.viewScale),
-			z: 0,
+			x: camX + (m[2] ?? 0) * this.cameraDistance,
+			y: camY + (m[5] ?? 0) * this.cameraDistance,
+			z: camZ + (m[8] ?? 0) * this.cameraDistance,
 		};
 	}
 
@@ -375,6 +383,7 @@ export class SemanticHologramView extends ItemView {
 		const worldX = this.toWorldX(sx);
 		const worldY = this.toWorldY(sy);
 		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.viewScale * factor));
+		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - sx / this.viewScale;
 		this.viewY = worldY - sy / this.viewScale;
 		this.autoFitCooldown = PHYS.fitCooldown;
@@ -388,6 +397,7 @@ export class SemanticHologramView extends ItemView {
 		const worldX = this.toWorldX(sx);
 		const worldY = this.toWorldY(sy);
 		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.viewScale * factor));
+		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - sx / this.viewScale;
 		this.viewY = worldY - sy / this.viewScale;
 		this.autoFitCooldown = PHYS.fitCooldown;
@@ -1212,54 +1222,43 @@ export class SemanticHologramView extends ItemView {
 			const rotSpeed = 0.01;
 			const isShift = this.shiftDown;
 
+			const m = this.rotM;
 			if (this.pressedKeys.has('ArrowLeft')) {
 				if (isShift) {
 					const delta = -rotSpeed;
-					if (this.plugin.settings.rotationMode === 'relative') {
-						this.rotateAboutAxis(this.relativeTrackballAxis(-1, 0), rotSpeed);
-					} else {
-						this.rotateAboutAxis([0, 1, 0], delta);
-					}
+					this.rotateAboutAxis([0, 1, 0], delta);
 					this.totalSpin += delta;
 				} else {
-					this.viewX += panSpeed;
+					this.viewX -= panSpeed * (m[0] ?? 1);
+					this.viewY -= panSpeed * (m[3] ?? 0);
 				}
 			}
 			if (this.pressedKeys.has('ArrowRight')) {
 				if (isShift) {
 					const delta = rotSpeed;
-					if (this.plugin.settings.rotationMode === 'relative') {
-						this.rotateAboutAxis(this.relativeTrackballAxis(1, 0), rotSpeed);
-					} else {
-						this.rotateAboutAxis([0, 1, 0], delta);
-					}
+					this.rotateAboutAxis([0, 1, 0], delta);
 					this.totalSpin += delta;
 				} else {
-					this.viewX -= panSpeed;
+					this.viewX += panSpeed * (m[0] ?? 1);
+					this.viewY += panSpeed * (m[3] ?? 0);
 				}
 			}
 			if (this.pressedKeys.has('ArrowUp')) {
 				if (isShift) {
 					const delta = rotSpeed;
-					if (this.plugin.settings.rotationMode === 'relative') {
-						this.rotateAboutAxis(this.relativeTrackballAxis(0, -1), rotSpeed);
-					} else {
-						this.rotateAboutAxis([1, 0, 0], delta);
-					}
+					this.rotateAboutAxis([1, 0, 0], delta);
 				} else {
-					this.viewY += panSpeed;
+					this.viewX -= panSpeed * (m[1] ?? 0);
+					this.viewY -= panSpeed * (m[4] ?? 1);
 				}
 			}
 			if (this.pressedKeys.has('ArrowDown')) {
 				if (isShift) {
 					const delta = -rotSpeed;
-					if (this.plugin.settings.rotationMode === 'relative') {
-						this.rotateAboutAxis(this.relativeTrackballAxis(0, 1), rotSpeed);
-					} else {
-						this.rotateAboutAxis([1, 0, 0], delta);
-					}
+					this.rotateAboutAxis([1, 0, 0], delta);
 				} else {
-					this.viewY -= panSpeed;
+					this.viewX += panSpeed * (m[1] ?? 0);
+					this.viewY += panSpeed * (m[4] ?? 1);
 				}
 			}
 			this.autoFitCooldown = PHYS.fitCooldown;
@@ -1416,64 +1415,51 @@ export class SemanticHologramView extends ItemView {
 		}
 		const w = canvas.clientWidth;
 		const h = canvas.clientHeight;
-		// Pin rotation center to the node centroid so it doesn't shift between
-		// fitToView and draw().  originFollowView=false prevents draw() from
-		// overwriting rotCx/rotCy/rotCz every frame.
-		let cx = 0;
-		let cy = 0;
-		for (const node of this.nodes) {
-			cx += node.x;
-			cy += node.y;
-		}
-		cx /= this.nodes.length;
-		cy /= this.nodes.length;
-		this.rotCx = cx;
-		this.rotCy = cy;
+
+		// 1. Reset orientation to the Home orientation matrix
+		this.rotM = [
+			1,  0,  0,
+			0, -1,  0,
+			0,  0,  1
+		];
+		this.totalSpin = 0;
+
+		// 2. Set rotation center and focus point to the absolute world origin
+		this.rotCx = 0;
+		this.rotCy = 0;
 		this.rotCz = 0;
-		this.originFollowView = false;
-		// Bounding box in rotated space — uses the same rotC* that draw() will use.
-		let minX = Infinity;
-		let minY = Infinity;
-		let maxX = -Infinity;
-		let maxY = -Infinity;
-		if (this.is3D) {
-			for (const node of this.nodes) {
-				const r = this.rotatePoint(node.x, node.y, node.z, this.rotCx, this.rotCy, this.rotCz);
-				minX = Math.min(minX, r.x - node.radius);
-				minY = Math.min(minY, r.y - node.radius);
-				maxX = Math.max(maxX, r.x + node.radius);
-				maxY = Math.max(maxY, r.y + node.radius);
-			}
-		} else {
-			for (const node of this.nodes) {
-				minX = Math.min(minX, node.x - node.radius);
-				minY = Math.min(minY, node.y - node.radius);
-				maxX = Math.max(maxX, node.x + node.radius);
-				maxY = Math.max(maxY, node.y + node.radius);
-			}
+		// 3. Compute maximum extent from world origin so all nodes fit while origin is centered
+		let maxAbsX = 0;
+		let maxAbsY = 0;
+		for (const node of this.nodes) {
+			const r = this.is3D
+				? this.rotatePoint(node.x, node.y, node.z, 0, 0, 0)
+				: { x: node.x, y: -node.y };
+			maxAbsX = Math.max(maxAbsX, Math.abs(r.x) + node.radius);
+			maxAbsY = Math.max(maxAbsY, Math.abs(r.y) + node.radius);
 		}
-		const spanX = Math.max(1, maxX - minX);
-		const spanY = Math.max(1, maxY - minY);
+		maxAbsX = Math.max(1, maxAbsX);
+		maxAbsY = Math.max(1, maxAbsY);
+
 		const m = 0.08;
 		this.viewScale = Math.min(
 			PHYS.zoomMax,
 			Math.max(
 				PHYS.zoomMin,
-				Math.min((w * (1 - 2 * m)) / spanX, (h * (1 - 2 * m)) / spanY),
+				Math.min(((w / 2) * (1 - 2 * m)) / maxAbsX, ((h / 2) * (1 - 2 * m)) / maxAbsY),
 			),
 		);
-		this.viewX = (minX + maxX) / 2 - w / (2 * this.viewScale);
-		this.viewY = (minY + maxY) / 2 - h / (2 * this.viewScale);
-		console.log(`[SH] fitToView: nodes=${this.nodes.length} canvas=${w}x${h} rotC=(${this.rotCx.toFixed(1)},${this.rotCy.toFixed(1)},${this.rotCz.toFixed(1)}) view=(${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}) scale=${this.viewScale.toFixed(3)}`);
+		this.baseCameraDistance = 1000;
+		this.cameraDistance = this.baseCameraDistance / this.viewScale;
+
+		// Center the view window precisely on the absolute world origin (0, 0)
+		this.viewX = -w / (2 * this.viewScale);
+		this.viewY = -h / (2 * this.viewScale);
+
+		console.log(`[SH] fitToView (Home Position): nodes=${this.nodes.length} canvas=${w}x${h} view=(${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}) scale=${this.viewScale.toFixed(3)}`);
 	}
 
 	private resetView(): void {
-		this.rotM = [
-			0,  1,  0,
-		   -1,  0,  0,
-			0,  0,  1
-		];
-		this.totalSpin = 0;
 		this.fitToView();
 	}
 
@@ -1724,12 +1710,9 @@ export class SemanticHologramView extends ItemView {
 		}
 		ctx.clearRect(0, 0, w, h);
 
-		const c = this.viewCenterWorld();
-		if (this.originFollowView) {
-			this.rotCx = c.x;
-			this.rotCy = c.y;
-			this.rotCz = c.z;
-		}
+		this.rotCx = this.viewX + w / (2 * this.viewScale);
+		this.rotCy = this.viewY + h / (2 * this.viewScale);
+		this.rotCz = 0;
 
 		// Calculate highlighted nodes if hovering
 		const distances = this.hoverIndex >= 0 && this.plugin.settings.hoverDepth > 0 ? this.getDistances(this.hoverIndex) : undefined;
@@ -2264,12 +2247,9 @@ export class SemanticHologramView extends ItemView {
 		}
 		const w = canvas.clientWidth;
 		const h = canvas.clientHeight;
-		let ix = w / 2;
-		let iy = h / 2;
-		if (!this.originFollowView) {
-			ix = this.toScreenX(this.rotCx);
-			iy = this.toScreenY(this.rotCy);
-		}
+		const origin = this.rotatePoint(0, 0, 0, this.rotCx, this.rotCy, this.rotCz);
+		let ix = this.toScreenX(origin.x);
+		let iy = this.toScreenY(origin.y);
 
 		if (this.is3D) {
 			const cx = w / 2;
@@ -2335,6 +2315,20 @@ export class SemanticHologramView extends ItemView {
 			drawAxis(rx.x, rx.y, 'x');
 			drawAxis(ry.x, ry.y, 'y');
 			drawAxis(rz.x, rz.y, 'z');
+
+			// Focal Point Indicator (aligned with virtual screen XY plane)
+			const fx = this.toScreenX(this.rotCx);
+			const fy = this.toScreenY(this.rotCy);
+			const ixSaved = ix;
+			const iySaved = iy;
+			ix = fx;
+			iy = fy;
+			ctx.strokeStyle = this.withAlpha('rgba(255, 100, 100, 1)', 0.85);
+			ctx.fillStyle = this.withAlpha('rgba(255, 100, 100, 1)', 0.92);
+			drawAxis(1, 0, 'Xf');
+			drawAxis(0, -1, 'Yf');
+			ix = ixSaved;
+			iy = iySaved;
 		} else {
 			drawAxis(1, 0, 'x');
 			drawAxis(0, 1, 'y');
@@ -2392,6 +2386,7 @@ export class SemanticHologramView extends ItemView {
 		const worldX = this.toWorldX(midX);
 		const worldY = this.toWorldY(midY);
 		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.pinchStartScale * factor));
+		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - midX / this.viewScale;
 		this.viewY = worldY - midY / this.viewScale;
 		this.autoFitCooldown = PHYS.fitCooldown;
@@ -2494,6 +2489,9 @@ export class SemanticHologramView extends ItemView {
 		this.panStartY = e.clientY;
 		this.panViewX = this.viewX;
 		this.panViewY = this.viewY;
+		this.panRotCx = this.rotCx;
+		this.panRotCy = this.rotCy;
+		this.panRotCz = this.rotCz;
 		this.autoFitCooldown = PHYS.fitCooldown;
 		this.touchGesture = 'pan';
 	}
@@ -2534,12 +2532,8 @@ export class SemanticHologramView extends ItemView {
 			this.lastRotX = dxNow;
 			this.lastRotY = dyNow;
 			const scale = 0.005;
-			if (this.plugin.settings.rotationMode === 'relative') {
-				this.rotateAboutAxis(this.relativeTrackballAxis(ddx, ddy), Math.hypot(ddx, ddy) * scale);
-			} else {
-				this.rotateAboutAxis([0, 1, 0], ddx * scale);
-				this.rotateAboutAxis([1, 0, 0], -ddy * scale);
-			}
+			this.rotateAboutAxis([0, 1, 0], ddx * scale);
+			this.rotateAboutAxis([1, 0, 0], -ddy * scale);
 			this.totalSpin += ddx * scale;
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
@@ -2571,8 +2565,18 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		if (this.panning) {
-			this.viewX = this.panViewX - (e.clientX - this.panStartX) / this.viewScale;
-			this.viewY = this.panViewY - (e.clientY - this.panStartY) / this.viewScale;
+			const canvas = this.canvas;
+			const w = canvas?.clientWidth ?? 1;
+			const h = canvas?.clientHeight ?? 1;
+			const m = this.rotM;
+			const scale = this.viewScale;
+			const dScreenX = (e.clientX - this.panStartX) / scale;
+			const dScreenY = (e.clientY - this.panStartY) / scale;
+			this.rotCx = this.panRotCx - (dScreenX * (m[0] ?? 1) + dScreenY * (m[1] ?? 0));
+			this.rotCy = this.panRotCy - (dScreenX * (m[3] ?? 0) + dScreenY * (m[4] ?? 1));
+			this.rotCz = this.panRotCz - (dScreenX * (m[6] ?? 0) + dScreenY * (m[7] ?? 0));
+			this.viewX = this.rotCx - w / (2 * scale);
+			this.viewY = this.rotCy - h / (2 * scale);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
 		}
@@ -2709,6 +2713,9 @@ export class SemanticHologramView extends ItemView {
 			this.panStartY = e.clientY;
 			this.panViewX = this.viewX;
 			this.panViewY = this.viewY;
+			this.panRotCx = this.rotCx;
+			this.panRotCy = this.rotCy;
+			this.panRotCz = this.rotCz;
 			this.canvas?.setPointerCapture(e.pointerId);
 			this.autoFitCooldown = PHYS.fitCooldown;
 		}
@@ -2752,12 +2759,8 @@ export class SemanticHologramView extends ItemView {
 			this.lastRotX = dxNow;
 			this.lastRotY = dyNow;
 			const scale = 0.005;
-			if (this.plugin.settings.rotationMode === 'relative') {
-				this.rotateAboutAxis(this.relativeTrackballAxis(ddx, ddy), Math.hypot(ddx, ddy) * scale);
-			} else {
-				this.rotateAboutAxis([0, 1, 0], ddx * scale);
-				this.rotateAboutAxis([1, 0, 0], -ddy * scale);
-			}
+			this.rotateAboutAxis([0, 1, 0], ddx * scale);
+			this.rotateAboutAxis([1, 0, 0], -ddy * scale);
 			this.totalSpin += ddx * scale;
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
@@ -2790,8 +2793,18 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		if (this.panning) {
-			this.viewX = this.panViewX - (e.clientX - this.panStartX) / this.viewScale;
-			this.viewY = this.panViewY - (e.clientY - this.panStartY) / this.viewScale;
+			const canvas = this.canvas;
+			const w = canvas?.clientWidth ?? 1;
+			const h = canvas?.clientHeight ?? 1;
+			const m = this.rotM;
+			const scale = this.viewScale;
+			const dScreenX = (e.clientX - this.panStartX) / scale;
+			const dScreenY = (e.clientY - this.panStartY) / scale;
+			this.rotCx = this.panRotCx - (dScreenX * (m[0] ?? 1) + dScreenY * (m[1] ?? 0));
+			this.rotCy = this.panRotCy - (dScreenX * (m[3] ?? 0) + dScreenY * (m[4] ?? 1));
+			this.rotCz = this.panRotCz - (dScreenX * (m[6] ?? 0) + dScreenY * (m[7] ?? 0));
+			this.viewX = this.rotCx - w / (2 * scale);
+			this.viewY = this.rotCy - h / (2 * scale);
 			this.autoFitCooldown = PHYS.fitCooldown;
 			return;
 		}
@@ -3398,11 +3411,7 @@ private selectHovered(): void {
 		}
 		this.viewX = tx - w / (2 * this.viewScale);
 		this.viewY = ty - h / (2 * this.viewScale);
-		this.originFollowView = false;
-		this.rotCx = tx;
-		this.rotCy = ty;
-		this.rotCz = tz;
-		console.log(`[SH] centerSelectedOnOrigin: rotC=(${tx.toFixed(1)},${ty.toFixed(1)},${tz.toFixed(1)}) view=(${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}) scale=${this.viewScale.toFixed(3)}`);
+		console.log(`[SH] centerSelectedOnOrigin: view=(${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}) scale=${this.viewScale.toFixed(3)}`);
 		this.autoFitCooldown = PHYS.fitCooldown;
 	}
 
@@ -3551,6 +3560,7 @@ private selectHovered(): void {
 		const worldX = this.toWorldX(sx);
 		const worldY = this.toWorldY(sy);
 		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.viewScale * factor));
+		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - sx / this.viewScale;
 		this.viewY = worldY - sy / this.viewScale;
 		this.autoFitCooldown = PHYS.fitCooldown;
@@ -3680,6 +3690,8 @@ private selectHovered(): void {
 			layoutFrames: this.layoutFrames,
 			scale: this.scale,
 			viewScale: this.viewScale,
+			cameraDistance: this.cameraDistance,
+			baseCameraDistance: this.baseCameraDistance,
 			viewX: this.viewX,
 			viewY: this.viewY,
 			canvas: {

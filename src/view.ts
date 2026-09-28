@@ -2868,8 +2868,8 @@ export class SemanticHologramView extends ItemView {
 			this.touchStart(e);
 			return;
 		}
-		this.pointerX = e.clientX;
-		this.pointerY = e.clientY;
+		this.pointerX = e.clientX - (this.canvas?.getBoundingClientRect().left ?? 0);
+		this.pointerY = e.clientY - (this.canvas?.getBoundingClientRect().top ?? 0);
 		this.shiftDown = e.shiftKey;
 		const rect = this.canvas?.getBoundingClientRect();
 		if (this.is3D && (e.shiftKey || e.button === 1)) {
@@ -3105,8 +3105,8 @@ export class SemanticHologramView extends ItemView {
 			this.touchEnd(e);
 			return;
 		}
-		this.pointerX = e.clientX;
-		this.pointerY = e.clientY;
+		this.pointerX = e.clientX - (this.canvas?.getBoundingClientRect().left ?? 0);
+		this.pointerY = e.clientY - (this.canvas?.getBoundingClientRect().top ?? 0);
 		if (this.selecting) {
 			const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
 			if (moved >= 6) {

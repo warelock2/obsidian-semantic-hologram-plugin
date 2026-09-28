@@ -13,6 +13,40 @@ import type { GravitasScan } from './gravitas';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
 
+export interface UndoAction {
+	undo(): void;
+	redo(): void;
+}
+
+export class HistoryStack {
+	private undoStack: UndoAction[] = [];
+	private redoStack: UndoAction[] = [];
+
+	push(action: UndoAction): void {
+		this.undoStack.push(action);
+		if (this.undoStack.length > 10) {
+			this.undoStack.shift();
+		}
+		this.redoStack = [];
+	}
+
+	undo(): void {
+		const action = this.undoStack.pop();
+		if (action) {
+			action.undo();
+			this.redoStack.push(action);
+		}
+	}
+
+	redo(): void {
+		const action = this.redoStack.pop();
+		if (action) {
+			action.redo();
+			this.undoStack.push(action);
+		}
+	}
+}
+
 export interface GraphNode {
 	path: string;
 	label: string;
@@ -37,13 +71,17 @@ export interface GraphNode {
 	nodeType: string;
 }
 
+interface Relation {
+	type: string;
+	strength: number;
+}
+
 interface GraphLink {
 	a: number;
 	b: number;
 	restLen: number;
 	dir: 'ab' | 'ba' | 'both';
-	strength: number;
-	typed: boolean;
+	relations: Relation[];
 	edgeColor: string;
 }
 
@@ -136,6 +174,7 @@ export class SemanticHologramView extends ItemView {
 	private ctx: CanvasRenderingContext2D | null = null;
 	private modeBanner: HTMLElement | null = null;
 	private nodes: GraphNode[] = [];
+	private historyStack = new HistoryStack();
 	private links: GraphLink[] = [];
 	private searchIndex: Map<string, SearchIndexEntry> = new Map();
 	private faces: number[][] = [];
@@ -172,6 +211,77 @@ export class SemanticHologramView extends ItemView {
 	private selectAnchorY = 0;
 	private selectCurX = 0;
 	private selectCurY = 0;
+	private hideEdgeTooltip(): void {
+		if (this.hideEdgeTooltipTimer) {
+			window.clearTimeout(this.hideEdgeTooltipTimer);
+			this.hideEdgeTooltipTimer = null;
+		}
+		if (this.edgeTooltipEl) {
+			this.edgeTooltipEl.remove();
+			this.edgeTooltipEl = null;
+		}
+	}
+
+	private drawEdgeTooltip(edge: GraphLink): void {
+		if (this.hideEdgeTooltipTimer) {
+			window.clearTimeout(this.hideEdgeTooltipTimer);
+			this.hideEdgeTooltipTimer = null;
+		}
+		if (!this.edgeTooltipEl) {
+			this.edgeTooltipEl = document.createElement('div');
+			this.edgeTooltipEl.className = 'sh-node-preview-card';
+			this.edgeTooltipEl.style.position = 'absolute';
+			this.edgeTooltipEl.style.zIndex = '1000';
+			
+			// Position only upon creation
+			this.edgeTooltipEl.style.left = `${this.pointerX + 15}px`;
+			this.edgeTooltipEl.style.top = `${this.pointerY + 15}px`;
+
+			// Mouse bridge: persistent when hovering over the card
+			this.edgeTooltipEl.addEventListener('mouseenter', () => {
+				this.edgeTooltipEl?.classList.add('is-hovering');
+			});
+			this.edgeTooltipEl.addEventListener('mouseleave', () => {
+				this.edgeTooltipEl?.classList.remove('is-hovering');
+			});
+			document.body.appendChild(this.edgeTooltipEl);
+		}
+
+		const nA = this.nodes[edge.a];
+		const nB = this.nodes[edge.b];
+		if (!nA || !nB) return;
+		
+		let html = `<div style="font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid var(--background-modifier-border); padding-bottom: 4px;">${nA.label} → ${nB.label}</div>`;
+		
+		if (edge.relations.length === 0) {
+			html += '<div style="padding: 4px;">No relationships.</div>';
+		} else {
+			edge.relations.forEach((rel, index) => {
+				html += `
+					<div style="display: flex; justify-content: space-between; align-items: center; margin: 4px 0; padding: 2px 4px; border-radius: 4px; background: var(--background-secondary);">
+						<span style="font-size: 0.9em;">${rel.type} (<span style="opacity: 0.7;">${rel.strength.toFixed(2)}</span>)</span>
+						<button class="sh-delete-rel" data-index="${index}" style="cursor: pointer; background: transparent; border: none; font-weight: bold; opacity: 0.6;">×</button>
+					</div>
+				`;
+			});
+		}
+
+		this.edgeTooltipEl.innerHTML = html;
+		
+		this.edgeTooltipEl.querySelectorAll('.sh-delete-rel').forEach(btn => {
+			btn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				const index = parseInt((e.target as HTMLElement).dataset.index!);
+				edge.relations.splice(index, 1);
+				if (edge.relations.length === 0) {
+					this.links = this.links.filter(l => l !== edge);
+					this.hideEdgeTooltip();
+				}
+				this.rebuildGraph();
+			});
+		});
+	}
+
 	private selectLasso: Array<{ x: number; y: number }> = [];
 	private groupDragging = false;
 	private groupStartX = 0;
@@ -188,6 +298,12 @@ export class SemanticHologramView extends ItemView {
 	private edgeColor = 'rgba(180, 180, 180, 0.6)';
 	private labelColor = 'rgba(180, 180, 180, 0.75)';
 	private hoverIndex = -1;
+	private activePreviewCard: HTMLElement | null = null;
+	private ctrlPressed = false;
+	private edgeDraggingSourceNode: GraphNode | null = null;
+	private hoveredEdge: GraphLink | null = null;
+	private edgeTooltipEl: HTMLElement | null = null;
+	private hideEdgeTooltipTimer: number | null = null;
 	private resizeObserver: ResizeObserver | null = null;
 	private autoRotating: 'off' | 'cw' | 'ccw' = 'off';
 	private rotM: number[] = [
@@ -814,8 +930,7 @@ export class SemanticHologramView extends ItemView {
 				b,
 				restLen: this.restLengthFor(strength),
 				dir: hasAB && hasBA ? 'both' : hasAB ? 'ab' : 'ba',
-				strength,
-				typed: true,
+				relations: [{ type: 'wikilink', strength: strength }],
 				edgeColor: colored,
 			});
 			covered.add(key);
@@ -848,8 +963,7 @@ export class SemanticHologramView extends ItemView {
 					b: Math.max(srcIdx, dstIdx),
 					restLen: this.restLengthFor(0.5),
 					dir: 'both',
-					strength: 0.5,
-					typed: false,
+					relations: [{ type: 'default', strength: 0.5 }],
 					edgeColor: WHITE_EDGE,
 				});
 			}
@@ -861,7 +975,6 @@ export class SemanticHologramView extends ItemView {
 			const aNode = nodes[l.a]!;
 			const bNode = nodes[l.b]!;
 			if (aNode.gravitasDisplay <= 0 || bNode.gravitasDisplay <= 0) {
-				l.strength = 0;
 				l.restLen = settings.edgeMaxLength;
 			}
 		}
@@ -1726,8 +1839,10 @@ export class SemanticHologramView extends ItemView {
 			if (this.plugin.settings.facesEnabled && this.faces.length > 0) {
 				const renderables: { type: 'face'; face: number[]; z: number }[] = [];
 				for (const face of this.faces) {
-					const z = (rotated[face[0]!]!.z + rotated[face[1]!]!.z + rotated[face[2]!]!.z) / 3;
-					renderables.push({ type: 'face', face, z });
+					if (face.every(idx => this.nodeMatchesSelectedHolograms(this.nodes[idx]!))) {
+						const z = (rotated[face[0]!]!.z + rotated[face[1]!]!.z + rotated[face[2]!]!.z) / 3;
+						renderables.push({ type: 'face', face, z });
+					}
 				}
 				renderables.sort((a, b) => a.z - b.z);
 				ctx.fillStyle = this.withAlpha(this.plugin.settings.facesColor, this.plugin.settings.facesOpacity);
@@ -1836,10 +1951,10 @@ export class SemanticHologramView extends ItemView {
 				this.strokeArrowLine(
 					this.toScreenX(ra.x),
 					this.toScreenY(ra.y),
-					this.nodeScreenRadius(a, ra, maxAbsZ),
+					this.nodeScreenRadius(a, ra, maxAbsZ, 12),
 					this.toScreenX(rb.x),
 					this.toScreenY(rb.y),
-					this.nodeScreenRadius(b, rb, maxAbsZ),
+					this.nodeScreenRadius(b, rb, maxAbsZ, 12),
 					l,
 					this.edgeStroke(l, sel, highlighted, distances, edgeNormZ),
 				);
@@ -1921,10 +2036,10 @@ export class SemanticHologramView extends ItemView {
 			this.strokeArrowLine(
 				this.toScreenX(a.x),
 				this.toScreenY(a.y),
-				this.nodeScreenRadius(a, a, 1),
+				this.nodeScreenRadius(a, a, 1, 12),
 				this.toScreenX(b.x),
 				this.toScreenY(b.y),
-				this.nodeScreenRadius(b, b, 1),
+				this.nodeScreenRadius(b, b, 1, 12),
 				l,
 					this.edgeStroke(l, sel, highlighted, distances),
 
@@ -1933,26 +2048,45 @@ export class SemanticHologramView extends ItemView {
 		this.drawLiveSelection();
 		this.drawSelectionArea();
 		this.drawOriginIndicator();
+		if (this.edgeDraggingSourceNode) {
+			ctx.save();
+			ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+			ctx.lineWidth = 2;
+			ctx.setLineDash([5, 5]);
+			ctx.beginPath();
+			const sourcePos = this.nodeScreenPos(this.edgeDraggingSourceNode);
+			ctx.moveTo(sourcePos.x, sourcePos.y);
+			ctx.lineTo(this.pointerX, this.pointerY);
+			ctx.stroke();
+			ctx.restore();
+		}
+		
+		// Edge hover inspection
+		const edge = this.hoveredEdge;
+		if (edge) {
+			this.drawEdgeTooltip(edge);
+		}
+
 		this.drawHoverTooltip();
 		this.updateCursor();
+	}
+
+	private nodeScreenPos(node: GraphNode): { x: number, y: number } {
+		if (this.is3D) {
+			const rotated = this.rotatePoint(node.x, node.y, node.z, this.rotCx, this.rotCy, this.rotCz);
+			return { x: this.toScreenX(rotated.x), y: this.toScreenY(rotated.y) };
+		}
+		return { x: this.toScreenX(node.x), y: this.toScreenY(node.y) };
 	}
 
 	private drawHoverTooltip(): void {
 		const ctx = this.ctx;
 		const canvas = this.canvas;
-		if (!ctx || !canvas) {
-			return;
-		}
-		if (!this.pointerInside || this.hoverIndex < 0) {
-			return;
-		}
-		if (this.rotating || this.panning || this.pinnedIndex >= 0 || this.selecting || this.selectMode || this.groupDragging) {
-			return;
-		}
+		if (!ctx || !canvas) return;
+		if (!this.pointerInside || this.hoverIndex < 0 || this.ctrlPressed) return;
+		if (this.rotating || this.panning || this.pinnedIndex >= 0 || this.selecting || this.selectMode || this.groupDragging) return;
 		const node = this.nodes[this.hoverIndex];
-		if (!node) {
-			return;
-		}
+		if (!node) return;
 
 		const cs = getComputedStyle(this.contentEl);
 		const fontFamily = cs.getPropertyValue('--font-interface').trim() || cs.fontFamily;
@@ -2019,9 +2153,7 @@ export class SemanticHologramView extends ItemView {
 		ctx.textBaseline = 'middle';
 		for (let i = 0; i < lines.length; i++) {
 			const l = lines[i];
-			if (!l) {
-				continue;
-			}
+			if (!l) continue;
 			ctx.font = l.font;
 			ctx.globalAlpha = l.dim ? 0.65 : 1;
 			ctx.fillStyle = cs.color || '#ccc';
@@ -2029,6 +2161,101 @@ export class SemanticHologramView extends ItemView {
 		}
 		ctx.globalAlpha = 1;
 		ctx.restore();
+	}
+
+	private hidePreviewCardTimer: number | null = null;
+
+	private hidePreviewCard(): void {
+		if (this.hidePreviewCardTimer) {
+			window.clearTimeout(this.hidePreviewCardTimer);
+			this.hidePreviewCardTimer = null;
+		}
+		if (this.activePreviewCard) {
+			this.activePreviewCard.remove();
+			this.activePreviewCard = null;
+		}
+	}
+
+	private showPreviewCard(): void {
+		if (!this.canvas) return;
+		if (this.hidePreviewCardTimer) {
+			window.clearTimeout(this.hidePreviewCardTimer);
+			this.hidePreviewCardTimer = null;
+		}
+		if (this.hoverIndex < 0) return;
+		const node = this.nodes[this.hoverIndex];
+		if (!node) return;
+
+		const entry = this.searchIndex.get(node.path);
+		if (!entry) return;
+
+		const previewData = buildNodePreviewModel(
+			{ ...node, content: entry.content },
+			this.plugin.settings,
+		);
+
+		if (this.activePreviewCard && this.activePreviewCard.getAttribute("data-path") === node.path) {
+			return;
+		}
+		if (this.activePreviewCard) {
+			this.activePreviewCard.remove();
+		}
+
+		this.activePreviewCard = document.body.createDiv({ cls: "sh-node-preview-card" });
+		this.activePreviewCard.setAttribute("data-path", node.path);
+		this.activePreviewCard.style.position = "fixed";
+		this.activePreviewCard.style.zIndex = "1000";
+		this.activePreviewCard.style.maxHeight = "400px";
+		this.activePreviewCard.style.overflowY = "auto";
+		this.activePreviewCard.style.userSelect = "text";
+		this.activePreviewCard.style.pointerEvents = "auto";
+
+		this.activePreviewCard.addEventListener("mouseenter", () => {
+			if (this.hidePreviewCardTimer) {
+				window.clearTimeout(this.hidePreviewCardTimer);
+				this.hidePreviewCardTimer = null;
+			}
+		});
+
+		this.activePreviewCard.addEventListener("wheel", (e) => {
+			e.stopPropagation();
+		});
+
+		this.activePreviewCard.addEventListener("mouseleave", () => {
+			this.hidePreviewCardTimer = window.setTimeout(() => this.hidePreviewCard(), 250);
+		});
+
+		this.activePreviewCard.createDiv({ cls: "sh-preview-label", text: previewData.label });
+		this.activePreviewCard.createDiv({ cls: "sh-preview-path", text: node.path });
+		const metaText = `${previewData.typeName} · Confidence ${previewData.confidencePct}% · Gravitas ${previewData.gravitasPct}%`;
+		this.activePreviewCard.createDiv({ cls: "sh-preview-meta", text: metaText });
+		
+		const contentBlock = this.activePreviewCard.createDiv({ cls: "sh-preview-content" });
+		contentBlock.style.whiteSpace = "pre-wrap";
+		contentBlock.style.fontSize = "12px";
+		contentBlock.style.lineHeight = "1.5";
+		contentBlock.style.marginTop = "8px";
+		contentBlock.textContent = entry.content;
+
+		const rect = this.canvas.getBoundingClientRect();
+		const viewportWidth = window.innerWidth;
+		const viewportHeight = window.innerHeight;
+		const cardWidth = 320;
+
+		let left = rect.left + this.pointerX - cardWidth - 16;
+		let top = rect.top + this.pointerY;
+
+		if (left < 8) {
+			left = rect.left + this.pointerX + 16;
+		}
+
+		const cardHeight = this.activePreviewCard.getBoundingClientRect().height;
+		if (top + cardHeight > viewportHeight - 8) {
+			top = viewportHeight - cardHeight - 8;
+		}
+
+		this.activePreviewCard.style.left = `${left}px`;
+		this.activePreviewCard.style.top = `${top}px`;
 	}
 
 	private roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
@@ -2041,15 +2268,15 @@ export class SemanticHologramView extends ItemView {
 		ctx.closePath();
 	}
 
-	private nodeScreenRadius(node: GraphNode, p: { x: number; y: number; z: number }, R: number): number {
+	private nodeScreenRadius(node: GraphNode, p: { x: number; y: number; z: number }, R: number, buffer = 0): number {
 		if (this.is3D) {
 			const depth = (p.z + R) / (2 * R || 1);
 			const minScale = 0.25;
 			const maxScale = 2.0;
 			const scale = minScale + depth * (maxScale - minScale);
-			return Math.max(2, node.radius * this.viewScale * scale);
+			return Math.max(2, node.radius * this.viewScale * scale) + buffer;
 		}
-		return Math.max(3, node.radius * this.viewScale);
+		return Math.max(3, node.radius * this.viewScale) + buffer;
 	}
 
 	private edgeStroke(link: GraphLink, selCount: number, highlightedNodes?: Set<number>, distances?: Map<number, number>, edgeDepth?: number): string {
@@ -2689,6 +2916,13 @@ export class SemanticHologramView extends ItemView {
 			this.toggleIndex = idx;
 			return;
 		}
+
+		if (e.altKey && idx >= 0) {
+			this.edgeDraggingSourceNode = this.nodes[idx]!;
+			this.canvas?.setPointerCapture(e.pointerId);
+			return;
+		}
+
 		if (idx >= 0) {
 			const node = this.nodes[idx];
 			if (node && node.selected) {
@@ -2732,6 +2966,17 @@ export class SemanticHologramView extends ItemView {
 		this.pointerInside = true;
 		this.shiftDown = e.shiftKey;
 		this.updateCursor();
+		this.hoveredEdge = this.hitTestEdge(e);
+		
+		// Only draw/update if Ctrl is pressed and we have a valid edge
+		if (this.ctrlPressed && this.hoveredEdge && this.hoverIndex < 0 && !this.edgeDraggingSourceNode) {
+			this.drawEdgeTooltip(this.hoveredEdge);
+		} else if (!this.edgeTooltipEl?.classList.contains('is-hovering')) {
+			if (!this.hideEdgeTooltipTimer) {
+				this.hideEdgeTooltipTimer = window.setTimeout(() => this.hideEdgeTooltip(), 250);
+			}
+		}
+
 		if (this.selecting) {
 			const rect = this.canvas?.getBoundingClientRect();
 			if (!rect) {
@@ -2810,9 +3055,52 @@ export class SemanticHologramView extends ItemView {
 		}
 		this.hoverIndex = this.hitTest(e);
 		this.updateCursor();
+		if (this.ctrlPressed || e.ctrlKey) {
+			if (this.hoverIndex >= 0) {
+				this.showPreviewCard();
+			} else if (!this.activePreviewCard?.matches(':hover')) {
+				if (!this.hidePreviewCardTimer) {
+					this.hidePreviewCardTimer = window.setTimeout(() => this.hidePreviewCard(), 250);
+				}
+			}
+		} else if (!this.activePreviewCard?.matches(':hover')) {
+			this.hidePreviewCard();
+		}
 	};
 
 	private onPointerUp = (e: PointerEvent): void => {
+		if (this.edgeDraggingSourceNode) {
+			const idx = this.hitTest(e);
+			if (idx >= 0 && this.nodes[idx] !== this.edgeDraggingSourceNode) {
+				const sourceNode = this.edgeDraggingSourceNode;
+				const targetNode = this.nodes[idx]!;
+				const newRel = {
+					type: (this.plugin.settings as any).defaultRelType ?? 'related',
+					strength: this.plugin.settings.defaultRelStrength,
+				};
+				// Check if link exists
+				let link = this.links.find((l) => (l.a === this.nodes.indexOf(sourceNode) && l.b === idx) || (l.a === idx && l.b === this.nodes.indexOf(sourceNode)));
+				if (link) {
+					link.relations.push(newRel);
+				} else {
+					link = {
+						a: Math.min(this.nodes.indexOf(sourceNode), idx),
+						b: Math.max(this.nodes.indexOf(sourceNode), idx),
+						restLen: this.restLengthFor(newRel.strength),
+						dir: 'both',
+						relations: [newRel],
+						edgeColor: '#FFFFFF',
+					};
+					this.links.push(link);
+				}
+				this.rebuildGraph();
+				this.showToast(`Edge created: ${sourceNode.label} -> ${targetNode.label}`);
+			}
+			this.edgeDraggingSourceNode = null;
+			this.canvas?.releasePointerCapture(e.pointerId);
+			return;
+		}
+
 		if (this.touch) {
 			this.touchEnd(e);
 			return;
@@ -3243,6 +3531,12 @@ export class SemanticHologramView extends ItemView {
 	};
 
 	private onKeyDown = (e: KeyboardEvent): void => {
+		if (e.code === 'ControlLeft' || e.code === 'ControlRight') {
+			this.ctrlPressed = true;
+			if (this.hoverIndex >= 0) {
+				this.showPreviewCard();
+			}
+		}
 		if (e.key === 'Shift') {
 			this.shiftDown = true;
 			this.updateCursor();
@@ -3257,9 +3551,20 @@ export class SemanticHologramView extends ItemView {
 				this.showToast(`Selected all ${this.nodes.length} nodes`);
 				return;
 			}
-			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !e.repeat) {
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.repeat) {
 				e.preventDefault();
-				this.focusSearchInput();
+				if (e.shiftKey) {
+					this.historyStack.redo();
+				} else {
+					this.historyStack.undo();
+				}
+				this.rebuildGraph();
+				return;
+			}
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y' && !e.repeat) {
+				e.preventDefault();
+				this.historyStack.redo();
+				this.rebuildGraph();
 				return;
 			}
 			return;
@@ -3511,6 +3816,12 @@ private selectHovered(): void {
 	}
 
 	private onKeyUp = (e: KeyboardEvent): void => {
+		if (e.code === 'ControlLeft' || e.code === 'ControlRight') {
+			this.ctrlPressed = false;
+			if (!this.activePreviewCard?.matches(':hover')) {
+				this.hidePreviewCard();
+			}
+		}
 		if (e.key === 'Shift') {
 			this.shiftDown = false;
 			this.updateCursor();
@@ -3565,6 +3876,43 @@ private selectHovered(): void {
 		this.viewY = worldY - sy / this.viewScale;
 		this.autoFitCooldown = PHYS.fitCooldown;
 	};
+
+	private hitTestEdge(e: PointerEvent): GraphLink | null {
+		if (!this.canvas) return null;
+		const rect = this.canvas.getBoundingClientRect();
+		const x = e.clientX - rect.left;
+		const y = e.clientY - rect.top;
+
+		for (const l of this.links) {
+			const nA = this.nodes[l.a];
+			const nB = this.nodes[l.b];
+			if (!nA || !nB) continue;
+			
+			// Ensure both nodes of the edge belong to the current hologram
+			if (!this.nodeMatchesSelectedHolograms(nA) || !this.nodeMatchesSelectedHolograms(nB)) {
+				continue;
+			}
+
+			const pA = this.is3D ? this.rotatePoint(nA.x, nA.y, nA.z, this.rotCx, this.rotCy, this.rotCz) : { x: nA.x, y: nA.y };
+			const pB = this.is3D ? this.rotatePoint(nB.x, nB.y, nB.z, this.rotCx, this.rotCy, this.rotCz) : { x: nB.x, y: nB.y };
+
+			const sxA = this.toScreenX(pA.x);
+			const syA = this.toScreenY(pA.y);
+			const sxB = this.toScreenX(pB.x);
+			const syB = this.toScreenY(pB.y);
+
+			const l2 = (sxB - sxA) ** 2 + (syB - syA) ** 2;
+			if (l2 === 0) continue;
+			let t = ((x - sxA) * (sxB - sxA) + (y - syA) * (syB - syA)) / l2;
+			t = Math.max(0, Math.min(1, t));
+			const projX = sxA + t * (sxB - sxA);
+			const projY = syA + t * (syB - syA);
+			const dist = Math.hypot(x - projX, y - projY);
+
+			if (dist < 8) return l;
+		}
+		return null;
+	}
 
 	private hitTest(e: PointerEvent): number {
 		if (!this.canvas) {
@@ -3725,7 +4073,7 @@ private selectHovered(): void {
 				a: l.a,
 				b: l.b,
 				dir: l.dir,
-				typed: l.typed,
+				relations: l.relations,
 				restLen: Math.round(l.restLen * 10) / 10,
 			})),
 		};

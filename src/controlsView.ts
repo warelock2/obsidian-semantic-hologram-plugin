@@ -148,6 +148,51 @@ export class SemanticHologramControlsView extends ItemView {
 			this.render();
 		});
 
+		// Edge Creation Settings
+		const edgeSettings = contentEl.createDiv({ cls: 'sh-controls-edge-settings' });
+		edgeSettings.createEl('div', { text: 'Default Edge Settings (Alt+Drag):', cls: 'sh-settings-label' });
+		
+		const relTypeSelect = edgeSettings.createEl('select', { cls: 'sh-rel-type-select' });
+		this.plugin.settings.relTypes.forEach(t => {
+			const opt = relTypeSelect.createEl('option', { value: t.id, text: t.id });
+			if (t.id === (this.plugin.settings as any).defaultRelType) opt.selected = true;
+		});
+		relTypeSelect.addEventListener('change', (e) => {
+			(this.plugin.settings as any).defaultRelType = (e.target as HTMLSelectElement).value;
+			void this.plugin.saveSettings();
+		});
+
+		const strengthRow = edgeSettings.createDiv({ cls: 'sh-strength-row' });
+		strengthRow.style.display = 'flex';
+		strengthRow.style.alignItems = 'center';
+		strengthRow.style.gap = '8px';
+
+		const strengthSlider = strengthRow.createEl('input', {
+			type: 'range',
+			cls: 'sh-strength-slider',
+			attr: { min: '0', max: '1', step: '0.1', value: this.plugin.settings.defaultRelStrength.toString() }
+		});
+		
+		const strengthInput = strengthRow.createEl('input', {
+			type: 'number',
+			cls: 'sh-strength-input',
+			attr: { min: '0', max: '1', step: '0.1', value: this.plugin.settings.defaultRelStrength.toString(), style: 'width: 50px;' }
+		});
+
+		strengthSlider.addEventListener('input', (e) => {
+			const val = (e.target as HTMLInputElement).value;
+			strengthInput.value = val;
+			this.plugin.settings.defaultRelStrength = parseFloat(val);
+			void this.plugin.saveSettings();
+		});
+
+		strengthInput.addEventListener('change', (e) => {
+			const val = (e.target as HTMLInputElement).value;
+			strengthSlider.value = val;
+			this.plugin.settings.defaultRelStrength = parseFloat(val);
+			void this.plugin.saveSettings();
+		});
+
 		// Node Search Box (gear sits to the left of the field)
 		const searchContainer = contentEl.createDiv({ cls: 'sh-controls-search' });
 		const searchBar = searchContainer.createDiv({ cls: 'sh-search-bar' });

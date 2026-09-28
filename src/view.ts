@@ -1610,10 +1610,13 @@ export class SemanticHologramView extends ItemView {
 		if (iconDiv) {
 			iconDiv.innerHTML = icon;
 		}
-		const rect = this.contentEl.getBoundingClientRect();
-		const x = this.pointerX - rect.left;
-		const y = this.pointerY - rect.top;
-		this.cursorOverlay.style.transform = `translate(${x}px, ${y}px)`;
+		const rect = this.containerEl.getBoundingClientRect();
+		const canvasRect = this.canvas?.getBoundingClientRect() ?? rect;
+		const x = this.pointerX + canvasRect.left;
+		const y = this.pointerY + canvasRect.top;
+		this.cursorOverlay.style.left = `${x}px`;
+		this.cursorOverlay.style.top = `${y}px`;
+		this.cursorOverlay.style.transform = '';
 		this.cursorOverlay.style.display = 'block';
 	}
 
@@ -2961,8 +2964,8 @@ export class SemanticHologramView extends ItemView {
 			this.touchMoveEvent(e);
 			return;
 		}
-		this.pointerX = e.clientX - (this.canvas?.getBoundingClientRect().left ?? 0);
-		this.pointerY = e.clientY - (this.canvas?.getBoundingClientRect().top ?? 0);
+		this.pointerX = e.clientX;
+		this.pointerY = e.clientY;
 		this.pointerInside = true;
 		this.shiftDown = e.shiftKey;
 		this.updateCursor();

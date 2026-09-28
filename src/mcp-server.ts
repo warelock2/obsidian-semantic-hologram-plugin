@@ -8,6 +8,8 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { runDiffractometerScan, detectStructuralDefects } from "./discovery";
+import { TFile } from "obsidian";
 
 const VAULT_ROOT = process.cwd();
 const HOLOGRAM_DIR = path.join(VAULT_ROOT, "hologram");
@@ -138,6 +140,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 					properties: {},
 				},
 			},
+			{
+				name: "run_diffractometer_scan",
+				description: "Run an energy diffusion (spreading activation) scan from a source hologram node to uncover latent connections.",
+				inputSchema: {
+					type: "object",
+					properties: {
+						filename: { type: "string", description: "Source hologram filename" },
+						iterations: { type: "number", description: "Diffusion steps (default 15)" },
+					},
+					required: ["filename"],
+				},
+			},
+			{
+				name: "detect_structural_defects",
+				description: "Scan the hologram network for structural defects, circular reasoning (cycles), and orphaned nodes.",
+				inputSchema: {
+					type: "object",
+					properties: {},
+				},
+			},
 		],
 	};
 });
@@ -252,6 +274,119 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 		const content = fs.readFileSync(GRAPH_STATE_PATH, "utf8");
 		return { content: [{ type: "text", text: content }] };
 	}
+
+    if (name === "run_diffractometer_scan") {
+        const sourceFile = typedArgs.filename;
+        const iterations = typedArgs.iterations ? parseInt(typedArgs.iterations, 10) : 15;
+        if (!sourceFile) throw new Error("Missing 'filename' argument.");
+
+        if (!fs.existsSync(HOLOGRAM_DIR)) {
+            return { content: [{ type: "text", text: JSON.stringify({ error: "Hologram directory not found." }) }] };
+        }
+
+        const files = fs.readdirSync(HOLOGRAM_DIR).filter((f) => f.endsWith(".md"));
+        const adj = new Map<string, Set<string>>();
+        const fileNames = new Set(files);
+
+        for (const file of files) {
+            const content = fs.readFileSync(path.join(HOLOGRAM_DIR, file), "utf8");
+            const parsed = parseHologram(content);
+            if (!adj.has(file)) adj.set(file, new Set());
+            for (const rel of parsed.rels) {
+                const target = rel.target;
+                if (fileNames.has(target)) {
+                    adj.get(file)!.add(target);
+                    if (!adj.has(target)) adj.set(target, new Set());
+                    adj.get(target)!.add(file);
+                }
+            }
+        }
+
+        let energy = new Map<string, number>();
+        for (const f of files) energy.set(f, 0.0);
+        if (energy.has(sourceFile)) energy.set(sourceFile, 1.0);
+
+        for (let i = 0; i < iterations; i++) {
+            const nextEnergy = new Map<string, number>(energy);
+            for (const [node, val] of energy.entries()) {
+                if (val > 0.001) {
+                    const neighbors = adj.get(node);
+                    if (neighbors && neighbors.size > 0) {
+                        const spread = (val * 0.3) / neighbors.size;
+                        for (const nbr of neighbors) {
+                            nextEnergy.set(nbr, (nextEnergy.get(nbr) ?? 0) + spread);
+                        }
+                    }
+                }
+            }
+            energy = nextEnergy;
+            for (const [node, val] of energy.entries()) {
+                energy.set(node, val * 0.85);
+            }
+        }
+
+        // Find unlinked high energy nodes (latent discoveries)
+        const directNeighbors = adj.get(sourceFile) || new Set();
+        const results = Array.from(energy.entries())
+            .filter(([node, score]) => node !== sourceFile && !directNeighbors.has(node) && score > 0.01)
+            .sort((a, b) => b[1] - a[1])
+            .map(([node, score]) => ({ filename: node, energyScore: score }));
+
+        return { content: [{ type: "text", text: JSON.stringify({ source: sourceFile, latentDiscoveries: results }, null, 2) }] };
+    }
+
+    if (name === "detect_structural_defects") {
+        if (!fs.existsSync(HOLOGRAM_DIR)) {
+            return { content: [{ type: "text", text: JSON.stringify({ error: "Hologram directory not found." }) }] };
+        }
+
+        const files = fs.readdirSync(HOLOGRAM_DIR).filter((f) => f.endsWith(".md"));
+        const adj = new Map<string, string[]>();
+        const fileNames = new Set(files);
+
+        for (const file of files) {
+            const content = fs.readFileSync(path.join(HOLOGRAM_DIR, file), "utf8");
+            const parsed = parseHologram(content);
+            if (!adj.has(file)) adj.set(file, []);
+            for (const rel of parsed.rels) {
+                if (fileNames.has(rel.target)) {
+                    adj.get(file)!.push(rel.target);
+                }
+            }
+        }
+
+        const visited = new Set<string>();
+        const recStack = new Set<string>();
+        const cycles: string[][] = [];
+        const orphans: string[] = [];
+
+        for (const file of files) {
+            if ((adj.get(file)?.length ?? 0) === 0) {
+                orphans.push(file);
+            }
+        }
+
+        function findCycles(u: string, path: string[]) {
+            visited.add(u);
+            recStack.add(u);
+            for (const v of adj.get(u) ?? []) {
+                if (recStack.has(v)) {
+                    cycles.push([...path, v]);
+                } else if (!visited.has(v)) {
+                    findCycles(v, [...path, v]);
+                }
+            }
+            recStack.delete(u);
+        }
+
+        for (const file of files) {
+            if (!visited.has(file)) {
+                findCycles(file, [file]);
+            }
+        }
+
+        return { content: [{ type: "text", text: JSON.stringify({ cycles, orphans }, null, 2) }] };
+    }
 
 	throw new Error(`Unknown tool: ${name}`);
 });

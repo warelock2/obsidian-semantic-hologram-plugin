@@ -259,7 +259,7 @@ export class SemanticHologramView extends ItemView {
 			edge.relations.forEach((rel, index) => {
 				html += `
 					<div style="display: flex; justify-content: space-between; align-items: center; margin: 4px 0; padding: 2px 4px; border-radius: 4px; background: var(--background-secondary);">
-						<span style="font-size: 0.9em;">${rel.type} (<span style="opacity: 0.7;">${rel.strength.toFixed(2)}</span>)</span>
+						<span style="font-size: 0.9em;">${nA.label} relates (${rel.strength.toFixed(2)}) ${nB.label}: ${rel.type}</span>
 						<button class="sh-delete-rel" data-index="${index}" style="cursor: pointer; background: transparent; border: none; font-weight: bold; opacity: 0.6;">×</button>
 					</div>
 				`;
@@ -2961,8 +2961,8 @@ export class SemanticHologramView extends ItemView {
 			this.touchMoveEvent(e);
 			return;
 		}
-		this.pointerX = e.clientX;
-		this.pointerY = e.clientY;
+		this.pointerX = e.clientX - (this.canvas?.getBoundingClientRect().left ?? 0);
+		this.pointerY = e.clientY - (this.canvas?.getBoundingClientRect().top ?? 0);
 		this.pointerInside = true;
 		this.shiftDown = e.shiftKey;
 		this.updateCursor();
@@ -2973,7 +2973,7 @@ export class SemanticHologramView extends ItemView {
 			this.drawEdgeTooltip(this.hoveredEdge);
 		} else if (!this.edgeTooltipEl?.classList.contains('is-hovering')) {
 			if (!this.hideEdgeTooltipTimer) {
-				this.hideEdgeTooltipTimer = window.setTimeout(() => this.hideEdgeTooltip(), 250);
+				this.hideEdgeTooltipTimer = window.setTimeout(() => this.hideEdgeTooltip(), 500);
 			}
 		}
 

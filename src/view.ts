@@ -1610,10 +1610,9 @@ export class SemanticHologramView extends ItemView {
 		if (iconDiv) {
 			iconDiv.innerHTML = icon;
 		}
-		const rect = this.containerEl.getBoundingClientRect();
-		const canvasRect = this.canvas?.getBoundingClientRect() ?? rect;
-		const x = this.pointerX + canvasRect.left;
-		const y = this.pointerY + canvasRect.top;
+		const contentRect = this.contentEl.getBoundingClientRect();
+		const x = this.pointerX - contentRect.left;
+		const y = this.pointerY - contentRect.top;
 		this.cursorOverlay.style.left = `${x}px`;
 		this.cursorOverlay.style.top = `${y}px`;
 		this.cursorOverlay.style.transform = '';

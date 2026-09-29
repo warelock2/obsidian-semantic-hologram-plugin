@@ -6,7 +6,8 @@ import type SemanticHologramPlugin from './main';
 import type { HologramTool, RelTypeEntry } from './settings';
 import type { SemanticHologramSettings } from './settings';
 import type { RelationEdge, RelationScan } from './relations';
-import { inScopePath, scanRelations } from './relations';
+import { findRelationsSection, formatStrength, inScopePath, scanRelations } from './relations';
+import { addRelation, removeRelation } from './reviewCommon';
 import { computeNodeStats, isEvidenceType, readNodeMetas, scanGravitas } from './gravitas';
 import { ReviewConnectionsModal } from './review';
 import type { GravitasScan } from './gravitas';
@@ -74,6 +75,13 @@ export interface GraphNode {
 interface Relation {
 	type: string;
 	strength: number;
+	/** Note that authored the relation line, when this is an authored relation. */
+	authoredFrom?: string;
+	/** Verbatim authored line, used to remove the relation from its note. */
+	raw?: string;
+	/** Semantic source/target note paths, for direction display. */
+	source?: string;
+	target?: string;
 }
 
 interface GraphLink {
@@ -193,7 +201,11 @@ export class SemanticHologramView extends ItemView {
 	private panRotCx = 0;
 	private panRotCy = 0;
 	private panRotCz = 0;
+	/** Persistent depth component of the camera's rotation center; panning needs it to move the view in pure screen space. */
+	private camZ = 0;
+	private panCamZ = 0;
 	private autoFitCooldown = 0;
+	private userAdjustedView = false;
 	private viewX = 0;
 	private viewY = 0;
 	private viewScale = 1;
@@ -220,6 +232,15 @@ export class SemanticHologramView extends ItemView {
 			this.edgeTooltipEl.remove();
 			this.edgeTooltipEl = null;
 		}
+		this.flushPendingEdgeRefresh();
+	}
+
+	private flushPendingEdgeRefresh(): void {
+		if (!this.pendingEdgeRefresh) {
+			return;
+		}
+		this.pendingEdgeRefresh = false;
+		void this.plugin.refreshGraphs();
 	}
 
 	private drawEdgeTooltip(edge: GraphLink): void {
@@ -240,9 +261,16 @@ export class SemanticHologramView extends ItemView {
 			// Mouse bridge: persistent when hovering over the card
 			this.edgeTooltipEl.addEventListener('mouseenter', () => {
 				this.edgeTooltipEl?.classList.add('is-hovering');
+				// Cancel any pending hide scheduled when the pointer left the edge,
+				// otherwise the card is removed while the pointer sits on it.
+				if (this.hideEdgeTooltipTimer) {
+					window.clearTimeout(this.hideEdgeTooltipTimer);
+					this.hideEdgeTooltipTimer = null;
+				}
 			});
 			this.edgeTooltipEl.addEventListener('mouseleave', () => {
 				this.edgeTooltipEl?.classList.remove('is-hovering');
+				this.flushPendingEdgeRefresh();
 			});
 			document.body.appendChild(this.edgeTooltipEl);
 		}
@@ -250,17 +278,27 @@ export class SemanticHologramView extends ItemView {
 		const nA = this.nodes[edge.a];
 		const nB = this.nodes[edge.b];
 		if (!nA || !nB) return;
-		
-		let html = `<div style="font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid var(--background-modifier-border); padding-bottom: 4px;">${nA.label} → ${nB.label}</div>`;
-		
+		const labelOfPath = (path: string | undefined, fallback: string): string =>
+			path ? (this.nodes.find((n) => n.path === path)?.label ?? path) : fallback;
+
+		let html = `<div style="font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid var(--background-modifier-border); padding-bottom: 4px;">${nA.label} ↔ ${nB.label}</div>`;
+
 		if (edge.relations.length === 0) {
 			html += '<div style="padding: 4px;">No relationships.</div>';
 		} else {
 			edge.relations.forEach((rel, index) => {
+				const directed = !!(rel.source && rel.target);
+				const dirText = directed
+					? `${labelOfPath(rel.source, nA.label)} → ${labelOfPath(rel.target, nB.label)}`
+					: `${nA.label} ↔ ${nB.label}`;
+				const deletable = !!(rel.raw && rel.authoredFrom && rel.raw.trim().startsWith('-'));
+				const button = deletable
+					? `<button class="sh-delete-rel" data-index="${index}" title="Remove this relationship from ${rel.authoredFrom}" style="cursor: pointer; background: transparent; border: none; font-weight: bold; opacity: 0.6;">×</button>`
+					: '';
 				html += `
 					<div style="display: flex; justify-content: space-between; align-items: center; margin: 4px 0; padding: 2px 4px; border-radius: 4px; background: var(--background-secondary);">
-						<span style="font-size: 0.9em;">${nA.label} relates (${rel.strength.toFixed(2)}) ${nB.label}: ${rel.type}</span>
-						<button class="sh-delete-rel" data-index="${index}" style="cursor: pointer; background: transparent; border: none; font-weight: bold; opacity: 0.6;">×</button>
+						<span style="font-size: 0.9em;">${dirText} · ${rel.type} (${rel.strength.toFixed(2)})</span>
+						${button}
 					</div>
 				`;
 			});
@@ -271,15 +309,36 @@ export class SemanticHologramView extends ItemView {
 		this.edgeTooltipEl.querySelectorAll('.sh-delete-rel').forEach(btn => {
 			btn.addEventListener('click', (e) => {
 				e.stopPropagation();
-				const index = parseInt((e.target as HTMLElement).dataset.index!);
-				edge.relations.splice(index, 1);
-				if (edge.relations.length === 0) {
-					this.links = this.links.filter(l => l !== edge);
-					this.hideEdgeTooltip();
-				}
-				this.rebuildGraph();
+				const index = parseInt((btn as HTMLElement).dataset.index ?? '-1', 10);
+				void this.deleteRelation(edge, index);
 			});
 		});
+	}
+
+	private async deleteRelation(edge: GraphLink, index: number): Promise<void> {
+		const rel = edge.relations[index];
+		if (!rel?.raw || !rel.authoredFrom || !rel.raw.trim().startsWith('-')) {
+			this.showToast('No authored relationship line to remove');
+			return;
+		}
+		const file = this.app.vault.getAbstractFileByPath(rel.authoredFrom);
+		if (!(file instanceof TFile)) {
+			this.showToast(`Delete failed: ${rel.authoredFrom} not found`);
+			return;
+		}
+		try {
+			await removeRelation(this.plugin, file, rel.raw);
+			edge.relations.splice(index, 1);
+			this.pendingEdgeRefresh = true;
+			if (edge.relations.length === 0) {
+				this.hideEdgeTooltip();
+			} else {
+				this.drawEdgeTooltip(edge);
+			}
+			this.showToast(`Removed '${rel.type}' (${formatStrength(rel.strength)})`);
+		} catch (err) {
+			this.showToast(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	private selectLasso: Array<{ x: number; y: number }> = [];
@@ -304,6 +363,7 @@ export class SemanticHologramView extends ItemView {
 	private hoveredEdge: GraphLink | null = null;
 	private edgeTooltipEl: HTMLElement | null = null;
 	private hideEdgeTooltipTimer: number | null = null;
+	private pendingEdgeRefresh = false;
 	private resizeObserver: ResizeObserver | null = null;
 	private autoRotating: 'off' | 'cw' | 'ccw' = 'off';
 	private rotM: number[] = [
@@ -502,7 +562,7 @@ export class SemanticHologramView extends ItemView {
 		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - sx / this.viewScale;
 		this.viewY = worldY - sy / this.viewScale;
-		this.autoFitCooldown = PHYS.fitCooldown;
+		this.markViewAdjusted();
 	}
 
 	public zoomOut(): void {
@@ -516,7 +576,7 @@ export class SemanticHologramView extends ItemView {
 		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - sx / this.viewScale;
 		this.viewY = worldY - sy / this.viewScale;
-		this.autoFitCooldown = PHYS.fitCooldown;
+		this.markViewAdjusted();
 	}
 
 	rebuildGraph(): Promise<void> {
@@ -755,7 +815,7 @@ export class SemanticHologramView extends ItemView {
 		this.ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
 		this.updateCursor();
 		this.scale = Math.max(0.6, Math.min(w, h) / PHYS.baseSize);
-		if (this.settled) {
+		if (this.settled && !this.userAdjustedView) {
 			this.fitToView();
 		}
 	}
@@ -930,7 +990,14 @@ export class SemanticHologramView extends ItemView {
 				b,
 				restLen: this.restLengthFor(strength),
 				dir: hasAB && hasBA ? 'both' : hasAB ? 'ab' : 'ba',
-				relations: [{ type: 'wikilink', strength: strength }],
+				relations: edges.map((e) => ({
+					type: e.relId,
+					strength: e.strength,
+					authoredFrom: e.authoredFrom,
+					raw: e.raw,
+					source: e.source,
+					target: e.target,
+				})),
 				edgeColor: colored,
 			});
 			covered.add(key);
@@ -1374,7 +1441,7 @@ export class SemanticHologramView extends ItemView {
 					this.viewY += panSpeed * (m[4] ?? 1);
 				}
 			}
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 		}
 
 		const { nodes, links } = this;
@@ -1472,7 +1539,9 @@ export class SemanticHologramView extends ItemView {
 						}
 					}
 					this.settled = true;
-					this.fitToView();
+					if (!this.userAdjustedView) {
+						this.fitToView();
+					}
 				}
 			} else {
 				this.settleCount = 0;
@@ -1480,7 +1549,7 @@ export class SemanticHologramView extends ItemView {
 
 			if (this.autoFitCooldown > 0) {
 				this.autoFitCooldown--;
-			} else if (this.layoutFrames % PHYS.fitEveryFrame === 0) {
+			} else if (!this.userAdjustedView && this.layoutFrames % PHYS.fitEveryFrame === 0) {
 				this.fitToView();
 			}
 		}
@@ -1526,6 +1595,7 @@ export class SemanticHologramView extends ItemView {
 		if (!canvas || this.nodes.length === 0) {
 			return;
 		}
+		this.userAdjustedView = false;
 		const w = canvas.clientWidth;
 		const h = canvas.clientHeight;
 
@@ -1541,10 +1611,14 @@ export class SemanticHologramView extends ItemView {
 		this.rotCx = 0;
 		this.rotCy = 0;
 		this.rotCz = 0;
-		// 3. Compute maximum extent from world origin so all nodes fit while origin is centered
+		this.camZ = 0;
+		// 3. Compute maximum extent from world origin so all visible nodes fit while origin is centered
+		const visibleNodes = this.nodes.filter((node) => this.nodeMatchesSelectedHolograms(node));
+		const targetNodes = visibleNodes.length > 0 ? visibleNodes : this.nodes;
+
 		let maxAbsX = 0;
 		let maxAbsY = 0;
-		for (const node of this.nodes) {
+		for (const node of targetNodes) {
 			const r = this.is3D
 				? this.rotatePoint(node.x, node.y, node.z, 0, 0, 0)
 				: { x: node.x, y: -node.y };
@@ -1569,11 +1643,17 @@ export class SemanticHologramView extends ItemView {
 		this.viewX = -w / (2 * this.viewScale);
 		this.viewY = -h / (2 * this.viewScale);
 
-		console.log(`[SH] fitToView (Home Position): nodes=${this.nodes.length} canvas=${w}x${h} view=(${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}) scale=${this.viewScale.toFixed(3)}`);
+		console.log(`[SH] fitToView (Home Position): visibleNodes=${visibleNodes.length}/${this.nodes.length} canvas=${w}x${h} view=(${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}) scale=${this.viewScale.toFixed(3)}`);
 	}
 
 	private resetView(): void {
 		this.fitToView();
+	}
+
+	/** Record that the user moved the camera, so the in-settle auto-fit stops fighting them. */
+	private markViewAdjusted(): void {
+		this.userAdjustedView = true;
+		this.autoFitCooldown = PHYS.fitCooldown;
 	}
 
 	private updateCursor(): void {
@@ -1827,7 +1907,7 @@ export class SemanticHologramView extends ItemView {
 
 		this.rotCx = this.viewX + w / (2 * this.viewScale);
 		this.rotCy = this.viewY + h / (2 * this.viewScale);
-		this.rotCz = 0;
+		this.rotCz = this.camZ;
 
 		// Calculate highlighted nodes if hovering
 		const distances = this.hoverIndex >= 0 && this.plugin.settings.hoverDepth > 0 ? this.getDistances(this.hoverIndex) : undefined;
@@ -1961,6 +2041,19 @@ export class SemanticHologramView extends ItemView {
 					this.edgeStroke(l, sel, highlighted, distances, edgeNormZ),
 				);
 			}
+			if (this.edgeDraggingSourceNode && this.canvas) {
+				const canvasRect = this.canvas.getBoundingClientRect();
+				ctx.save();
+				ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+				ctx.lineWidth = 2;
+				ctx.setLineDash([5, 5]);
+				ctx.beginPath();
+				const sourcePos = this.nodeScreenPos(this.edgeDraggingSourceNode);
+				ctx.moveTo(sourcePos.x, sourcePos.y);
+				ctx.lineTo(this.pointerX - canvasRect.left, this.pointerY - canvasRect.top);
+				ctx.stroke();
+				ctx.restore();
+			}
 			this.drawLiveSelection();
 			this.drawSelectionArea();
 			this.drawOriginIndicator();
@@ -2050,15 +2143,16 @@ export class SemanticHologramView extends ItemView {
 		this.drawLiveSelection();
 		this.drawSelectionArea();
 		this.drawOriginIndicator();
-		if (this.edgeDraggingSourceNode) {
+		if (this.edgeDraggingSourceNode && this.canvas) {
+			const canvasRect = this.canvas.getBoundingClientRect();
 			ctx.save();
-			ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+			ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
 			ctx.lineWidth = 2;
 			ctx.setLineDash([5, 5]);
 			ctx.beginPath();
 			const sourcePos = this.nodeScreenPos(this.edgeDraggingSourceNode);
 			ctx.moveTo(sourcePos.x, sourcePos.y);
-			ctx.lineTo(this.pointerX, this.pointerY);
+			ctx.lineTo(this.pointerX - canvasRect.left, this.pointerY - canvasRect.top);
 			ctx.stroke();
 			ctx.restore();
 		}
@@ -2618,7 +2712,7 @@ export class SemanticHologramView extends ItemView {
 		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - midX / this.viewScale;
 		this.viewY = worldY - midY / this.viewScale;
-		this.autoFitCooldown = PHYS.fitCooldown;
+		this.markViewAdjusted();
 	}
 
 	private touchStart(e: PointerEvent): void {
@@ -2647,7 +2741,7 @@ export class SemanticHologramView extends ItemView {
 			this.rotateStartSpin = this.totalSpin;
 			this.lastRotX = 0;
 			this.lastRotY = 0;
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 			this.touchGesture = 'rotate';
 			return;
 		}
@@ -2721,7 +2815,8 @@ export class SemanticHologramView extends ItemView {
 		this.panRotCx = this.rotCx;
 		this.panRotCy = this.rotCy;
 		this.panRotCz = this.rotCz;
-		this.autoFitCooldown = PHYS.fitCooldown;
+		this.panCamZ = this.camZ;
+		this.markViewAdjusted();
 		this.touchGesture = 'pan';
 	}
 
@@ -2742,7 +2837,7 @@ export class SemanticHologramView extends ItemView {
 			this.selectCurX = e.clientX - rect.left;
 			this.selectCurY = e.clientY - rect.top;
 			this.selectLasso.push({ x: this.selectCurX, y: this.selectCurY });
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 			return;
 		}
 		if (this.groupDragging) {
@@ -2750,7 +2845,7 @@ export class SemanticHologramView extends ItemView {
 			const dy = e.clientY - this.groupStartY;
 			this.moveSelectedGroup(dx, dy);
 			this.checkDragSeparation();
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 			return;
 		}
 		if (this.rotating) {
@@ -2764,7 +2859,7 @@ export class SemanticHologramView extends ItemView {
 			this.rotateAboutAxis([0, 1, 0], ddx * scale);
 			this.rotateAboutAxis([1, 0, 0], -ddy * scale);
 			this.totalSpin += ddx * scale;
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 			return;
 		}
 		if (this.pinnedIndex >= 0) {
@@ -2801,12 +2896,13 @@ export class SemanticHologramView extends ItemView {
 			const scale = this.viewScale;
 			const dScreenX = (e.clientX - this.panStartX) / scale;
 			const dScreenY = (e.clientY - this.panStartY) / scale;
-			this.rotCx = this.panRotCx - (dScreenX * (m[0] ?? 1) + dScreenY * (m[1] ?? 0));
-			this.rotCy = this.panRotCy - (dScreenX * (m[3] ?? 0) + dScreenY * (m[4] ?? 1));
-			this.rotCz = this.panRotCz - (dScreenX * (m[6] ?? 0) + dScreenY * (m[7] ?? 0));
+			this.rotCx = this.panRotCx - (dScreenX * (m[0] ?? 1) + dScreenY * (m[3] ?? 0));
+			this.rotCy = this.panRotCy - (dScreenX * (m[1] ?? 0) + dScreenY * (m[4] ?? 1));
+			this.camZ = this.panCamZ - (dScreenX * (m[2] ?? 0) + dScreenY * (m[5] ?? 0));
+			this.rotCz = this.camZ;
 			this.viewX = this.rotCx - w / (2 * scale);
 			this.viewY = this.rotCy - h / (2 * scale);
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 			return;
 		}
 	}
@@ -2870,8 +2966,8 @@ export class SemanticHologramView extends ItemView {
 			this.touchStart(e);
 			return;
 		}
-		this.pointerX = e.clientX - (this.canvas?.getBoundingClientRect().left ?? 0);
-		this.pointerY = e.clientY - (this.canvas?.getBoundingClientRect().top ?? 0);
+		this.pointerX = e.clientX;
+		this.pointerY = e.clientY;
 		this.shiftDown = e.shiftKey;
 		const rect = this.canvas?.getBoundingClientRect();
 		if (this.is3D && (e.shiftKey || e.button === 1)) {
@@ -2886,7 +2982,7 @@ export class SemanticHologramView extends ItemView {
 			this.lastRotX = 0;
 			this.lastRotY = 0;
 			this.canvas?.setPointerCapture(e.pointerId);
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 			this.hoverIndex = -1;
 			return;
 		}
@@ -2952,8 +3048,9 @@ export class SemanticHologramView extends ItemView {
 			this.panRotCx = this.rotCx;
 			this.panRotCy = this.rotCy;
 			this.panRotCz = this.rotCz;
+			this.panCamZ = this.camZ;
 			this.canvas?.setPointerCapture(e.pointerId);
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 		}
 		this.hoverIndex = idx;
 	};
@@ -2987,7 +3084,7 @@ export class SemanticHologramView extends ItemView {
 			this.selectCurX = e.clientX - rect.left;
 			this.selectCurY = e.clientY - rect.top;
 			this.selectLasso.push({ x: this.selectCurX, y: this.selectCurY });
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 			return;
 		}
 		if (this.groupDragging) {
@@ -2995,7 +3092,7 @@ export class SemanticHologramView extends ItemView {
 			const dy = e.clientY - this.groupStartY;
 			this.moveSelectedGroup(dx, dy);
 			this.checkDragSeparation();
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 			return;
 		}
 		if (this.rotating) {
@@ -3009,7 +3106,7 @@ export class SemanticHologramView extends ItemView {
 			this.rotateAboutAxis([0, 1, 0], ddx * scale);
 			this.rotateAboutAxis([1, 0, 0], -ddy * scale);
 			this.totalSpin += ddx * scale;
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 			return;
 		}
 		if (this.pinnedIndex >= 0) {
@@ -3047,12 +3144,13 @@ export class SemanticHologramView extends ItemView {
 			const scale = this.viewScale;
 			const dScreenX = (e.clientX - this.panStartX) / scale;
 			const dScreenY = (e.clientY - this.panStartY) / scale;
-			this.rotCx = this.panRotCx - (dScreenX * (m[0] ?? 1) + dScreenY * (m[1] ?? 0));
-			this.rotCy = this.panRotCy - (dScreenX * (m[3] ?? 0) + dScreenY * (m[4] ?? 1));
-			this.rotCz = this.panRotCz - (dScreenX * (m[6] ?? 0) + dScreenY * (m[7] ?? 0));
+			this.rotCx = this.panRotCx - (dScreenX * (m[0] ?? 1) + dScreenY * (m[3] ?? 0));
+			this.rotCy = this.panRotCy - (dScreenX * (m[1] ?? 0) + dScreenY * (m[4] ?? 1));
+			this.camZ = this.panCamZ - (dScreenX * (m[2] ?? 0) + dScreenY * (m[5] ?? 0));
+			this.rotCz = this.camZ;
 			this.viewX = this.rotCx - w / (2 * scale);
 			this.viewY = this.rotCy - h / (2 * scale);
-			this.autoFitCooldown = PHYS.fitCooldown;
+			this.markViewAdjusted();
 			return;
 		}
 		this.hoverIndex = this.hitTest(e);
@@ -3074,29 +3172,7 @@ export class SemanticHologramView extends ItemView {
 		if (this.edgeDraggingSourceNode) {
 			const idx = this.hitTest(e);
 			if (idx >= 0 && this.nodes[idx] !== this.edgeDraggingSourceNode) {
-				const sourceNode = this.edgeDraggingSourceNode;
-				const targetNode = this.nodes[idx]!;
-				const newRel = {
-					type: (this.plugin.settings as any).defaultRelType ?? 'related',
-					strength: this.plugin.settings.defaultRelStrength,
-				};
-				// Check if link exists
-				let link = this.links.find((l) => (l.a === this.nodes.indexOf(sourceNode) && l.b === idx) || (l.a === idx && l.b === this.nodes.indexOf(sourceNode)));
-				if (link) {
-					link.relations.push(newRel);
-				} else {
-					link = {
-						a: Math.min(this.nodes.indexOf(sourceNode), idx),
-						b: Math.max(this.nodes.indexOf(sourceNode), idx),
-						restLen: this.restLengthFor(newRel.strength),
-						dir: 'both',
-						relations: [newRel],
-						edgeColor: '#FFFFFF',
-					};
-					this.links.push(link);
-				}
-				this.rebuildGraph();
-				this.showToast(`Edge created: ${sourceNode.label} -> ${targetNode.label}`);
+				void this.createRelationBetween(this.edgeDraggingSourceNode, this.nodes[idx]!);
 			}
 			this.edgeDraggingSourceNode = null;
 			this.canvas?.releasePointerCapture(e.pointerId);
@@ -3107,8 +3183,8 @@ export class SemanticHologramView extends ItemView {
 			this.touchEnd(e);
 			return;
 		}
-		this.pointerX = e.clientX - (this.canvas?.getBoundingClientRect().left ?? 0);
-		this.pointerY = e.clientY - (this.canvas?.getBoundingClientRect().top ?? 0);
+		this.pointerX = e.clientX;
+		this.pointerY = e.clientY;
 		if (this.selecting) {
 			const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
 			if (moved >= 6) {
@@ -3165,6 +3241,65 @@ export class SemanticHologramView extends ItemView {
 		}
 		this.updateCursor();
 	};
+
+	/**
+	 * Persist an Alt+drag as a real relationship in the source note's
+	 * `## Relations` section, then rebuild so the graph picks it up from disk.
+	 */
+	private async createRelationBetween(sourceNode: GraphNode, targetNode: GraphNode): Promise<void> {
+		const sourceFile = this.app.vault.getAbstractFileByPath(sourceNode.path);
+		const targetFile = this.app.vault.getAbstractFileByPath(targetNode.path);
+		if (!(sourceFile instanceof TFile) || !(targetFile instanceof TFile)) {
+			this.showToast(`Edge failed: ${sourceNode.label} or ${targetNode.label} is not a file in the vault`);
+			return;
+		}
+
+		const knownIds = new Set(this.plugin.settings.relTypes.map((t) => t.id));
+		const preferred = (this.plugin.settings as unknown as { defaultRelType?: string }).defaultRelType;
+		const relId = preferred && knownIds.has(preferred)
+			? preferred
+			: (this.plugin.settings.relTypes.find((t) => t.enabled)?.id ?? this.plugin.settings.relTypes[0]?.id ?? 'related');
+		const strength = this.plugin.settings.defaultRelStrength;
+		const symmetric = relId === 'related';
+
+		const hasAuthored = (content: string, targetBasename: string): boolean => {
+			const section = findRelationsSection(content);
+			if (!section) {
+				return false;
+			}
+			const link = `[[${targetBasename}]]`;
+			return content
+				.split(/\r?\n/)
+				.slice(section.startLine + 1, section.endLine)
+				.some((l) => l.trim().startsWith(`- ${relId} `) && l.includes(link));
+		};
+
+		try {
+			const forwardDup = hasAuthored(await this.app.vault.read(sourceFile), targetFile.basename);
+			const reverseDup = symmetric
+				? hasAuthored(await this.app.vault.read(targetFile), sourceFile.basename)
+				: false;
+			if (forwardDup && (!symmetric || reverseDup)) {
+				const arrow = symmetric ? '↔' : '→';
+				this.showToast(`${sourceNode.label} ${arrow} ${targetNode.label} already linked as '${relId}'`);
+				return;
+			}
+			if (!forwardDup) {
+				await addRelation(this.plugin, sourceFile, targetFile, relId, strength, false);
+			}
+			if (symmetric && !reverseDup) {
+				await addRelation(this.plugin, targetFile, sourceFile, relId, strength, false);
+			}
+			await this.plugin.refreshGraphs();
+			this.showToast(
+				symmetric
+					? `Related edges created: ${sourceNode.label} ↔ ${targetNode.label} (${relId}, ${formatStrength(strength)})`
+					: `Edge created: ${sourceNode.label} → ${targetNode.label} (${relId}, ${formatStrength(strength)})`,
+			);
+		} catch (err) {
+			this.showToast(`Edge failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
 
 	private toggleNodeSelection(i: number): void {
 		const node = this.nodes[i];
@@ -3537,6 +3672,14 @@ export class SemanticHologramView extends ItemView {
 			this.ctrlPressed = true;
 			if (this.hoverIndex >= 0) {
 				this.showPreviewCard();
+			} else if (
+				this.hoveredEdge &&
+				!this.edgeDraggingSourceNode &&
+				// Guard against key auto-repeat clobbering a card being interacted with.
+				!this.edgeTooltipEl?.classList.contains('is-hovering')
+			) {
+				// 3D draws the edge card from pointermove only, so reveal it here too.
+				this.drawEdgeTooltip(this.hoveredEdge);
 			}
 		}
 		if (e.key === 'Shift') {
@@ -3719,7 +3862,7 @@ private selectHovered(): void {
 		this.viewX = tx - w / (2 * this.viewScale);
 		this.viewY = ty - h / (2 * this.viewScale);
 		console.log(`[SH] centerSelectedOnOrigin: view=(${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}) scale=${this.viewScale.toFixed(3)}`);
-		this.autoFitCooldown = PHYS.fitCooldown;
+		this.markViewAdjusted();
 	}
 
 	private async takeScreenshot(): Promise<void> {
@@ -3823,6 +3966,9 @@ private selectHovered(): void {
 			if (!this.activePreviewCard?.matches(':hover')) {
 				this.hidePreviewCard();
 			}
+			if (!this.edgeTooltipEl?.classList.contains('is-hovering')) {
+				this.hideEdgeTooltip();
+			}
 		}
 		if (e.key === 'Shift') {
 			this.shiftDown = false;
@@ -3876,7 +4022,7 @@ private selectHovered(): void {
 		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - sx / this.viewScale;
 		this.viewY = worldY - sy / this.viewScale;
-		this.autoFitCooldown = PHYS.fitCooldown;
+		this.markViewAdjusted();
 	};
 
 	private hitTestEdge(e: PointerEvent): GraphLink | null {

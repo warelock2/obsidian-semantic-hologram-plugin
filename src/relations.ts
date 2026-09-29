@@ -60,7 +60,9 @@ export interface NoteFrontmatter {
 }
 
 export const RELATION_HEADER = /^#{1,6}\s+(Relations(?:hips)?|Relationship)\s*$/i;
-export const INCOMING_HEADER = /^#{1,6}\s+Incoming\s+Relations(?:hips)?\s*$/i;
+// Tolerate a trailing note on the heading (e.g. `## Incoming Relationships (read only)`)
+// so annotated headings are synced into instead of spawning a duplicate section.
+export const INCOMING_HEADER = /^#{1,6}\s+Incoming\s+Relations(?:hips)?\s*(?:\([^)]*\))?\s*$/i;
 export const GRAVITAS_HEADER = /^#{1,6}\s+Gravitas\s*$/i;
 export const CONFIDENCE_HEADER = /^#{1,6}\s+Confidence\s*$/i;
 

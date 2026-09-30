@@ -22,11 +22,7 @@ The camera assembly is defined by the following state variables:
 
 <div align="center">
 
-<br>
-
 ![Trackball Camera Geometry](./images/illustration-01.svg)
-
-<br>
 
 </div>
 

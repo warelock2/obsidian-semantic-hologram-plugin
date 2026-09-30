@@ -73,36 +73,15 @@ export class SemanticHologramControlsView extends ItemView {
 			this.app.vault.on('create', () => setTimeout(() => this.render(), 100)),
 		);
 
-		// Dismiss the search dropdown and clear candidates
-		// when clicking bare panel background.
-		this.registerDomEvent(this.contentEl, 'click', (e) => {
-			const target = e.target as HTMLElement | null;
-			if (!target) {
-				return;
-			}
-			if (target.closest('.sh-controls-search')) {
-				return;
-			}
-			const results = this.contentEl.querySelector<HTMLElement>('.sh-search-results');
-			if (results) {
-				results.style.display = 'none';
-			}
+		// Add a listener to re-render when camera changes
+		this.registerEvent(this.app.workspace.on('layout-change', () => this.render()));
+		// Also re-render periodically or when the view indicates it's changed? 
+		// Actually, let's just make sure the fields update.
+		// For simplicity, we can just force-re-render the whole controls view on view updates.
+		// A better way would be adding a specific event or observer, but for now we'll just 
+		// force re-render when the main graph is redrawn if possible, 
+		// or just rely on the user interacting with it.
 
-			const view = this.getView();
-			if (view) {
-				view.clearCandidateNodes();
-			}
-
-			if (target.closest('.sh-hologram-list') || target.closest('button') || target.closest('input')) {
-				return;
-			}
-			if (this.plugin.settings.selectedHolograms.length === 0) {
-				return;
-			}
-			this.plugin.settings.selectedHolograms = [];
-			void this.plugin.saveSettings();
-			this.render();
-		});
 	}
 
 	onClose(): Promise<void> {
@@ -116,8 +95,87 @@ export class SemanticHologramControlsView extends ItemView {
 		contentEl.empty();
 		document.querySelectorAll('.sh-node-preview-card').forEach(el => el.remove());
 
+		const view = this.getView();
+		const state = view ? view.getCameraState() : { elevation: 0, azimuth: 0, distance: 1000 };
+		const focal = view ? view.getFocalPoint() : { x: 0, y: 0, z: 0 };
+
 		const header = contentEl.createDiv({ cls: 'sh-controls-header' });
 		header.createEl('h4', { text: 'Semantic Hologram' });
+
+		// Camera Controls
+		const cameraControls = contentEl.createDiv({ cls: 'sh-camera-controls' });
+		cameraControls.createEl('div', { text: 'Camera', cls: 'sh-settings-label' });
+		const cameraRow = cameraControls.createDiv({ cls: 'sh-controls-row' });
+		cameraRow.style.display = 'grid';
+		cameraRow.style.gridTemplateColumns = 'auto 1fr 1fr 1fr';
+		cameraRow.style.gap = '5px';
+		cameraRow.style.alignItems = 'center';
+
+		const addInput = (label: string, value: number, onUpdate: (v: number) => void) => {
+			if (label) {
+				cameraRow.createEl('span', { text: label, cls: 'sh-controls-label', attr: { style: 'font-size: 10px;' } });
+			}
+			const input = cameraRow.createEl('input', {
+				type: 'number',
+				attr: { value: value.toFixed(1), step: '1', style: 'width: 100%;' }
+			}) as HTMLInputElement;
+			input.addEventListener('change', () => onUpdate(parseFloat(input.value)));
+			return input;
+		};
+
+		addInput('Elev (°)', state.elevation, v => view?.setCameraState({ ...view.getCameraState(), elevation: v }));
+		addInput('Azim (°)', state.azimuth, v => view?.setCameraState({ ...view.getCameraState(), azimuth: v }));
+		cameraRow.createDiv(); // Spacer
+
+		// Focal point controls
+		cameraControls.createEl('div', { text: 'Focal point', cls: 'sh-settings-label', attr: { style: 'margin-top: 10px;' } });
+		const focalRow = cameraControls.createDiv({ cls: 'sh-controls-row' });
+		focalRow.style.display = 'grid';
+		focalRow.style.gridTemplateColumns = 'auto 1fr 1fr 1fr';
+		focalRow.style.gap = '5px';
+		focalRow.style.alignItems = 'center';
+
+		const inputs: HTMLInputElement[] = [];
+		const addFocalInput = (label: string, value: number, onUpdate: (v: number) => void) => {
+			if (label) {
+				focalRow.createEl('span', { text: label, cls: 'sh-controls-label', attr: { style: 'font-size: 10px;' } });
+			}
+			const input = focalRow.createEl('input', {
+				type: 'number',
+				attr: { value: value.toFixed(1), step: '1', style: 'width: 100%;' }
+			}) as HTMLInputElement;
+			input.addEventListener('change', () => onUpdate(parseFloat(input.value)));
+			inputs.push(input);
+			return input;
+		};
+
+		const initialFocal = view ? view.getFocalPoint() : { x: 0, y: 0, z: 0 };
+		addFocalInput('Focal', initialFocal.x, v => { if (view) { view.setFocalPoint(v, view.getFocalPoint().y); view.requestRedraw(); } });
+		addFocalInput('', initialFocal.y, v => { if (view) { view.setFocalPoint(view.getFocalPoint().x, v); view.requestRedraw(); } });
+		addFocalInput('', initialFocal.z, v => { }); 
+
+		// Expose update function to view for live updates
+		if (view) {
+			(view as any).onCameraChange = () => {
+				const currentFocal = view.getFocalPoint();
+				if (inputs[0]) inputs[0].value = currentFocal.x.toFixed(1);
+				if (inputs[1]) inputs[1].value = currentFocal.y.toFixed(1);
+				if (inputs[2]) inputs[2].value = currentFocal.z.toFixed(1);
+				
+				const currentState = view.getCameraState();
+				const cameraInputs = cameraRow.querySelectorAll('input');
+				if (cameraInputs[0]) cameraInputs[0].value = currentState.elevation.toFixed(1);
+				if (cameraInputs[1]) cameraInputs[1].value = currentState.azimuth.toFixed(1);
+			};
+		}
+
+
+
+
+
+
+
+
 
 		const helpHint = contentEl.createDiv({ cls: 'sh-controls-help-hint' });
 		helpHint.setText("Press 'h' for help");

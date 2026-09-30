@@ -210,8 +210,6 @@ export class SemanticHologramView extends ItemView {
 	private viewY = 0;
 	private viewScale = 1;
 	private target: [number, number, number] = [0, 0, 0];
-	private azimuth = 0;
-	private elevation = Math.PI / 6;
 	private distance = 1000;
 	private panTarget: [number, number, number] = [0, 0, 0];
 	private baseCameraDistance = 1000;
@@ -447,44 +445,41 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	private getEyePosition(): [number, number, number] {
-		const cosPhi = Math.cos(this.elevation);
-		const sinPhi = Math.sin(this.elevation);
-		const cosTheta = Math.cos(this.azimuth);
-		const sinTheta = Math.sin(this.azimuth);
+		// Forward vector is the third row of the rotation matrix (m6, m7, m8)
+		const fx = this.rotM[6] ?? 0;
+		const fy = this.rotM[7] ?? 0;
+		const fz = this.rotM[8] ?? 1;
 
+		// Camera eye is T - R * F
 		return [
-			this.target[0] + this.distance * cosPhi * sinTheta,
-			this.target[1] + this.distance * sinPhi,
-			this.target[2] + this.distance * cosPhi * cosTheta,
+			this.target[0] - this.cameraDistance * fx,
+			this.target[1] - this.cameraDistance * fy,
+			this.target[2] - this.cameraDistance * fz,
 		];
 	}
 
 	private updateCameraMatrix(): void {
-		const E = this.getEyePosition();
-		const T = this.target;
+		// Gram-Schmidt re-orthonormalization to prevent drift over time
+		const m = this.rotM;
+		let rx = m[0] ?? 1, ry = m[1] ?? 0, rz = m[2] ?? 0;
+		let ux = m[3] ?? 0, uy = m[4] ?? 1, uz = m[5] ?? 0;
 
-		const fx = T[0] - E[0];
-		const fy = T[1] - E[1];
-		const fz = T[2] - E[2];
-		const fLen = Math.hypot(fx, fy, fz) || 1;
-		const F = [fx / fLen, fy / fLen, fz / fLen];
-
-		const up = [0, 1, 0];
-
-		const rx = (F[1] ?? 0) * (up[2] ?? 0) - (F[2] ?? 0) * (up[1] ?? 0);
-		const ry = (F[2] ?? 0) * (up[0] ?? 0) - (F[0] ?? 0) * (up[2] ?? 0);
-		const rz = (F[0] ?? 0) * (up[1] ?? 0) - (F[1] ?? 0) * (up[0] ?? 0);
 		const rLen = Math.hypot(rx, ry, rz) || 1;
-		const R = [rx / rLen, ry / rLen, rz / rLen];
+		rx /= rLen; ry /= rLen; rz /= rLen;
 
-		const ux = (R[1] ?? 0) * (F[2] ?? 0) - (R[2] ?? 0) * (F[1] ?? 0);
-		const uy = (R[2] ?? 0) * (F[0] ?? 0) - (R[0] ?? 0) * (F[2] ?? 0);
-		const uz = (R[0] ?? 0) * (F[1] ?? 0) - (R[1] ?? 0) * (F[0] ?? 0);
+		const proj = rx * ux + ry * uy + rz * uz;
+		ux -= proj * rx; uy -= proj * ry; uz -= proj * rz;
+		const uLen = Math.hypot(ux, uy, uz) || 1;
+		ux /= uLen; uy /= uLen; uz /= uLen;
+
+		const fx = ry * uz - rz * uy;
+		const fy = rz * ux - rx * uz;
+		const fz = rx * uy - ry * ux;
 
 		this.rotM = [
-			R[0]!, R[1]!, R[2]!,
-			ux,    uy,    uz,
-			F[0]!, F[1]!, F[2]!,
+			rx, ry, rz,
+			ux, uy, uz,
+			fx, fy, fz,
 		];
 	}
 
@@ -555,7 +550,7 @@ export class SemanticHologramView extends ItemView {
 		const m = this.rotM;
 		const x2 = (m[0] ?? 0) * px + (m[1] ?? 0) * py + (m[2] ?? 0) * pz;
 		const y2 = (m[3] ?? 0) * px + (m[4] ?? 0) * py + (m[5] ?? 0) * pz;
-		const z2 = (m[6] ?? 0) * px + (m[7] ?? 0) * py + (m[8] ?? 0) * pz;
+		const z2 = -((m[6] ?? 0) * px + (m[7] ?? 0) * py + (m[8] ?? 0) * pz);
 		return { x: x2, y: y2, z: z2 };
 	}
 
@@ -1480,7 +1475,6 @@ export class SemanticHologramView extends ItemView {
 					this.target[0] -= panX;
 					this.target[1] -= panY;
 					this.target[2] -= panZ;
-					this.updateCameraMatrix();
 				} else {
 					this.viewX -= panX;
 					this.viewY += panY;
@@ -1662,10 +1656,8 @@ export class SemanticHologramView extends ItemView {
 
 		if (this.is3D) {
 			this.target = [0, 0, 0];
-			this.azimuth = 0;
-			this.elevation = Math.PI / 6;
-			this.distance = 1000;
-			this.updateCameraMatrix();
+			this.rotM = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+			this.cameraDistance = 1000;
 		} else {
 			this.rotM = [
 				1,  0,  0,
@@ -1717,10 +1709,34 @@ export class SemanticHologramView extends ItemView {
 		this.fitToView();
 	}
 
+	public getFocalPoint(): { x: number; y: number; z: number } {
+		const w = this.canvas?.clientWidth ?? 0;
+		const h = this.canvas?.clientHeight ?? 0;
+		if (this.is3D) {
+			return { x: this.target[0], y: this.target[1], z: this.target[2] };
+		}
+		// In 2D, translate screen center to world coordinates
+		const sx = w / 2;
+		const sy = h / 2;
+		return { x: this.toWorldX(sx), y: this.toWorldY(sy), z: 0 };
+	}
+
+	public setFocalPoint(x: number, y: number, z = 0): void {
+		if (this.is3D) {
+			this.target[0] = x;
+			this.target[1] = y;
+			this.target[2] = z;
+		} else {
+			this.viewX = x;
+			this.viewY = y;
+		}
+	}
+
 	/** Record that the user moved the camera, so the in-settle auto-fit stops fighting them. */
 	private markViewAdjusted(): void {
 		this.userAdjustedView = true;
 		this.autoFitCooldown = PHYS.fitCooldown;
+		this.refreshControlsPanel();
 	}
 
 	private updateCursor(): void {
@@ -1999,6 +2015,9 @@ export class SemanticHologramView extends ItemView {
 					const pA = rotated[item.face[0]!]!;
 					const pB = rotated[item.face[1]!]!;
 					const pC = rotated[item.face[2]!]!;
+					const depth = (item.z + maxAbsZ) / (2 * maxAbsZ || 1);
+					const opacity = Math.min(1.0, this.plugin.settings.facesOpacity * (0.3 + depth * 0.7));
+					ctx.fillStyle = this.withAlpha(this.plugin.settings.facesColor, opacity);
 					ctx.beginPath();
 					ctx.moveTo(this.toScreenX(pA.x), this.toScreenY(pA.y));
 					ctx.lineTo(this.toScreenX(pB.x), this.toScreenY(pB.y));
@@ -2432,14 +2451,20 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	private nodeScreenRadius(node: GraphNode, p: { x: number; y: number; z: number }, R: number, buffer = 0): number {
-		return Math.max(3, node.radius * this.viewScale) + buffer;
+		let depthScale = 1;
+		if (this.is3D && R > 0) {
+			const normZ = p.z / R;
+			depthScale = normZ <= 0 ? 0.25 + (normZ + 1) * 0.75 : 1.0 + normZ * 1.0;
+		}
+		return Math.max(3, node.radius * this.viewScale * depthScale) + buffer;
 	}
 
 	private edgeStroke(link: GraphLink, selCount: number, highlightedNodes?: Set<number>, distances?: Map<number, number>, edgeDepth?: number): string {
 		const hasHighlight = highlightedNodes !== undefined && highlightedNodes.size > 0;
 		let baseAlpha = 1.0;
 		if (this.is3D && edgeDepth !== undefined) {
-			baseAlpha = 0.25 + edgeDepth * 0.75;
+			const norm01 = (edgeDepth + 1) / 2;
+			baseAlpha = 0.25 + norm01 * 0.75;
 		}
 		if (!hasHighlight) {
 			if (selCount === 1) return this.withAlpha(link.edgeColor, Math.min(0.35, baseAlpha * 0.5));
@@ -2692,7 +2717,7 @@ export class SemanticHologramView extends ItemView {
 		};
 
 		if (this.is3D) {
-			const rx = this.rotatePoint(1, 0, 0, 0, 0, 0);
+			const rx = this.rotatePoint(-1, 0, 0, 0, 0, 0);
 			const ry = this.rotatePoint(0, 1, 0, 0, 0, 0);
 			const rz = this.rotatePoint(0, 0, 1, 0, 0, 0);
 			drawAxis(rx.x, rx.y, 'x');
@@ -2914,8 +2939,10 @@ export class SemanticHologramView extends ItemView {
 			this.lastRotY = dyNow;
 			const sensitivity = 0.005;
 			if (this.is3D) {
-				this.azimuth -= ddx * sensitivity;
-				this.elevation = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, this.elevation + ddy * sensitivity));
+				const R_y = this.getRotationMatrixAboutAxis([0, 1, 0], ddx * sensitivity);
+				const R_x = this.getRotationMatrixAboutAxis([1, 0, 0], -ddy * sensitivity);
+				this.rotM = this.multiplyMatrices(R_y, this.rotM);
+				this.rotM = this.multiplyMatrices(this.rotM, R_x);
 				this.updateCameraMatrix();
 			} else {
 				this.rotateAboutAxis([0, 1, 0], ddx * sensitivity);
@@ -3177,8 +3204,10 @@ export class SemanticHologramView extends ItemView {
 			this.lastRotY = dyNow;
 			const sensitivity = 0.005;
 			if (this.is3D) {
-				this.azimuth -= ddx * sensitivity;
-				this.elevation = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, this.elevation + ddy * sensitivity));
+				const R_y = this.getRotationMatrixAboutAxis([0, 1, 0], ddx * sensitivity);
+				const R_x = this.getRotationMatrixAboutAxis([1, 0, 0], -ddy * sensitivity);
+				this.rotM = this.multiplyMatrices(R_y, this.rotM);
+				this.rotM = this.multiplyMatrices(this.rotM, R_x);
 				this.updateCameraMatrix();
 			} else {
 				this.rotateAboutAxis([0, 1, 0], ddx * sensitivity);
@@ -3819,6 +3848,10 @@ export class SemanticHologramView extends ItemView {
 		if (e.key === 'PrintScreen' && !e.repeat) {
 			e.preventDefault();
 			void this.takeScreenshot();
+		} else if (key === '1' && !e.repeat) {
+			const R_x = this.getRotationMatrixAboutAxis([1, 0, 0], Math.PI);
+			this.rotM = this.multiplyMatrices(this.rotM, R_x);
+			this.updateCameraMatrix();
 		} else if (key === 'h' && !e.repeat) {
 			e.preventDefault();
 			this.showHelp();
@@ -4110,6 +4143,17 @@ private selectHovered(): void {
 		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - sx / this.viewScale;
 		this.viewY = worldY - sy / this.viewScale;
+
+		if (this.is3D) {
+			const forward = [this.rotM[6] ?? 0, this.rotM[7] ?? 0, this.rotM[8] ?? 0];
+			const dollyAmount = dy * 2;
+			if (forward[0] !== undefined && forward[1] !== undefined && forward[2] !== undefined) {
+				this.target[0] += forward[0] * dollyAmount;
+				this.target[1] += forward[1] * dollyAmount;
+				this.target[2] += forward[2] * dollyAmount;
+			}
+		}
+
 		this.markViewAdjusted();
 	};
 
@@ -4252,7 +4296,9 @@ private selectHovered(): void {
 	/** Re-render the controls panel so its merge/split mode buttons reflect hotkey toggles. */
 	refreshControlsPanel(): void {
 		for (const leaf of this.app.workspace.getLeavesOfType('semantic-hologram-controls')) {
-			(leaf.view as { render?: () => void }).render?.();
+			const view = leaf.view as any;
+			if (view.render) view.render();
+			if (view.onCameraChange) view.onCameraChange();
 		}
 	}
 
@@ -4264,7 +4310,53 @@ private selectHovered(): void {
 		// Implement later
 	}
 
+	public setCameraState(state: { elevation: number; azimuth: number; distance: number }): void {
+		console.log('setCameraState', state);
+		const elevRad = state.elevation * Math.PI / 180;
+		const azimRad = state.azimuth * Math.PI / 180;
+
+		const F = [
+			Math.cos(elevRad) * Math.sin(azimRad),
+			-Math.sin(elevRad),
+			Math.cos(elevRad) * Math.cos(azimRad)
+		];
+		
+		const up = [0, 1, 0];
+		let rx = (F[1] ?? 0) * (up[2] ?? 0) - (F[2] ?? 0) * (up[1] ?? 0);
+		let ry = (F[2] ?? 0) * (up[0] ?? 0) - (F[0] ?? 0) * (up[2] ?? 0);
+		let rz = (F[0] ?? 0) * (up[1] ?? 0) - (F[1] ?? 0) * (up[0] ?? 0);
+		const lenR = Math.hypot(rx, ry, rz) || 1;
+		rx /= lenR; ry /= lenR; rz /= lenR;
+		
+		const ux = ry * (F[2] ?? 0) - rz * (F[1] ?? 0);
+		const uy = rz * (F[0] ?? 0) - rx * (F[2] ?? 0);
+		const uz = rx * (F[1] ?? 0) - ry * (F[0] ?? 0);
+		
+		this.rotM = [
+			rx, ry, rz,
+			ux, uy, uz,
+			F[0] ?? 0, F[1] ?? 0, F[2] ?? 0
+		];
+		this.cameraDistance = state.distance;
+		this.updateCameraMatrix();
+		this.markViewAdjusted();
+	}
+
+	public getCameraState(): { elevation: number; azimuth: number; distance: number } {
+		const F = [(this.rotM[6] ?? 0), (this.rotM[7] ?? 0), (this.rotM[8] ?? 0)];
+		const azimuth = Math.atan2(F[0] ?? 0, F[2] ?? 0) * 180 / Math.PI;
+		const elevation = Math.asin(-(F[1] ?? 0)) * 180 / Math.PI;
+		const res = {
+			elevation: Math.round(elevation),
+			azimuth: Math.round(azimuth),
+			distance: Math.round(this.cameraDistance ?? 0)
+		};
+		console.log('getCameraState', res, 'F', F);
+		return res;
+	}
+
 	async dumpGraphState(): Promise<string> {
+		console.log('[SH] DUMPING GRAPH STATE, target:', this.target);
 		const dir = this.plugin.manifest.dir ?? '.obsidian/plugins/semantic-hologram';
 		const path = `${dir}/graph-state.json`;
 		const state = {
@@ -4276,20 +4368,21 @@ private selectHovered(): void {
 			baseCameraDistance: this.baseCameraDistance,
 			viewX: this.viewX,
 			viewY: this.viewY,
+			target: this.target,
 			canvas: {
 				width: this.canvas?.clientWidth ?? 0,
 				height: this.canvas?.clientHeight ?? 0,
 				dpr: window.devicePixelRatio,
 			},
 			mode: this.plugin.settings.hologramMode,
-			rotM: this.rotM.map(v => Math.round(v * 1000) / 1000),
-			totalSpin: Math.round(this.totalSpin * 1000) / 1000,
-			nodeCount: this.nodes.length,
-			linkCount: this.links.length,
-			avgEdgeLength: Math.round(this.avgEdgeLength() * 10) / 10,
+			rotM: (this.rotM ?? []).map(v => Math.round(v * 1000) / 1000),
+			totalSpin: Math.round((this.totalSpin ?? 0) * 1000) / 1000,
+			nodeCount: this.nodes?.length ?? 0,
+			linkCount: this.links?.length ?? 0,
+			avgEdgeLength: Math.round((this.avgEdgeLength?.() ?? 0) * 10) / 10,
 			restLengthScaled:
-				Math.round((this.links.reduce((s, l) => s + l.restLen, 0) / Math.max(1, this.links.length)) * this.scale * 10) / 10,
-			worldR: Math.round(this.worldR() * 10) / 10,
+				Math.round(((this.links?.reduce((s, l) => s + (l.restLen ?? 0), 0) ?? 0) / Math.max(1, this.links?.length ?? 1)) * (this.scale ?? 1) * 10) / 10,
+			worldR: Math.round((this.worldR?.() ?? 0) * 10) / 10,
 			settleEnergy: PHYS.settleEnergy,
 			forceSettleFrames: PHYS.forceSettleFrames,
 			nodes: this.nodes.slice(0, 200).map((n) => ({

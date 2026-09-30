@@ -39,8 +39,14 @@ Panning slides the virtual screen along its local Right ($R_v$) and Up ($U_v$) a
 ### C. Rig Assembly Dolly (Constant-Distance Forward/Backward Movement)
 Traditional perspective/orbit zoom alters the distance between the camera and the target. In this system, the stand-off distance ($R$) remains strictly fixed. Dollying translates both the camera eye $E$ and focal point $T$ simultaneously along the camera's Forward vector ($F$) as a rigid assembly, moving the viewpoint deeper into or out of the 3D world.
 
-### D. Defined Home Position & Reset State
-A designated reset configuration restoring the default orientation matrix (`defaultRotM`), default focal point (`[0, 0, 0]`), and default view scale ($S$), providing an instant snap-back to baseline framing.
+### D. Defined Home Position & Reset State & Cartesian Angle Conventions
+A designated reset configuration restoring the default Cartesian orientation matrix where world +X points to the virtual screen's **Right**, world +Y points to the virtual screen's **Up**, and world +Z points directly toward the **Camera**:
+$$R_{rot, home} = \begin{bmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & -1 \end{bmatrix}$$
+Focal point is at $(0,0,0)$ and view scale is $S$. 
+
+Furthermore, Azimuth and Elevation follow a **$0^\circ$ to $360^\circ$ continuous Cartesian range**:
+- **Azimuth ($0^\circ \text{--} 360^\circ$):** Starts at $0^\circ$ at home and initially increases in the direction of the virtual screen's **+X axis**. Negative or overflowing values wrap around automatically via modulo arithmetic ($val \pmod{360}$).
+- **Elevation ($0^\circ \text{--} 360^\circ$):** Starts at $0^\circ$ at home and initially increases in the direction of the virtual screen's **+Y axis**, supporting unconstrained continuous rotation.
 
 ### E. Select-Drag Interaction
 Projecting 2D mouse drags onto a plane parallel to the virtual screen surface, translating selected 3D world objects' absolute coordinates in lockstep with the cursor using the camera's orientation matrix.

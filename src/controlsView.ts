@@ -152,7 +152,7 @@ export class SemanticHologramControlsView extends ItemView {
 		const initialFocal = view ? view.getFocalPoint() : { x: 0, y: 0, z: 0 };
 		addFocalInput('Focal', initialFocal.x, v => { if (view) { view.setFocalPoint(v, view.getFocalPoint().y); view.requestRedraw(); } });
 		addFocalInput('', initialFocal.y, v => { if (view) { view.setFocalPoint(view.getFocalPoint().x, v); view.requestRedraw(); } });
-		addFocalInput('', initialFocal.z, v => { }); 
+		addFocalInput('', initialFocal.z, v => { if (view) { view.setFocalPoint(view.getFocalPoint().x, view.getFocalPoint().y, v); view.requestRedraw(); } }); 
 
 		// Expose update function to view for live updates
 		if (view) {
@@ -583,7 +583,7 @@ export class SemanticHologramControlsView extends ItemView {
 		});
 
 		const centerRow = contentEl.createDiv({ cls: 'sh-controls-row' });
-		centerRow.createEl('span', { text: 'Show rotation center', cls: 'sh-controls-label' });
+		centerRow.createEl('span', { text: 'Show indicators', cls: 'sh-controls-label' });
 		const centerCheckbox = centerRow.createEl('input', { type: 'checkbox' }) as HTMLInputElement;
 		centerCheckbox.checked = this.plugin.settings.showRotationCenter;
 		centerCheckbox.addEventListener('change', () => {

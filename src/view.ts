@@ -197,6 +197,16 @@ export class SemanticHologramView extends ItemView {
 	private panStartX = 0;
 	private panStartY = 0;
 	private panViewX = 0;
+	private currentElevation: number = 0;
+	private currentAzimuth: number = 0;
+
+	get elevation(): number {
+		return this.currentElevation;
+	}
+
+	get azimuth(): number {
+		return this.currentAzimuth;
+	}
 	private panViewY = 0;
 	private panRotCx = 0;
 	private panRotCy = 0;
@@ -481,6 +491,7 @@ export class SemanticHologramView extends ItemView {
 			ux, uy, uz,
 			fx, fy, fz,
 		];
+		this.updateAnglesFromMatrix();
 	}
 
 	private viewCenterWorld(): { x: number; y: number; z: number } {
@@ -1656,8 +1667,9 @@ export class SemanticHologramView extends ItemView {
 
 		if (this.is3D) {
 			this.target = [0, 0, 0];
-			this.rotM = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+			this.rotM = [1, 0, 0, 0, -1, 0, 0, 0, -1];
 			this.cameraDistance = 1000;
+			this.updateAnglesFromMatrix();
 		} else {
 			this.rotM = [
 				1,  0,  0,
@@ -1669,6 +1681,7 @@ export class SemanticHologramView extends ItemView {
 			this.rotCy = 0;
 			this.rotCz = 0;
 			this.camZ = 0;
+			this.updateAnglesFromMatrix();
 		}
 
 		const visibleNodes = this.nodes.filter((node) => this.nodeMatchesSelectedHolograms(node));
@@ -1703,6 +1716,7 @@ export class SemanticHologramView extends ItemView {
 		}
 
 		console.log(`[SH] fitToView (Home Position): visibleNodes=${visibleNodes.length}/${this.nodes.length} canvas=${w}x${h} view=(${this.is3D ? this.target : `${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}`}) scale=${this.viewScale.toFixed(3)}`);
+		this.markViewAdjusted();
 	}
 
 	private resetView(): void {
@@ -1733,10 +1747,12 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	/** Record that the user moved the camera, so the in-settle auto-fit stops fighting them. */
-	private markViewAdjusted(): void {
+	private markViewAdjusted(skipControls = false): void {
 		this.userAdjustedView = true;
 		this.autoFitCooldown = PHYS.fitCooldown;
-		this.refreshControlsPanel();
+		if (!skipControls) {
+			this.refreshControlsPanel();
+		}
 	}
 
 	private updateCursor(): void {
@@ -2650,14 +2666,11 @@ export class SemanticHologramView extends ItemView {
 	private drawOriginIndicator(): void {
 		const ctx = this.ctx;
 		const canvas = this.canvas;
-		if (!ctx || !canvas || !this.plugin.settings.showRotationCenter) {
+		if (!ctx || !canvas) {
 			return;
 		}
 		const w = canvas.clientWidth;
 		const h = canvas.clientHeight;
-		const origin = this.rotatePoint(0, 0, 0, this.target[0], this.target[1], this.target[2]);
-		let ix = this.toScreenX(origin.x);
-		let iy = this.toScreenY(origin.y);
 
 		if (this.is3D) {
 			const cx = w / 2;
@@ -2688,6 +2701,14 @@ export class SemanticHologramView extends ItemView {
 			ctx.restore();
 		}
 
+		if (!this.plugin.settings.showRotationCenter) {
+			return;
+		}
+
+		const origin = this.rotatePoint(0, 0, 0, this.target[0], this.target[1], this.target[2]);
+		let ix = this.toScreenX(origin.x);
+		let iy = this.toScreenY(origin.y);
+
 		const s = 13;
 		ctx.lineWidth = 1.25;
 		ctx.strokeStyle = this.withAlpha(this.labelColor, 0.85);
@@ -2717,26 +2738,39 @@ export class SemanticHologramView extends ItemView {
 		};
 
 		if (this.is3D) {
-			const rx = this.rotatePoint(-1, 0, 0, 0, 0, 0);
+			const rx = this.rotatePoint(1, 0, 0, 0, 0, 0);
 			const ry = this.rotatePoint(0, 1, 0, 0, 0, 0);
-			const rz = this.rotatePoint(0, 0, 1, 0, 0, 0);
+			const rz = this.rotatePoint(0, 0, -1, 0, 0, 0);
 			drawAxis(rx.x, rx.y, 'x');
 			drawAxis(ry.x, ry.y, 'y');
 			drawAxis(rz.x, rz.y, 'z');
 
-			// Focal Point Indicator (aligned with virtual screen XY plane)
-			const fx = this.toScreenX(this.rotCx);
-			const fy = this.toScreenY(this.rotCy);
-			const ixSaved = ix;
-			const iySaved = iy;
-			ix = fx;
-			iy = fy;
-			ctx.strokeStyle = this.withAlpha('rgba(255, 100, 100, 1)', 0.85);
-			ctx.fillStyle = this.withAlpha('rgba(255, 100, 100, 1)', 0.92);
-			drawAxis(1, 0, 'Xf');
-			drawAxis(0, -1, 'Yf');
-			ix = ixSaved;
-			iy = iySaved;
+			// Focal Point Indicator (red crosshair with whitespace in the center at viewport midpoint)
+			const w = this.canvas?.clientWidth ?? 800;
+			const h = this.canvas?.clientHeight ?? 600;
+			const cx = w / 2;
+			const cy = h / 2;
+			const gap = 8;
+			const len = 8;
+
+			ctx.save();
+			ctx.strokeStyle = 'rgba(255, 0, 0, 0.9)';
+			ctx.lineWidth = 1.5;
+			ctx.beginPath();
+			// Top line
+			ctx.moveTo(cx, cy - gap - len);
+			ctx.lineTo(cx, cy - gap);
+			// Bottom line
+			ctx.moveTo(cx, cy + gap);
+			ctx.lineTo(cx, cy + gap + len);
+			// Left line
+			ctx.moveTo(cx - gap - len, cy);
+			ctx.lineTo(cx - gap, cy);
+			// Right line
+			ctx.moveTo(cx + gap, cy);
+			ctx.lineTo(cx + gap + len, cy);
+			ctx.stroke();
+			ctx.restore();
 		} else {
 			drawAxis(1, 0, 'x');
 			drawAxis(0, 1, 'y');
@@ -3871,13 +3905,6 @@ export class SemanticHologramView extends ItemView {
 			this.autoRotating = nextMode;
 			const label = nextMode === 'off' ? 'Rotation off' : nextMode === 'cw' ? 'CW rotation' : 'CCW rotation';
 			this.showToast(label);
-		} else if (key === 'g' && !e.repeat) {
-			console.log('[SH] g key pressed, isRecording:', this.isRecording, 'isEncoding:', this.isEncoding);
-			if (this.isRecording || this.isEncoding) {
-				this.showToast('GIF generation in progress');
-			} else {
-				this.startRecording();
-			}
 		} else if (key === 's' && e.shiftKey && !e.repeat) {
 			e.preventDefault();
 			this.plugin.settings.splitMode = this.plugin.settings.splitMode === 'move' ? 'copy' : 'move';
@@ -4310,49 +4337,51 @@ private selectHovered(): void {
 		// Implement later
 	}
 
-	public setCameraState(state: { elevation: number; azimuth: number; distance: number }): void {
-		console.log('setCameraState', state);
-		const elevRad = state.elevation * Math.PI / 180;
-		const azimRad = state.azimuth * Math.PI / 180;
+	private updateAnglesFromMatrix(): void {
+		const F = [(this.rotM[6] ?? 0), (this.rotM[7] ?? 0), (this.rotM[8] ?? 0)];
+		let azimDeg = (Math.atan2(F[0] ?? 0, F[2] ?? 0) * 180 / Math.PI) - 180;
+		azimDeg = (azimDeg % 360 + 360) % 360;
+		this.currentAzimuth = Math.round(azimDeg);
+		this.currentElevation = Math.round(Math.asin(-(F[1] ?? 0)) * 180 / Math.PI);
+		console.log('updateAnglesFromMatrix', { elev: this.currentElevation, azim: this.currentAzimuth });
+	}
 
-		const F = [
-			Math.cos(elevRad) * Math.sin(azimRad),
-			-Math.sin(elevRad),
-			Math.cos(elevRad) * Math.cos(azimRad)
-		];
+	public setCameraState(state: { elevation: number; azimuth: number; distance: number }): void {
+		// Normalize to 0-360 range with wrap-around
+		let elev = state.elevation % 360;
+		if (elev < 0) elev += 360;
+		let azim = state.azimuth % 360;
+		if (azim < 0) azim += 360;
+
+		if (elev === this.currentElevation && azim === this.currentAzimuth && state.distance === this.cameraDistance) {
+			return;
+		}
+		console.log('setCameraState', { elevation: elev, azimuth: azim, distance: state.distance });
+		this.currentElevation = elev;
+		this.currentAzimuth = azim;
+
+		const elevRad = elev * Math.PI / 180;
+		const azimRad = azim * Math.PI / 180;
+
+		const R_y = this.getRotationMatrixAboutAxis([0, 1, 0], azimRad);
+		const R_x = this.getRotationMatrixAboutAxis([1, 0, 0], -elevRad);
 		
-		const up = [0, 1, 0];
-		let rx = (F[1] ?? 0) * (up[2] ?? 0) - (F[2] ?? 0) * (up[1] ?? 0);
-		let ry = (F[2] ?? 0) * (up[0] ?? 0) - (F[0] ?? 0) * (up[2] ?? 0);
-		let rz = (F[0] ?? 0) * (up[1] ?? 0) - (F[1] ?? 0) * (up[0] ?? 0);
-		const lenR = Math.hypot(rx, ry, rz) || 1;
-		rx /= lenR; ry /= lenR; rz /= lenR;
+		const homeMatrix = [1, 0, 0, 0, -1, 0, 0, 0, -1];
+		let m = this.multiplyMatrices(R_y, homeMatrix);
+		m = this.multiplyMatrices(m, R_x);
 		
-		const ux = ry * (F[2] ?? 0) - rz * (F[1] ?? 0);
-		const uy = rz * (F[0] ?? 0) - rx * (F[2] ?? 0);
-		const uz = rx * (F[1] ?? 0) - ry * (F[0] ?? 0);
+		this.rotM = m;
 		
-		this.rotM = [
-			rx, ry, rz,
-			ux, uy, uz,
-			F[0] ?? 0, F[1] ?? 0, F[2] ?? 0
-		];
 		this.cameraDistance = state.distance;
-		this.updateCameraMatrix();
-		this.markViewAdjusted();
+		this.markViewAdjusted(true);
 	}
 
 	public getCameraState(): { elevation: number; azimuth: number; distance: number } {
-		const F = [(this.rotM[6] ?? 0), (this.rotM[7] ?? 0), (this.rotM[8] ?? 0)];
-		const azimuth = Math.atan2(F[0] ?? 0, F[2] ?? 0) * 180 / Math.PI;
-		const elevation = Math.asin(-(F[1] ?? 0)) * 180 / Math.PI;
-		const res = {
-			elevation: Math.round(elevation),
-			azimuth: Math.round(azimuth),
+		return {
+			elevation: this.currentElevation,
+			azimuth: this.currentAzimuth,
 			distance: Math.round(this.cameraDistance ?? 0)
 		};
-		console.log('getCameraState', res, 'F', F);
-		return res;
 	}
 
 	async dumpGraphState(): Promise<string> {

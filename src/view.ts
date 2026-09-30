@@ -556,7 +556,7 @@ export class SemanticHologramView extends ItemView {
 		const x2 = (m[0] ?? 0) * px + (m[1] ?? 0) * py + (m[2] ?? 0) * pz;
 		const y2 = (m[3] ?? 0) * px + (m[4] ?? 0) * py + (m[5] ?? 0) * pz;
 		const z2 = (m[6] ?? 0) * px + (m[7] ?? 0) * py + (m[8] ?? 0) * pz;
-		return { x: x2 + cx, y: y2 + cy, z: z2 + cz };
+		return { x: x2, y: y2, z: z2 };
 	}
 
 	private inverseRotate(
@@ -567,14 +567,11 @@ export class SemanticHologramView extends ItemView {
 		cy = 0,
 		cz = 0,
 	): { x: number; y: number; z: number } {
-		const px = x - cx;
-		const py = y - cy;
-		const pz = z - cz;
 		// Transpose of rotM is inverse for orthogonal rotation matrix
 		const m = this.rotM;
-		const x2 = (m[0] ?? 0) * px + (m[3] ?? 0) * py + (m[6] ?? 0) * pz;
-		const y2 = (m[1] ?? 0) * px + (m[4] ?? 0) * py + (m[7] ?? 0) * pz;
-		const z2 = (m[2] ?? 0) * px + (m[5] ?? 0) * py + (m[8] ?? 0) * pz;
+		const x2 = (m[0] ?? 0) * x + (m[3] ?? 0) * y + (m[6] ?? 0) * z;
+		const y2 = (m[1] ?? 0) * x + (m[4] ?? 0) * y + (m[7] ?? 0) * z;
+		const z2 = (m[2] ?? 0) * x + (m[5] ?? 0) * y + (m[8] ?? 0) * z;
 		return { x: x2 + cx, y: y2 + cy, z: z2 + cz };
 	}
 
@@ -1451,42 +1448,42 @@ export class SemanticHologramView extends ItemView {
 			const isShift = this.shiftDown;
 
 			const m = this.rotM;
-			if (this.pressedKeys.has('ArrowLeft')) {
-				if (isShift) {
-					const delta = -rotSpeed;
-					this.rotateAboutAxis([0, 1, 0], delta);
-					this.totalSpin += delta;
-				} else {
-					this.viewX -= panSpeed * (m[0] ?? 1);
-					this.viewY -= panSpeed * (m[3] ?? 0);
-				}
+			const horiz = this.pressedKeys.has('ArrowRight') ? 1 : this.pressedKeys.has('ArrowLeft') ? -1 : 0;
+			const vert = this.pressedKeys.has('ArrowDown') ? 1 : this.pressedKeys.has('ArrowUp') ? -1 : 0;
+			if (this.pressedKeys.has('ArrowLeft') && isShift) {
+				const delta = -rotSpeed;
+				this.rotateAboutAxis([0, 1, 0], delta);
+				this.totalSpin += delta;
 			}
-			if (this.pressedKeys.has('ArrowRight')) {
-				if (isShift) {
-					const delta = rotSpeed;
-					this.rotateAboutAxis([0, 1, 0], delta);
-					this.totalSpin += delta;
-				} else {
-					this.viewX += panSpeed * (m[0] ?? 1);
-					this.viewY += panSpeed * (m[3] ?? 0);
-				}
+			if (this.pressedKeys.has('ArrowRight') && isShift) {
+				const delta = rotSpeed;
+				this.rotateAboutAxis([0, 1, 0], delta);
+				this.totalSpin += delta;
 			}
-			if (this.pressedKeys.has('ArrowUp')) {
-				if (isShift) {
-					const delta = rotSpeed;
-					this.rotateAboutAxis([1, 0, 0], delta);
-				} else {
-					this.viewX -= panSpeed * (m[1] ?? 0);
-					this.viewY -= panSpeed * (m[4] ?? 1);
-				}
+			if (this.pressedKeys.has('ArrowUp') && isShift) {
+				this.rotateAboutAxis([1, 0, 0], rotSpeed);
 			}
-			if (this.pressedKeys.has('ArrowDown')) {
-				if (isShift) {
-					const delta = -rotSpeed;
-					this.rotateAboutAxis([1, 0, 0], delta);
+			if (this.pressedKeys.has('ArrowDown') && isShift) {
+				this.rotateAboutAxis([1, 0, 0], -rotSpeed);
+			}
+			// rotM rows are [right, up, forward], so a screen-horizontal pan moves
+			// along the right row (m[0..2]) and a screen-vertical pan along the up
+			// row (m[3..5]) - the same mapping the mouse pan uses. Accumulate the
+			// delta first so diagonal key presses share a single matrix read.
+			if (!isShift && (horiz !== 0 || vert !== 0)) {
+				const panX = panSpeed * (horiz * (m[0] ?? 0) + vert * (m[3] ?? 0));
+				const panY = panSpeed * (horiz * (m[1] ?? 0) + vert * (m[4] ?? 0));
+				const panZ = panSpeed * (horiz * (m[2] ?? 0) + vert * (m[5] ?? 0));
+				// Negate so the content travels in the direction of the arrow, the
+				// same way the world follows the cursor during a mouse drag.
+				if (this.is3D) {
+					this.target[0] -= panX;
+					this.target[1] -= panY;
+					this.target[2] -= panZ;
+					this.updateCameraMatrix();
 				} else {
-					this.viewX += panSpeed * (m[1] ?? 0);
-					this.viewY += panSpeed * (m[4] ?? 1);
+					this.viewX -= panX;
+					this.viewY += panY;
 				}
 			}
 			this.markViewAdjusted();
@@ -3124,6 +3121,7 @@ export class SemanticHologramView extends ItemView {
 			this.panRotCy = this.rotCy;
 			this.panRotCz = this.rotCz;
 			this.panCamZ = this.camZ;
+			this.panTarget = [...this.target] as [number, number, number];
 			this.canvas?.setPointerCapture(e.pointerId);
 			this.markViewAdjusted();
 		}

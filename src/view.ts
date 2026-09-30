@@ -4339,7 +4339,7 @@ private selectHovered(): void {
 
 	private updateAnglesFromMatrix(): void {
 		const F = [(this.rotM[6] ?? 0), (this.rotM[7] ?? 0), (this.rotM[8] ?? 0)];
-		let azimDeg = Math.atan2(F[0] ?? 0, F[2] ?? 0) * 180 / Math.PI;
+		let azimDeg = (Math.atan2(F[0] ?? 0, F[2] ?? 0) * 180 / Math.PI) - 180;
 		azimDeg = (azimDeg % 360 + 360) % 360;
 		this.currentAzimuth = Math.round(azimDeg);
 		let elevDeg = Math.asin(F[1] ?? 0) * 180 / Math.PI;

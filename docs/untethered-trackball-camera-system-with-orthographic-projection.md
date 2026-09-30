@@ -41,12 +41,29 @@ Traditional perspective/orbit zoom alters the distance between the camera and th
 
 ### D. Defined Home Position & Reset State & Cartesian Angle Conventions
 A designated reset configuration restoring the default Cartesian orientation matrix where world +X points to the virtual screen's **Right**, world +Y points to the virtual screen's **Up**, and world +Z points directly toward the **Camera**:
-$$R_{rot, home} = \begin{bmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & -1 \end{bmatrix}$$
+$$R_{rot, home} = \begin{bmatrix} 1 & 0 & 0 \\ 0 & -1 & 0 \\ 0 & 0 & -1 \end{bmatrix}$$
 Focal point is at $(0,0,0)$ and view scale is $S$. 
 
 Furthermore, Azimuth and Elevation follow a **$0^\circ$ to $360^\circ$ continuous Cartesian range**:
 - **Azimuth ($0^\circ \text{--} 360^\circ$):** Starts at $0^\circ$ at home and initially increases in the direction of the virtual screen's **+X axis**. Negative or overflowing values wrap around automatically via modulo arithmetic ($val \pmod{360}$).
 - **Elevation ($0^\circ \text{--} 360^\circ$):** Starts at $0^\circ$ at home and initially increases in the direction of the virtual screen's **+Y axis**, supporting unconstrained continuous rotation.
+
+### E. Canvas-to-Cartesian Reorientation and Translation
+
+To bridge standard 2D HTML5 Canvas pixel coordinates (where Y increases **downward**) with true 3D Cartesian coordinates (where Y increases **upward**), the virtual screen orientation and projection mappings underwent a precise translation:
+
+1. **Y-Axis Inversion Bridge:**
+   - Standard 2D canvas layout: Origin $(0,0)$ at top-left; $+Y$ extends downwards.
+   - 3D Cartesian world space: Origin at $(0,0,0)$; $+Y$ extends upwards.
+   - **Reorientation:** The virtual screen's orientation matrix row 1 ($U_v$, local Up) was configured with a $-1$ scaling factor in screen-space mapping (`toScreenY` / `rotM`), ensuring that positive world Y coordinates project upward on the screen.
+
+2. **Axis Directions Relative to Virtual Screen:**
+   - **Right ($+X_{\text{world}}$):** Points towards the virtual screen's right edge.
+   - **Left ($-X_{\text{world}}$):** Points towards the virtual screen's left edge.
+   - **Up ($+Y_{\text{world}}$):** Points towards the virtual screen's top (upward direction).
+   - **Down ($-Y_{\text{world}}$):** Points towards the virtual screen's bottom (downward direction).
+   - **Forward/Toward Camera ($+Z_{\text{world}}$):** Points out of the screen directly toward the viewer/camera.
+   - **Backward/Away from Camera ($-Z_{\text{world}}$):** Points into the screen depth away from the viewer.
 
 ### E. Select-Drag Interaction
 Projecting 2D mouse drags onto a plane parallel to the virtual screen surface, translating selected 3D world objects' absolute coordinates in lockstep with the cursor using the camera's orientation matrix.

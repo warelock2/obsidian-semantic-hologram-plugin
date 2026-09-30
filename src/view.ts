@@ -4342,7 +4342,9 @@ private selectHovered(): void {
 		let azimDeg = (Math.atan2(F[0] ?? 0, F[2] ?? 0) * 180 / Math.PI) - 180;
 		azimDeg = (azimDeg % 360 + 360) % 360;
 		this.currentAzimuth = Math.round(azimDeg);
-		this.currentElevation = Math.round(Math.asin(-(F[1] ?? 0)) * 180 / Math.PI);
+		let elevDeg = Math.asin(-(F[1] ?? 0)) * 180 / Math.PI;
+		elevDeg = (elevDeg % 360 + 360) % 360;
+		this.currentElevation = Math.round(elevDeg);
 		console.log('updateAnglesFromMatrix', { elev: this.currentElevation, azim: this.currentAzimuth });
 	}
 

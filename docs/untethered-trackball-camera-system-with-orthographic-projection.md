@@ -20,6 +20,16 @@ The camera assembly is defined by the following state variables:
 * **Orthographic View Scale ($S$):** The half-width / zoom scale of the orthographic viewing volume.
 * **Virtual Screen:** A finite 2D rectangular surface centered at the camera eye (or aligned with the viewing plane) in 3D space, mapping pixel coordinates linearly to world space.
 
+<div align="center">
+
+<br>
+
+![Trackball Camera Geometry](./images/illustration-01.svg)
+
+<br>
+
+</div>
+
 ---
 
 ## 3. Core Interaction Mechanics

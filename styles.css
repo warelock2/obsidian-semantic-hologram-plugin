@@ -1167,7 +1167,7 @@
     opacity: 0.8;
 }
 
-.sh-map-zoom-controls {
+.sh-map-magnify-controls {
 	position: absolute;
 	bottom: 16px;
 	right: 16px;
@@ -1182,7 +1182,7 @@
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-.sh-map-zoom-btn {
+.sh-map-magnify-btn {
 	width: 28px;
 	height: 28px;
 	display: flex;
@@ -1196,7 +1196,7 @@
 	border-radius: 4px;
 }
 
-.sh-map-zoom-btn:hover {
+.sh-map-magnify-btn:hover {
 	background: var(--background-modifier-hover);
 }
 

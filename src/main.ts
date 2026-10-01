@@ -157,21 +157,21 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'zoom-in',
-			name: 'Zoom In',
+			name: 'Magnify (dolly in 3D)',
 			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: '=' }],
 			callback: () => {
 				const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
-				view?.zoomIn();
+				view?.magnify();
 			},
 		});
 
 		this.addCommand({
 			id: 'zoom-out',
-			name: 'Zoom Out',
+			name: 'Demagnify (dolly in 3D)',
 			hotkeys: [{ modifiers: ['Mod'], key: '-' }],
 			callback: () => {
 				const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
-				view?.zoomOut();
+				view?.demagnify();
 			},
 		});
 

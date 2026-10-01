@@ -149,14 +149,16 @@ The dolly is a pure translation along $F$. Because $F$ is orthogonal to the scre
 * **There is no zoom-to-cursor.** The cursor position is irrelevant to the result and must not influence $T$.
 * **There is no screen-plane compensation.** After a dolly, $T$ moves along $F$ only; its in-plane position is unchanged.
 
-Scroll wheel input is clamped to a legal $R$ range, and $T$ is likewise clamped to the bounds of the scene so the assembly cannot be walked out of the graph entirely.
+Scroll wheel input is clamped to a legal $R$ range, which bounds the total travel. $T$ is deliberately **not** clamped. Clamping it cannot achieve the goal such a clamp would appear to serve, because a dolly moves $T$ along $F$ and $R_v \perp F$, so $R_v \cdot \Delta T = 0$ and the projected scene is invariant under travel: there is no direction in which the graph could be walked out of view. A per-axis clamp on $T$ is actively harmful. Once engaged it pins $T$ while $R$ continues to change, so magnification alters with no accompanying travel — a scale about a *different* point than the focal point, which is precisely the zoom 5.4 forbids, and the focal point silently drifts as the scene rescales beneath it. Bound $R$ alone.
+
+$D$ accumulates onto the existing $T$; it must not be assigned. Since each dolly contributes $\Delta T = -\Delta D \cdot F$, a panned focal point must keep its pan while dollying. Assigning instead of accumulating discards the pan on the first wheel event.
 
 ### 5.5 Scroll-wheel dispatch
 
 * **Cursor over a node:** the wheel adjusts the maximum hover depth, not the camera. Camera state is untouched.
 * **Cursor over background:** the wheel dollies, per 5.3–5.4.
 
-The `+` / `−` camera buttons issue the same dolly in fixed increments and are not zoom controls in any other sense.
+The `+` / `−` camera buttons issue the same dolly in fixed increments and are not zoom controls in any other sense. They are named **Magnify** / **Demagnify** rather than "Zoom In" / "Zoom Out", since magnification is the observable effect in both modes while the underlying mechanism differs: a dolly along the line of sight in 3D, a scale about the canvas centre in 2D. Their tooltips state which mechanism is active. The `+` / `−` glyphs and command IDs are unchanged.
 
 ---
 

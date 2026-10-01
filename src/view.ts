@@ -188,6 +188,8 @@ export class SemanticHologramView extends ItemView {
 	private canvas: HTMLCanvasElement | null = null;
 	private ctx: CanvasRenderingContext2D | null = null;
 	private modeBanner: HTMLElement | null = null;
+	private magnifyBtn: HTMLButtonElement | null = null;
+	private demagnifyBtn: HTMLButtonElement | null = null;
 	private nodes: GraphNode[] = [];
 	private historyStack = new HistoryStack();
 	private links: GraphLink[] = [];
@@ -596,6 +598,7 @@ export class SemanticHologramView extends ItemView {
 		if (this.toolDock && mode === '2d' && this.tool === 'rotate') {
 			void this.plugin.setTool('navigate');
 		}
+		this.updateMagnifyTooltips();
 		this.updateToolDock();
 		this.updateCursor();
 	}
@@ -625,35 +628,61 @@ export class SemanticHologramView extends ItemView {
 
 		const prev = this.cameraDistance;
 		const next = Math.max(PHYS.dollyMin, Math.min(PHYS.dollyMax, prev / factor));
-		if (next === prev) {
+		// `next === prev` does not catch a poisoned state: NaN fails every
+		// comparison, so a NaN prev would sail through and keep writing NaN.
+		if (next === prev || !Number.isFinite(next) || !Number.isFinite(prev)) {
 			return;
 		}
 
 		// Travel the assembly along -d * F, where d is the change in standoff.
-		// Magnifying shrinks d below zero, so the focal point advances deeper
+		// Magnifying makes d below zero, so the focal point advances deeper
 		// into the graph rather than retreating out of it.
+		//
+		// This ACCUMULATES onto the existing target. It used to assign it, which
+		// silently discarded any prior pan: pan to target [-470, 0, 0] and then
+		// scroll, and the focal point snapped back to the dolly delta alone.
+		//
+		// T is deliberately NOT clamped. T travels only along F, and R_v is
+		// orthogonal to F, so R_v . dT = 0: the scene's screen position is
+		// invariant under a dolly and the graph cannot be walked out of view.
+		// An earlier per-axis clamp of T looked protective but was not — it
+		// pinned T on the first scroll-out and thereafter changed the
+		// magnification without any travel, i.e. exactly the zoom the spec
+		// forbids. The standoff bounds alone already bound the total travel.
 		const d = next - prev;
-		this.target[0] = this.clampFocal(-d * fx, 0);
-		this.target[1] = this.clampFocal(-d * fy, 1);
-		this.target[2] = this.clampFocal(-d * fz, 2);
+		this.target[0] += -d * fx;
+		this.target[1] += -d * fy;
+		this.target[2] += -d * fz;
 
 		this.cameraDistance = next;
 		this.viewScale = this.baseCameraDistance / next;
 		this.updateCameraMatrix();
 	}
 
-	/** Keep the focal point from being dollied clean out of the scene. */
-	private clampFocal(value: number, axis: 0 | 1 | 2): number {
-		let extent = 0;
-		for (const node of this.nodes) {
-			const v = axis === 0 ? node.x : axis === 1 ? node.y : node.z;
-			extent = Math.max(extent, Math.abs(v));
+	/**
+	 * The +/- buttons change magnification in both modes, but by different
+	 * mechanisms, so the tooltip says which one is in effect. Calling them
+	 * "Zoom In" in 3D was actively misleading: 3D has no zoom control.
+	 */
+	private updateMagnifyTooltips(): void {
+		const is3D = this.is3D;
+		if (this.magnifyBtn) {
+			this.magnifyBtn.title = is3D
+				? 'Magnify — dolly closer along the line of sight'
+				: 'Magnify — scale about the centre';
 		}
-		const limit = (extent > 0 ? extent : PHYS.baseSize) * 3;
-		return Math.max(-limit, Math.min(limit, value));
+		if (this.demagnifyBtn) {
+			this.demagnifyBtn.title = is3D
+				? 'Demagnify — dolly away along the line of sight'
+				: 'Demagnify — scale about the centre';
+		}
 	}
 
-	public zoomIn(): void {
+	/** Increase the magnification of the graph. In 3D this is a dolly along the
+	 * line of sight, not a zoom; in 2D it is a scale change about the canvas
+	 * centre. Named for the observable effect, which is the same in both modes.
+	 */
+	public magnify(): void {
 		if (this.is3D) {
 			this.dolly(PHYS.dollyStep);
 			this.markViewAdjusted();
@@ -672,7 +701,8 @@ export class SemanticHologramView extends ItemView {
 		this.markViewAdjusted();
 	}
 
-	public zoomOut(): void {
+	/** Decrease the magnification of the graph. See {@link magnify}. */
+	public demagnify(): void {
 		if (this.is3D) {
 			this.dolly(1 / PHYS.dollyStep);
 			this.markViewAdjusted();
@@ -719,18 +749,19 @@ export class SemanticHologramView extends ItemView {
 			'<div class="sh-cursor-icon"></div>';
 		this.cursorOverlay.style.display = 'none';
 
-		const zoomControls = container.createDiv({ cls: 'sh-map-zoom-controls' });
-		const btnIn = zoomControls.createEl('button', { text: '+', cls: 'sh-map-zoom-btn' });
-		btnIn.title = 'Zoom In';
-		btnIn.addEventListener('click', () => this.zoomIn());
+		const magnifyControls = container.createDiv({ cls: 'sh-map-magnify-controls' });
+		const btnIn = magnifyControls.createEl('button', { text: '+', cls: 'sh-map-magnify-btn' });
+		this.magnifyBtn = btnIn;
+		btnIn.addEventListener('click', () => this.magnify());
 
-		const btnFit = zoomControls.createEl('button', { text: '⌖', cls: 'sh-map-zoom-btn' });
+		const btnFit = magnifyControls.createEl('button', { text: '⌖', cls: 'sh-map-magnify-btn' });
 		btnFit.title = 'Fit to View';
 		btnFit.addEventListener('click', () => this.fitToView());
 
-		const btnOut = zoomControls.createEl('button', { text: '−', cls: 'sh-map-zoom-btn' });
-		btnOut.title = 'Zoom Out';
-		btnOut.addEventListener('click', () => this.zoomOut());
+		const btnOut = magnifyControls.createEl('button', { text: '−', cls: 'sh-map-magnify-btn' });
+		this.demagnifyBtn = btnOut;
+		btnOut.addEventListener('click', () => this.demagnify());
+		this.updateMagnifyTooltips();
 
 		this.canvas = container.createEl('canvas', { cls: 'sh-graph-canvas', attr: { tabindex: '0' } });
 		this.ctx = this.canvas.getContext('2d');
@@ -4445,6 +4476,17 @@ private selectHovered(): void {
 	}
 
 	public setCameraState(state: { elevation: number; azimuth: number; distance: number }): void {
+		// Reject non-finite input at the boundary. This is a public entry point
+		// (the plugin MCP calls it), and a single NaN angle poisons rotM, after
+		// which cameraDistance, viewScale and target are all NaN too and never
+		// recover: every downstream guard is a comparison, and NaN fails all of
+		// them. The view then stays bricked until an app reload. Refusing the
+		// write keeps one bad call from destroying a working camera.
+		if (!Number.isFinite(state.elevation) || !Number.isFinite(state.azimuth) || !Number.isFinite(state.distance)) {
+			console.warn('[SH] setCameraState ignored: non-finite state', state);
+			return;
+		}
+
 		// Normalize to 0-360 range with wrap-around
 		let elev = ((state.elevation % 360) + 360) % 360;
 		if (elev >= 360) elev = 0;

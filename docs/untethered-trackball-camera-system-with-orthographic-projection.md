@@ -215,7 +215,11 @@ $\theta$ is the azimuth of the eye-offset direction $T \to E$ (equivalently $-F$
 **Elevation ($\Phi$) — the vertical tilt.**
 $\Phi$ is the elevation of the forward vector $F$. It is $0^\circ$ when $F$ lies in the focal point's $XZ$ plane, and increases as $F$ tilts toward the focal point's $+Y$. **At home, $\Phi = 0^\circ$.**
 
+Geometrically, **$\Phi$ is a rotation in the vertical plane that contains the focal point's $+Y$ axis**, measured from the focal point's $XZ$ plane. That plane is spanned by $\hat h(\theta)$ and $+Y$, and $F$ always lies within it. Concretely $F = -\cos\Phi\,\hat h(\theta) + \sin\Phi\,(+Y)$, so $F$ is a fixed linear combination of those two vectors. This is exactly what makes $\Phi$ a rotation about the horizontal axis $\mathbf{R}_v$ in the Rodrigues sense, $d\mathbf{F}/d\Phi = \mathbf{R}_v \times \mathbf{F}$.
+
 $\Phi$ positions the plane in which the eye offset swings; $\theta$ rotates that plane about the focal point's $Y$ axis. They are the only two angular degrees of freedom, and together with $T$ and $R$ they fully determine the camera.
+
+> **Note on the axis.** Both $\Phi$ and $\theta$ are anchored on the **focal point** $T$, never the world origin. The *planes* of rotation are the focal point's own $XZ$ and vertical planes; they are not re-parented to the origin when $T$ moves, because rotating a plane through a translated point is the same rotation as through the origin once the centre of rotation is $T$ itself.
 
 <div align="center">
 
@@ -225,10 +229,16 @@ $\Phi$ positions the plane in which the eye offset swings; $\theta$ rotates that
 
 ### 7.2 Reading the angles from the orientation matrix
 
-$$\theta = \operatorname{atan2}\!\left(-F_z,\ -F_x\right) \pmod{360^\circ}$$
-$$\Phi = \operatorname{atan2}\!\left(F_y,\ -\mathbf{F}\cdot\hat{h}\right) \pmod{360^\circ}$$
+$$\theta = \operatorname{atan2}\!\left(R_{v,x},\ -R_{v,z}\right) \pmod{360^\circ}$$
+$$\Phi = \operatorname{atan2}\!\left(F_y,\ -\mathbf{F}\cdot\hat{h}(\theta)\right) \pmod{360^\circ}$$
 
-where $\hat h$ is the horizontal unit direction of $-F$. The read-out is taken from the basis, so it stays consistent with whatever the incremental rotation has produced.
+where $\hat{h}(\theta) = (\cos\theta, 0, \sin\theta)$ is the horizontal unit direction at the recovered $\theta$.
+
+**$\theta$ must be read from row 1, not from $F$.** This is not a stylistic choice — reading it from $F$ is genuinely wrong, not merely fragile. From 7.3, $F = (-\cos\Phi\cos\theta, \sin\Phi, -\cos\Phi\sin\theta)$, so $F$ depends on $\cos\Phi$ as well as $\theta$. The map $(\theta,\Phi) \mapsto F$ is therefore **two-to-one**: for $\Phi \in (90^\circ, 270^\circ)$ the pair $(\theta,\Phi)$ and $(\theta+180^\circ, 180^\circ-\Phi)$ produce the *same* $F$ with $\mathbf{U}_v$ negated. Any $\theta$ recovered from $F$ alone folds by $180^\circ$ in that band.
+
+Row 1 is immune because $\mathbf{R}_v = (\sin\theta, 0, -\cos\theta)$ is a function of $\theta$ **alone**, so it is exact at every $\Phi$ including the poles. Once $\theta$ is known, $\hat h(\theta)$ makes the $\Phi$ term unambiguous too: $\cos\Phi = -\mathbf{F}\cdot\hat h$ collapses to zero at $\Phi = \pm90^\circ$ and $\operatorname{atan2}$ returns exactly $90^\circ$ or $270^\circ$ with no special-case branch.
+
+This makes the read-out an exact inverse of 7.3 over the full $0^\circ \le \Phi < 360^\circ$, which is what lets the keyboard, the sliders, and the on-screen read-out share one non-drifting state.
 
 ### 7.3 Rebuilding the basis from the angles
 
@@ -376,9 +386,12 @@ class UntetheredTrackballCameraOrthographic:
 
     def read_angles(self):
         F = self.forward_v
-        h = normalize(vector(-F[0], 0.0, -F[2]))
+        # theta from row 1, which is a function of theta alone -- exact at all phi.
+        R_v = self.R_rot[0]
+        th = radians(degrees(atan2(R_v[0], -R_v[2])) % 360)
+        h = vector(cos(th), 0.0, sin(th))   # horizontal ref at the recovered theta
         return (
-            degrees(atan2(-F[2], -F[0])) % 360,   # theta
+            degrees(atan2(R_v[0], -R_v[2])) % 360,   # theta
             degrees(atan2(F[1], -dot(F, h))) % 360,  # phi
         )
 

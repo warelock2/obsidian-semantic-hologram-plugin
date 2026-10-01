@@ -4411,27 +4411,31 @@ private selectHovered(): void {
 	}
 
 	private updateAnglesFromMatrix(): void {
+		// Row 1 is R_v = [sin(theta), 0, -cos(theta)], which depends on theta
+		// ALONE. Reading theta from here instead of from F is what makes the
+		// read-out exact over the full 0-360 range of phi.
+		//
+		// Reading theta from F as atan2(-Fz, -Fx) looks equivalent but is not:
+		// F = [-cos(phi)cos(theta), sin(phi), -cos(phi)sin(theta)] is only
+		// 2-to-1 in (theta, phi). For phi in (90, 270) the pair (theta, phi)
+		// and (theta+180, 180-phi) yield the identical F with U_v negated, so
+		// any F-based theta folds by 180 deg across the poles.
+		const rx = this.rotM[0] ?? 0;
+		const rz = this.rotM[2] ?? 0;
+		let azimDeg = Math.atan2(rx, -rz) * 180 / Math.PI;
+
 		const fx = this.rotM[6] ?? 0;
 		const fy = this.rotM[7] ?? 0;
 		const fz = this.rotM[8] ?? 0;
 
-		// theta is the azimuth of the eye-offset direction (-F) in the focal
-		// point XZ plane: 0 deg at +X, increasing toward +Z. Home (F = [0,0,-1])
-		// therefore reads 90 deg, not 0.
-		let azimDeg = Math.atan2(-fz, -fx) * 180 / Math.PI;
-
 		// phi is the elevation of F above the focal point XZ plane, so home
-		// reads 0 deg. atan2(Fy, -F.h) is used rather than asin(Fy) because the
-		// horizontal length -F.h is cos(phi) and this form stays unambiguous
-		// through the poles instead of folding.
-		const hLen = Math.hypot(-fx, -fz);
-		let elevDeg: number;
-		if (hLen < 1e-6) {
-			// Straight up or straight down: the horizontal reference is undefined.
-			elevDeg = fy >= 0 ? 90 : 270;
-		} else {
-			elevDeg = Math.atan2(fy, hLen) * 180 / Math.PI;
-		}
+		// reads 0 deg. The horizontal reference h is rebuilt from the theta we
+		// just recovered, which keeps phi unambiguous through the poles: at
+		// phi = +/-90 the horizontal term vanishes and atan2 collapses to
+		// exactly 90 or 270 with no special case.
+		const ar = azimDeg * Math.PI / 180;
+		const cosPhi = -(fx * Math.cos(ar) + fz * Math.sin(ar));
+		let elevDeg = Math.atan2(fy, cosPhi) * 180 / Math.PI;
 
 		// Wrap after rounding so a value like 359.7 deg cannot round up to 360.
 		azimDeg = ((Math.round(azimDeg) % 360) + 360) % 360;

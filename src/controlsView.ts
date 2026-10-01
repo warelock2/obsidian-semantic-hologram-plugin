@@ -123,8 +123,8 @@ export class SemanticHologramControlsView extends ItemView {
 			return input;
 		};
 
-		addInput('Elev (°)', state.elevation, v => view?.setCameraState({ ...view.getCameraState(), elevation: v }));
-		addInput('Azim (°)', state.azimuth, v => view?.setCameraState({ ...view.getCameraState(), azimuth: v }));
+		addInput('θ (°)', state.elevation, v => view?.setCameraState({ ...view.getCameraState(), elevation: v }));
+		addInput('Φ (°)', state.azimuth, v => view?.setCameraState({ ...view.getCameraState(), azimuth: v }));
 		cameraRow.createDiv(); // Spacer
 
 		// Focal point controls

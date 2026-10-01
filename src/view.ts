@@ -380,14 +380,14 @@ export class SemanticHologramView extends ItemView {
 	private resizeObserver: ResizeObserver | null = null;
 	private autoRotating: 'off' | 'cw' | 'ccw' = 'off';
 	private rotM: number[] = [
-		0,  1,  0,
-	   -1,  0,  0,
-		0,  0,  1
+		1, 0, 0,
+		0, 1, 0,
+		0, 0, 1
 	];
 	private rotateStartRotM: number[] = [
-		0,  1,  0,
-	   -1,  0,  0,
-		0,  0,  1
+		1, 0, 0,
+		0, 1, 0,
+		0, 0, 1
 	];
 	private rotateStartSpin = 0;
 	private totalSpin = 0;
@@ -561,7 +561,7 @@ export class SemanticHologramView extends ItemView {
 		const m = this.rotM;
 		const x2 = (m[0] ?? 0) * px + (m[1] ?? 0) * py + (m[2] ?? 0) * pz;
 		const y2 = (m[3] ?? 0) * px + (m[4] ?? 0) * py + (m[5] ?? 0) * pz;
-		const z2 = -((m[6] ?? 0) * px + (m[7] ?? 0) * py + (m[8] ?? 0) * pz);
+		const z2 = (m[6] ?? 0) * px + (m[7] ?? 0) * py + (m[8] ?? 0) * pz;
 		return { x: x2, y: y2, z: z2 };
 	}
 
@@ -1667,7 +1667,11 @@ export class SemanticHologramView extends ItemView {
 
 		if (this.is3D) {
 			this.target = [0, 0, 0];
-			this.rotM = [1, 0, 0, 0, -1, 0, 0, 0, -1];
+			this.rotM = [
+				1,  0,  0,
+				0, -1,  0,
+				0,  0, -1
+			];
 			this.cameraDistance = 1000;
 			this.updateAnglesFromMatrix();
 		} else {
@@ -2740,7 +2744,7 @@ export class SemanticHologramView extends ItemView {
 		if (this.is3D) {
 			const rx = this.rotatePoint(1, 0, 0, 0, 0, 0);
 			const ry = this.rotatePoint(0, 1, 0, 0, 0, 0);
-			const rz = this.rotatePoint(0, 0, -1, 0, 0, 0);
+			const rz = this.rotatePoint(0, 0, 1, 0, 0, 0);
 			drawAxis(rx.x, rx.y, 'x');
 			drawAxis(ry.x, ry.y, 'y');
 			drawAxis(rz.x, rz.y, 'z');
@@ -2973,16 +2977,16 @@ export class SemanticHologramView extends ItemView {
 			this.lastRotY = dyNow;
 			const sensitivity = 0.005;
 			if (this.is3D) {
-				const R_y = this.getRotationMatrixAboutAxis([0, 1, 0], ddx * sensitivity);
-				const R_x = this.getRotationMatrixAboutAxis([1, 0, 0], -ddy * sensitivity);
+				const R_y = this.getRotationMatrixAboutAxis([0, 1, 0], -ddx * sensitivity);
+				const R_x = this.getRotationMatrixAboutAxis([1, 0, 0], ddy * sensitivity);
 				this.rotM = this.multiplyMatrices(R_y, this.rotM);
 				this.rotM = this.multiplyMatrices(this.rotM, R_x);
 				this.updateCameraMatrix();
 			} else {
-				this.rotateAboutAxis([0, 1, 0], ddx * sensitivity);
-				this.rotateAboutAxis([1, 0, 0], -ddy * sensitivity);
+				this.rotateAboutAxis([0, 1, 0], -ddx * sensitivity);
+				this.rotateAboutAxis([1, 0, 0], ddy * sensitivity);
 			}
-			this.totalSpin += ddx * sensitivity;
+			this.totalSpin -= ddx * sensitivity;
 			this.markViewAdjusted();
 			return;
 		}
@@ -3238,16 +3242,16 @@ export class SemanticHologramView extends ItemView {
 			this.lastRotY = dyNow;
 			const sensitivity = 0.005;
 			if (this.is3D) {
-				const R_y = this.getRotationMatrixAboutAxis([0, 1, 0], ddx * sensitivity);
-				const R_x = this.getRotationMatrixAboutAxis([1, 0, 0], -ddy * sensitivity);
+				const R_y = this.getRotationMatrixAboutAxis([0, 1, 0], -ddx * sensitivity);
+				const R_x = this.getRotationMatrixAboutAxis([1, 0, 0], ddy * sensitivity);
 				this.rotM = this.multiplyMatrices(R_y, this.rotM);
 				this.rotM = this.multiplyMatrices(this.rotM, R_x);
 				this.updateCameraMatrix();
 			} else {
-				this.rotateAboutAxis([0, 1, 0], ddx * sensitivity);
-				this.rotateAboutAxis([1, 0, 0], -ddy * sensitivity);
+				this.rotateAboutAxis([0, 1, 0], -ddx * sensitivity);
+				this.rotateAboutAxis([1, 0, 0], ddy * sensitivity);
 			}
-			this.totalSpin += ddx * sensitivity;
+			this.totalSpin -= ddx * sensitivity;
 			this.markViewAdjusted();
 			return;
 		}
@@ -4339,40 +4343,57 @@ private selectHovered(): void {
 
 	private updateAnglesFromMatrix(): void {
 		const F = [(this.rotM[6] ?? 0), (this.rotM[7] ?? 0), (this.rotM[8] ?? 0)];
-		let azimDeg = (Math.atan2(F[0] ?? 0, F[2] ?? 0) * 180 / Math.PI) - 180;
+		// Right-handed: Azimuth = atan2(Fx, Fz), Elevation = asin(Fy)
+		let azimDeg = Math.atan2(F[0] ?? 0, -(F[2] ?? 0)) * 180 / Math.PI;
 		azimDeg = (azimDeg % 360 + 360) % 360;
+		if (azimDeg >= 360) azimDeg = 0;
 		this.currentAzimuth = Math.round(azimDeg);
-		let elevDeg = Math.asin(F[1] ?? 0) * 180 / Math.PI;
+
+		let elevDeg = Math.asin(Math.max(-1, Math.min(1, F[1] ?? 0))) * 180 / Math.PI;
 		elevDeg = (elevDeg % 360 + 360) % 360;
+		if (elevDeg >= 360) elevDeg = 0;
 		this.currentElevation = Math.round(elevDeg);
-		console.log('updateAnglesFromMatrix', { elev: this.currentElevation, azim: this.currentAzimuth });
 	}
 
 	public setCameraState(state: { elevation: number; azimuth: number; distance: number }): void {
 		// Normalize to 0-360 range with wrap-around
-		let elev = state.elevation % 360;
-		if (elev < 0) elev += 360;
-		let azim = state.azimuth % 360;
-		if (azim < 0) azim += 360;
+		let elev = ((state.elevation % 360) + 360) % 360;
+		if (elev >= 360) elev = 0;
+		let azim = ((state.azimuth % 360) + 360) % 360;
+		if (azim >= 360) azim = 0;
 
 		if (elev === this.currentElevation && azim === this.currentAzimuth && state.distance === this.cameraDistance) {
 			return;
 		}
-		console.log('setCameraState', { elevation: elev, azimuth: azim, distance: state.distance });
 		this.currentElevation = elev;
 		this.currentAzimuth = azim;
 
 		const elevRad = elev * Math.PI / 180;
 		const azimRad = azim * Math.PI / 180;
 
-		const R_y = this.getRotationMatrixAboutAxis([0, 1, 0], azimRad);
-		const R_x = this.getRotationMatrixAboutAxis([1, 0, 0], -elevRad);
-		
-		const homeMatrix = [1, 0, 0, 0, -1, 0, 0, 0, -1];
-		let m = this.multiplyMatrices(R_y, homeMatrix);
-		m = this.multiplyMatrices(m, R_x);
-		
-		this.rotM = m;
+		// Right-handed Forward: F = [cos(e)sin(a), sin(e), cos(e)cos(a)]
+		const fx = Math.cos(elevRad) * Math.sin(azimRad);
+		const fy = Math.sin(elevRad);
+		const fz = -Math.cos(elevRad) * Math.cos(azimRad);
+
+		// Up = [0, 1, 0]
+		// Right = Up x Forward
+		let rx = (1) * fz - (0) * fy;
+		let ry = (0) * fx - (0) * fz;
+		let rz = (0) * fy - (1) * fx;
+		const lenR = Math.hypot(rx, ry, rz) || 1;
+		rx /= lenR; ry /= lenR; rz /= lenR;
+
+		// Up = Forward x Right
+		const ux = fy * rz - fz * ry;
+		const uy = fz * rx - fx * rz;
+		const uz = fx * ry - fy * rx;
+
+		this.rotM = [
+			rx, ry, rz,
+			ux, uy, uz,
+			fx, fy, fz
+		];
 		
 		this.cameraDistance = state.distance;
 		this.markViewAdjusted(true);

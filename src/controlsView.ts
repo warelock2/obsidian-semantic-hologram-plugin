@@ -123,8 +123,11 @@ export class SemanticHologramControlsView extends ItemView {
 			return input;
 		};
 
-		addInput('θ (°)', state.elevation, v => view?.setCameraState({ ...view.getCameraState(), elevation: v }));
-		addInput('Φ (°)', state.azimuth, v => view?.setCameraState({ ...view.getCameraState(), azimuth: v }));
+		// theta is the azimuth of the eye-offset direction in the focal point XZ
+		// plane; phi is the elevation of the forward vector. Home reads
+		// theta = 90, phi = 0 (docs sections 7.1 and 8).
+		addInput('θ (°)', state.azimuth, v => view?.setCameraState({ ...view.getCameraState(), azimuth: v }));
+		addInput('Φ (°)', state.elevation, v => view?.setCameraState({ ...view.getCameraState(), elevation: v }));
 		cameraRow.createDiv(); // Spacer
 
 		// Focal point controls
@@ -164,8 +167,8 @@ export class SemanticHologramControlsView extends ItemView {
 				
 				const currentState = view.getCameraState();
 				const cameraInputs = cameraRow.querySelectorAll('input');
-				if (cameraInputs[0]) cameraInputs[0].value = currentState.elevation.toFixed(1);
-				if (cameraInputs[1]) cameraInputs[1].value = currentState.azimuth.toFixed(1);
+				if (cameraInputs[0]) cameraInputs[0].value = currentState.azimuth.toFixed(1);
+				if (cameraInputs[1]) cameraInputs[1].value = currentState.elevation.toFixed(1);
 			};
 		}
 
@@ -667,7 +670,7 @@ export class SemanticHologramControlsView extends ItemView {
 		const hint = contentEl.createDiv({ cls: 'sh-controls-hint' });
 		hint.setText(
 			mode === '3d'
-				? '3D mode — Shift+drag to rotate, drag to pan, scroll to zoom. Nodes live in full 3D physics.'
+				? '3D mode — Shift+drag to rotate about the focal point, drag to pan, scroll to dolly. Nodes live in full 3D physics.'
 				: '2D canvas mode. Toggle to 3D for depth — Shift+drag rotates once you switch.',
 		);
 

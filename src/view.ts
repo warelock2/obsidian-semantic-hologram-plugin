@@ -150,6 +150,13 @@ const PHYS = {
 	zoomMin: 0.03,
 	zoomMax: 8,
 	zoomSpeed: 0.002,
+	// Dolly bounds for the 3D trackball rig. There is no independent zoom in
+	// 3D: the projection scale is derived from the standoff distance, so these
+	// bound magnification directly (see docs section 5).
+	dollyMin: 125,
+	dollyMax: 33333,
+	dollySpeed: 0.004,
+	dollyStep: 1.25,
 	baseSize: 400,
 };
 
@@ -602,7 +609,56 @@ export class SemanticHologramView extends ItemView {
 		this.fitToView();
 	}
 
+	private dolly(factor: number): void {
+		// 3D has no zoom control: magnification is derived from the standoff
+		// distance, so the only way to change it is to travel the assembly along
+		// the line of sight. Because F is orthogonal to the screen plane, the
+		// focal point's screen position is invariant under this motion, which is
+		// precisely why the magnification is always centred on it (docs 5.3-5.4).
+		if (!this.is3D || !Number.isFinite(factor) || factor <= 0) {
+			return;
+		}
+
+		const fx = this.rotM[6] ?? 0;
+		const fy = this.rotM[7] ?? 0;
+		const fz = this.rotM[8] ?? 0;
+
+		const prev = this.cameraDistance;
+		const next = Math.max(PHYS.dollyMin, Math.min(PHYS.dollyMax, prev / factor));
+		if (next === prev) {
+			return;
+		}
+
+		// Travel the assembly along -d * F, where d is the change in standoff.
+		// Magnifying shrinks d below zero, so the focal point advances deeper
+		// into the graph rather than retreating out of it.
+		const d = next - prev;
+		this.target[0] = this.clampFocal(-d * fx, 0);
+		this.target[1] = this.clampFocal(-d * fy, 1);
+		this.target[2] = this.clampFocal(-d * fz, 2);
+
+		this.cameraDistance = next;
+		this.viewScale = this.baseCameraDistance / next;
+		this.updateCameraMatrix();
+	}
+
+	/** Keep the focal point from being dollied clean out of the scene. */
+	private clampFocal(value: number, axis: 0 | 1 | 2): number {
+		let extent = 0;
+		for (const node of this.nodes) {
+			const v = axis === 0 ? node.x : axis === 1 ? node.y : node.z;
+			extent = Math.max(extent, Math.abs(v));
+		}
+		const limit = (extent > 0 ? extent : PHYS.baseSize) * 3;
+		return Math.max(-limit, Math.min(limit, value));
+	}
+
 	public zoomIn(): void {
+		if (this.is3D) {
+			this.dolly(PHYS.dollyStep);
+			this.markViewAdjusted();
+			return;
+		}
 		if (!this.canvas) return;
 		const sx = this.canvas.clientWidth / 2;
 		const sy = this.canvas.clientHeight / 2;
@@ -617,6 +673,11 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	public zoomOut(): void {
+		if (this.is3D) {
+			this.dolly(1 / PHYS.dollyStep);
+			this.markViewAdjusted();
+			return;
+		}
 		if (!this.canvas) return;
 		const sx = this.canvas.clientWidth / 2;
 		const sy = this.canvas.clientHeight / 2;
@@ -1450,27 +1511,33 @@ export class SemanticHologramView extends ItemView {
 			activeView?.getViewType() === 'semantic-hologram-controls';
 		if (this.pressedKeys.size > 0 && pluginPaneActive) {
 			const panSpeed = 5 / this.viewScale;
-			const rotSpeed = 0.01;
+			const rotSpeed = 3; // degrees per step
 			const isShift = this.shiftDown;
 
 			const m = this.rotM;
 			const horiz = this.pressedKeys.has('ArrowRight') ? 1 : this.pressedKeys.has('ArrowLeft') ? -1 : 0;
 			const vert = this.pressedKeys.has('ArrowDown') ? 1 : this.pressedKeys.has('ArrowUp') ? -1 : 0;
-			if (this.pressedKeys.has('ArrowLeft') && isShift) {
-				const delta = -rotSpeed;
-				this.rotateAboutAxis([0, 1, 0], delta);
-				this.totalSpin += delta;
-			}
-			if (this.pressedKeys.has('ArrowRight') && isShift) {
-				const delta = rotSpeed;
-				this.rotateAboutAxis([0, 1, 0], delta);
-				this.totalSpin += delta;
-			}
-			if (this.pressedKeys.has('ArrowUp') && isShift) {
-				this.rotateAboutAxis([1, 0, 0], rotSpeed);
-			}
-			if (this.pressedKeys.has('ArrowDown') && isShift) {
-				this.rotateAboutAxis([1, 0, 0], -rotSpeed);
+
+			// Shift+arrow drives the two angles directly rather than synthesising
+			// an incremental rotation. Rotation is about the focal point, which
+			// setCameraState leaves untouched, and stepping the angles is what
+			// guarantees the keyboard matches the read-out exactly
+			// (docs sections 6.1 and 6.3).
+			if (isShift && (horiz !== 0 || vert !== 0)) {
+				if (this.is3D) {
+					// Left decreases theta, Right increases theta; Up decreases phi,
+					// Down increases phi (docs section 6.3).
+					this.setCameraState({
+						elevation: this.currentElevation + vert * rotSpeed,
+						azimuth: this.currentAzimuth + horiz * rotSpeed,
+						distance: this.cameraDistance,
+					});
+					this.totalSpin += horiz * rotSpeed;
+				} else if (horiz !== 0) {
+					this.rotateAboutAxis([0, 1, 0], horiz * 0.01);
+				} else if (vert !== 0) {
+					this.rotateAboutAxis([1, 0, 0], vert * 0.01);
+				}
 			}
 			// rotM rows are [right, up, forward], so a screen-horizontal pan moves
 			// along the right row (m[0..2]) and a screen-vertical pan along the up
@@ -4094,11 +4161,11 @@ private selectHovered(): void {
 			'<div class="sh-help-row"><span class="sh-help-key">PrtSc</span><span class="sh-help-desc">copy screenshot to clipboard</span></div>' +
 			'<div class="sh-help-section">Mouse</div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">drag</span><span class="sh-help-desc">pan background / move node / move selection</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">Shift+drag</span><span class="sh-help-desc">3D rotate (3D mode only)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Shift+drag</span><span class="sh-help-desc">3D rotate about focal point (3D mode only)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">s + drag</span><span class="sh-help-desc">box select (2D) / lasso select (3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+click</span><span class="sh-help-desc">toggle node selection</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">middle-drag</span><span class="sh-help-desc">3D rotate</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">scroll</span><span class="sh-help-desc">zoom to cursor</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">middle-drag</span><span class="sh-help-desc">3D rotate about focal point</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">scroll</span><span class="sh-help-desc">dolly in/out (focal-point centred)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">click bg</span><span class="sh-help-desc">clear selection</span></div>' +
 			'<div class="sh-help-section">Modes</div>' +
 			'<div class="sh-help-desc">2D canvas / 3D projected — toggle via the upper-left icon or side panel.</div>';
@@ -4154,11 +4221,10 @@ private selectHovered(): void {
 			return;
 		}
 		const rect = canvas.getBoundingClientRect();
-		const sx = e.clientX - rect.left;
 		const sy = e.clientY - rect.top;
 		const dy = Math.max(-100, Math.min(100, e.deltaY));
 
-		// If hovering over a node, change max depth instead of zooming
+		// If hovering over a node, change max depth instead of moving the camera
 		if (this.hoverIndex >= 0) {
 			const delta = dy > 0 ? -1 : 1;
 			const newDepth = Math.max(0, Math.min(5, this.plugin.settings.maxDepth + delta));
@@ -4167,6 +4233,19 @@ private selectHovered(): void {
 			return;
 		}
 
+		if (this.is3D) {
+			// 3D has no zoom. Magnification is derived from the standoff distance,
+			// so the wheel travels the whole assembly along the line of sight and
+			// is therefore always centred on the focal point. The cursor position
+			// is deliberately unused: there is no zoom-to-cursor and no
+			// screen-plane compensation (docs sections 5.3 and 5.4).
+			this.dolly(Math.exp(-dy * PHYS.dollySpeed));
+			this.markViewAdjusted();
+			return;
+		}
+
+		// 2D is a flat canvas and keeps its ordinary zoom-to-cursor behaviour.
+		const sx = e.clientX - rect.left;
 		const factor = Math.exp(-dy * PHYS.zoomSpeed);
 		const worldX = this.toWorldX(sx);
 		const worldY = this.toWorldY(sy);
@@ -4174,16 +4253,6 @@ private selectHovered(): void {
 		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - sx / this.viewScale;
 		this.viewY = worldY - sy / this.viewScale;
-
-		if (this.is3D) {
-			const forward = [this.rotM[6] ?? 0, this.rotM[7] ?? 0, this.rotM[8] ?? 0];
-			const dollyAmount = dy * 2;
-			if (forward[0] !== undefined && forward[1] !== undefined && forward[2] !== undefined) {
-				this.target[0] += forward[0] * dollyAmount;
-				this.target[1] += forward[1] * dollyAmount;
-				this.target[2] += forward[2] * dollyAmount;
-			}
-		}
 
 		this.markViewAdjusted();
 	};
@@ -4342,17 +4411,33 @@ private selectHovered(): void {
 	}
 
 	private updateAnglesFromMatrix(): void {
-		const F = [(this.rotM[6] ?? 0), (this.rotM[7] ?? 0), (this.rotM[8] ?? 0)];
-		// Right-handed: Azimuth = atan2(Fx, Fz), Elevation = asin(Fy)
-		let azimDeg = Math.atan2(F[0] ?? 0, -(F[2] ?? 0)) * 180 / Math.PI;
-		azimDeg = (azimDeg % 360 + 360) % 360;
-		if (azimDeg >= 360) azimDeg = 0;
-		this.currentAzimuth = Math.round(azimDeg);
+		const fx = this.rotM[6] ?? 0;
+		const fy = this.rotM[7] ?? 0;
+		const fz = this.rotM[8] ?? 0;
 
-		let elevDeg = Math.asin(Math.max(-1, Math.min(1, F[1] ?? 0))) * 180 / Math.PI;
-		elevDeg = (elevDeg % 360 + 360) % 360;
-		if (elevDeg >= 360) elevDeg = 0;
-		this.currentElevation = Math.round(elevDeg);
+		// theta is the azimuth of the eye-offset direction (-F) in the focal
+		// point XZ plane: 0 deg at +X, increasing toward +Z. Home (F = [0,0,-1])
+		// therefore reads 90 deg, not 0.
+		let azimDeg = Math.atan2(-fz, -fx) * 180 / Math.PI;
+
+		// phi is the elevation of F above the focal point XZ plane, so home
+		// reads 0 deg. atan2(Fy, -F.h) is used rather than asin(Fy) because the
+		// horizontal length -F.h is cos(phi) and this form stays unambiguous
+		// through the poles instead of folding.
+		const hLen = Math.hypot(-fx, -fz);
+		let elevDeg: number;
+		if (hLen < 1e-6) {
+			// Straight up or straight down: the horizontal reference is undefined.
+			elevDeg = fy >= 0 ? 90 : 270;
+		} else {
+			elevDeg = Math.atan2(fy, hLen) * 180 / Math.PI;
+		}
+
+		// Wrap after rounding so a value like 359.7 deg cannot round up to 360.
+		azimDeg = ((Math.round(azimDeg) % 360) + 360) % 360;
+		elevDeg = ((Math.round(elevDeg) % 360) + 360) % 360;
+		this.currentAzimuth = azimDeg;
+		this.currentElevation = elevDeg;
 	}
 
 	public setCameraState(state: { elevation: number; azimuth: number; distance: number }): void {
@@ -4371,31 +4456,41 @@ private selectHovered(): void {
 		const elevRad = elev * Math.PI / 180;
 		const azimRad = azim * Math.PI / 180;
 
-		// Right-handed Forward: F = [cos(e)sin(a), sin(e), cos(e)cos(a)]
-		const fx = Math.cos(elevRad) * Math.sin(azimRad);
-		const fy = Math.sin(elevRad);
-		const fz = -Math.cos(elevRad) * Math.cos(azimRad);
+		// Exact reconstruction from the two angles (see docs section 7.3) rather
+		// than an incremental rotation, so the read-out and the basis can never
+		// disagree and no error accumulates across repeated edits.
+		//
+		//   F     = [-cos(phi)cos(theta),  sin(phi), -cos(phi)sin(theta)]
+		//   U_v   = [ sin(phi)cos(theta),  cos(phi),  sin(phi)sin(theta)]
+		//   R_v   = [          sin(theta),       0,   -cos(theta)]
+		//
+		// Row 1 is stored negated (see docs section 8.1): the canvas mapping stays
+		// a plain affine scale and det(R_rot) remains +1.
+		const cp = Math.cos(elevRad);
+		const sp = Math.sin(elevRad);
+		const ct = Math.cos(azimRad);
+		const st = Math.sin(azimRad);
 
-		// Up = [0, 1, 0]
-		// Right = Up x Forward
-		let rx = (1) * fz - (0) * fy;
-		let ry = (0) * fx - (0) * fz;
-		let rz = (0) * fy - (1) * fx;
-		const lenR = Math.hypot(rx, ry, rz) || 1;
-		rx /= lenR; ry /= lenR; rz /= lenR;
+		const fx = -cp * ct;
+		const fy = sp;
+		const fz = -cp * st;
 
-		// Up = Forward x Right
-		const ux = fy * rz - fz * ry;
-		const uy = fz * rx - fx * rz;
-		const uz = fx * ry - fy * rx;
+		const rx = st;
+		const ry = 0;
+		const rz = -ct;
+
+		const ux = -sp * ct;
+		const uy = -cp;
+		const uz = -sp * st;
 
 		this.rotM = [
 			rx, ry, rz,
 			ux, uy, uz,
 			fx, fy, fz
 		];
-		
-		this.cameraDistance = state.distance;
+
+		this.cameraDistance = Math.max(PHYS.dollyMin, Math.min(PHYS.dollyMax, state.distance));
+		this.viewScale = this.baseCameraDistance / this.cameraDistance;
 		this.markViewAdjusted(true);
 	}
 

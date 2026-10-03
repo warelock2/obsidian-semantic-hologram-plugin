@@ -353,7 +353,7 @@ export class SemanticHologramView extends ItemView {
 		const labelOfPath = (path: string | undefined, fallback: string): string =>
 			path ? (this.nodes.find((n) => n.path === path)?.label ?? path) : fallback;
 
-		let html = `<div style="font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid var(--background-modifier-border); padding-bottom: 4px;">${nA.label} ↔ ${nB.label}</div>`;
+		let html = `<div style="font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid var(--background-modifier-border); padding-bottom: 4px; word-break: break-word;">${nA.label} ↔ ${nB.label}</div>`;
 
 		if (edge.relations.length === 0) {
 			html += '<div style="padding: 4px;">No relationships.</div>';
@@ -365,11 +365,11 @@ export class SemanticHologramView extends ItemView {
 					: `${nA.label} ↔ ${nB.label}`;
 				const deletable = !!(rel.raw && rel.authoredFrom && rel.raw.trim().startsWith('-'));
 				const button = deletable
-					? `<button class="sh-delete-rel" data-index="${index}" title="Remove this relationship from ${rel.authoredFrom}" style="cursor: pointer; background: transparent; border: none; font-weight: bold; opacity: 0.6;">×</button>`
+					? `<button class="sh-delete-rel" data-index="${index}" title="Remove this relationship from ${rel.authoredFrom}" style="flex: 0 0 auto; margin-left: auto; cursor: pointer; background: transparent; border: none; font-weight: bold; font-size: 14px; line-height: 1; padding: 2px 5px; border-radius: 3px; opacity: 0.6;">×</button>`
 					: '';
 				html += `
-					<div style="display: flex; justify-content: space-between; align-items: center; margin: 4px 0; padding: 2px 4px; border-radius: 4px; background: var(--background-secondary);">
-						<span style="font-size: 0.9em;">${dirText} · ${rel.type} (${rel.strength.toFixed(2)})</span>
+					<div class="sh-edge-rel-row" style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 4px 0; padding: 3px 6px; border-radius: 4px; background: var(--background-secondary);">
+						<span class="sh-edge-rel-text" style="flex: 1 1 auto; min-width: 0; font-size: 0.9em; line-height: 1.35; word-break: break-word; overflow-wrap: anywhere;">${dirText} · ${rel.type} (${rel.strength.toFixed(2)})</span>
 						${button}
 					</div>
 				`;

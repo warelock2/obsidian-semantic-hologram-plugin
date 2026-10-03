@@ -1122,7 +1122,49 @@
     box-sizing: border-box;
     max-height: 400px;
     overflow-y: auto;
-    width: 320px;
+    width: 360px;
+    max-width: min(90vw, 420px);
+}
+
+.sh-edge-rel-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+    padding: 3px 6px;
+    border-radius: 4px;
+    background: var(--background-secondary);
+}
+
+.sh-edge-rel-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.9em;
+    line-height: 1.35;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.sh-delete-rel {
+    flex: 0 0 auto;
+    margin-left: auto;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    font-weight: bold;
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 3px;
+    opacity: 0.6;
+    color: var(--text-normal);
+}
+
+.sh-delete-rel:hover {
+    opacity: 1 !important;
+    color: var(--text-error);
+    background: var(--background-modifier-hover);
 }
 
 .sh-node-preview-card .sh-preview-label {

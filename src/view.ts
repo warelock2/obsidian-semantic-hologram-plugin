@@ -127,10 +127,11 @@ export interface NodePreviewModel {
 	gravitasPct: number;
 	contentSnippet: string;
 	content: string;
+	relDescs: string[];
 }
 
 export function buildNodePreviewModel(
-	node: { label: string; path: string; nodeType: string; confidenceTotal: number; gravitasDisplay: number; content?: string },
+	node: { label: string; path: string; nodeType: string; confidenceTotal: number; gravitasDisplay: number; content?: string; relDescs?: string[] },
 	settings: SemanticHologramSettings,
 ): NodePreviewModel {
 	const typeEntry = settings.nodeTypes.find((t) => t.id === node.nodeType);
@@ -142,6 +143,7 @@ export function buildNodePreviewModel(
 		gravitasPct: Math.round(node.gravitasDisplay * 100),
 		contentSnippet: node.content ? (node.content.slice(0, 150) + (node.content.length > 150 ? '...' : '')) : '',
 		content: node.content ?? '',
+		relDescs: node.relDescs ?? [],
 	};
 }
 
@@ -2629,7 +2631,7 @@ export class SemanticHologramView extends ItemView {
 
 		const entry = this.searchIndex.get(node.path);
 		const preview = buildNodePreviewModel(
-			{ ...node, content: entry?.content },
+			{ ...node, content: entry?.content, relDescs: entry?.relDescs },
 			this.plugin.settings,
 		);
 		const typeName = preview.typeName;
@@ -2643,8 +2645,13 @@ export class SemanticHologramView extends ItemView {
 			{ text: preview.label, font: labelFont },
 			{ text: pathText, font: bodyFont, dim: true },
 			{ text: meta, font: bodyFont },
-			{ text: preview.contentSnippet, font: bodyFont, dim: true },
 		];
+		if (preview.relDescs && preview.relDescs.length > 0) {
+			for (const d of preview.relDescs) {
+				lines.push({ text: `• ${d}`, font: bodyFont, dim: true });
+			}
+		}
+		lines.push({ text: preview.contentSnippet, font: bodyFont, dim: true });
 
 		const padX = 10;
 		const padY = 8;
@@ -2724,7 +2731,7 @@ export class SemanticHologramView extends ItemView {
 		if (!entry) return;
 
 		const previewData = buildNodePreviewModel(
-			{ ...node, content: entry.content },
+			{ ...node, content: entry.content, relDescs: entry.relDescs },
 			this.plugin.settings,
 		);
 
@@ -2763,6 +2770,12 @@ export class SemanticHologramView extends ItemView {
 		this.activePreviewCard.createDiv({ cls: "sh-preview-path", text: node.path });
 		const metaText = `${previewData.typeName} · Confidence ${previewData.confidencePct}% · Gravitas ${previewData.gravitasPct}%`;
 		this.activePreviewCard.createDiv({ cls: "sh-preview-meta", text: metaText });
+
+		// Add relationship descriptions if any
+		if (previewData.relDescs && previewData.relDescs.length > 0) {
+			const relText = previewData.relDescs.map(desc => `• ${desc}`).join('\n');
+			this.activePreviewCard.createDiv({ cls: "sh-preview-relationships", text: relText });
+		}
 		
 		const contentBlock = this.activePreviewCard.createDiv({ cls: "sh-preview-content" });
 		contentBlock.style.whiteSpace = "pre-wrap";

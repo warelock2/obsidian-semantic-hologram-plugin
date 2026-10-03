@@ -1196,6 +1196,15 @@
     word-break: break-word;
 }
 
+.sh-node-preview-card .sh-preview-relationships {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.3;
+    margin-top: 6px;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
 .sh-preview-label {
     font-weight: 600;
     margin-bottom: 2px;

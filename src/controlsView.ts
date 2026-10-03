@@ -388,6 +388,10 @@ export class SemanticHologramControlsView extends ItemView {
 			activePreview.createDiv({ cls: 'sh-preview-path', text: entry.path });
 			const metaText = `${previewData.typeName} · Confidence ${previewData.confidencePct}% · Gravitas ${previewData.gravitasPct}%`;
 			activePreview.createDiv({ cls: 'sh-preview-meta', text: metaText });
+			if (previewData.relDescs && previewData.relDescs.length > 0) {
+				const relText = previewData.relDescs.map(desc => `• ${desc}`).join('\n');
+				activePreview.createDiv({ cls: 'sh-preview-relationships', text: relText });
+			}
 			activePreview.createDiv({ cls: 'sh-preview-content', text: previewData.content });
 
 			// Position to the left of the item

@@ -123,9 +123,9 @@ export class SemanticHologramControlsView extends ItemView {
 			return input;
 		};
 
-		// theta is the azimuth of the eye-offset direction in the focal point XZ
-		// plane; phi is the elevation of the forward vector. Home reads
-		// theta = 90, phi = 0 (docs sections 7.1 and 8).
+		// θ′ is the yaw about the assembly's local up axis y′ and φ′ the pitch
+		// about its local right axis x′ — the body-relative angles the rotation
+		// controls modify. Home reads θ′ = 90, φ′ = 0 (docs sections 6.1, 6.3, 8).
 		addInput('θ (°)', state.azimuth, v => view?.setCameraState({ ...view.getCameraState(), azimuth: v }));
 		addInput('Φ (°)', state.elevation, v => view?.setCameraState({ ...view.getCameraState(), elevation: v }));
 		cameraRow.createDiv(); // Spacer

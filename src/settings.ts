@@ -4,6 +4,7 @@ import type SemanticHologramPlugin from './main';
 
 export type HologramMode = '2d' | '3d';
 export type HologramTool = 'navigate' | 'select' | 'rotate';
+export type ProjectionMode = 'perspective' | 'orthographic';
 
 export const HOLOGRAM_FOLDER = 'hologram';
 
@@ -39,6 +40,7 @@ export interface SourceKindEntry {
 export interface SemanticHologramSettings {
 	hologramMode: HologramMode;
 	hologramTool: HologramTool;
+	projectionMode: ProjectionMode;
 	hologramType: string; // 'Conceptual', 'Causal', 'Structural', 'Phenomenological'
 	showRotationCenter: boolean;
 	nodeTypes: NodeTypeEntry[];
@@ -93,6 +95,7 @@ export const PALETTE = [
 export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	hologramMode: '2d',
 	hologramTool: 'navigate',
+	projectionMode: 'perspective',
 	hologramType: 'Conceptual',
 	showRotationCenter: true,
 	incomingFolderPath: 'Incoming',

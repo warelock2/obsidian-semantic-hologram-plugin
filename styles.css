@@ -60,6 +60,11 @@
 	height: 18px;
 }
 
+/* Projection toggle sits directly under the 2D/3D badge. */
+.sh-mode-banner.sh-projection-banner.sh-mode-indicator {
+	top: 32px;
+}
+
 .sh-cursor-overlay {
 	position: absolute;
 	left: 0;

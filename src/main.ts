@@ -4,6 +4,7 @@ import {
 	HOLOGRAM_FOLDER,
 	HologramMode,
 	HologramTool,
+	ProjectionMode,
 	SemanticHologramSettings,
 	SemanticHologramSettingTab,
 } from './settings';
@@ -336,6 +337,28 @@ export default class SemanticHologramPlugin extends Plugin {
 
 	getTool(): HologramTool {
 		return this.settings.hologramTool;
+	}
+
+	getProjectionMode(): ProjectionMode {
+		return this.settings.projectionMode;
+	}
+
+	/** Toggle (or set) the 3D projection used by every open hologram view. */
+	async setProjectionMode(mode: ProjectionMode): Promise<void> {
+		this.settings.projectionMode = mode;
+		await this.saveSettings();
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramView) {
+				v.setProjectionMode(mode);
+			}
+		}
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramControlsView) {
+				v.render();
+			}
+		}
 	}
 
 	async setTool(tool: HologramTool): Promise<void> {

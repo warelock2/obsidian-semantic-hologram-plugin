@@ -3,7 +3,7 @@ import { App, ItemView, Modal, Notice, Platform, TFile, TextComponent, Workspace
 import * as gifenc from 'gifenc';
 const { GIFEncoder, quantize, applyPalette } = gifenc;
 import type SemanticHologramPlugin from './main';
-import type { HologramTool, RelTypeEntry } from './settings';
+import type { HologramTool, ProjectionMode, RelTypeEntry } from './settings';
 import type { SemanticHologramSettings } from './settings';
 import type { RelationEdge, RelationScan } from './relations';
 import { findRelationsSection, formatStrength, inScopePath, scanRelations } from './relations';
@@ -187,6 +187,28 @@ const ANCHOR_COLOR = '#6EE7B7';
 const ANCHOR_SELECTED_COLOR = '#F59E0B';
 const ANCHOR_UNION_COLOR = '#60A5FA';
 
+// Perspective projection (`projectionMode === 'perspective'`). The eye and the
+// image plane form a rigid assembly: the plane sits a FIXED distance
+// `baseCameraDistance` in front of the eye, and the whole assembly stands off
+// the focal point T by `R` (`cameraDistance`) along F. Magnification is then a
+// pure function of position — screen = centre + d·(x2, y2)/(z2 + R) — with no
+// injected scale factor. `PERSP_NEAR` floors the denominator so points at or
+// behind the eye are treated as off-camera; `PERSP_STANDOFF_MIN` keeps R (and
+// hence the denominator at the focal plane) from reaching that singularity.
+const PERSP_NEAR = 1;
+const PERSP_STANDOFF_MIN = 50;
+
+// Projection-mode glyphs, deliberately distinct from the 2D/3D badge. Both show
+// a projection plane (vertical bar, right), an object (small rect, left) and the
+// rays between them: perspective's rays diverge from a focal point (dot) to the
+// plane, orthographic's stay parallel. Wrapping the rays in this scene keeps the
+// orthographic glyph from reading as a hamburger menu and the perspective one
+// from reading as an arrowhead.
+const ICON_PROJ_PERSP =
+	'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 64 64"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="48" y1="12" x2="48" y2="52"/><rect x="10" y="22" width="10" height="20"/><circle cx="4" cy="32" r="3" fill="currentColor"/><line x1="7" y1="32" x2="48" y2="22"/><line x1="7" y1="32" x2="48" y2="32"/><line x1="7" y1="32" x2="48" y2="42"/></g></svg>';
+const ICON_PROJ_ORTHO =
+	'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 64 64"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><rect x="10" y="22" width="12" height="20"/><line x1="48" y1="14" x2="48" y2="50"/><line x1="22" y1="22" x2="48" y2="22"/><line x1="22" y1="32" x2="48" y2="32"/><line x1="22" y1="42" x2="48" y2="42"/></g></svg>';
+
 const WHITE_EDGE = '#DDDDDD';
 
 const CANDIDATE_COLOR = '#9B5DE5';
@@ -215,6 +237,7 @@ export class SemanticHologramView extends ItemView {
 	private canvas: HTMLCanvasElement | null = null;
 	private ctx: CanvasRenderingContext2D | null = null;
 	private modeBanner: HTMLElement | null = null;
+	private projectionBanner: HTMLElement | null = null;
 	private magnifyBtn: HTMLButtonElement | null = null;
 	private demagnifyBtn: HTMLButtonElement | null = null;
 	private nodes: GraphNode[] = [];
@@ -417,6 +440,8 @@ export class SemanticHologramView extends ItemView {
 	private anchorDragStartX = 0;
 	private anchorDragStartY = 0;
 	private anchorDragBasis: number[] | null = null;
+	/** Screen px per world unit at the anchor's view depth (perspective); 0 = use viewScale. */
+	private anchorDragScale = 0;
 	private anchorDragOrigins = new Map<number, { x: number; y: number; z: number }>();
 	/** Union of every anchor group's member indices, for reveal-mode fading. */
 	private anchorMember = new Set<number>();
@@ -499,6 +524,28 @@ export class SemanticHologramView extends ItemView {
 
 	private get is3D(): boolean {
 		return this.plugin.settings.hologramMode === '3d';
+	}
+
+	private get isPerspective(): boolean {
+		return this.plugin.settings.projectionMode === 'perspective';
+	}
+
+	/**
+	 * Screen pixels per view-frame unit for a point at view-frame depth `z`
+	 * (`z = F · (p − T)`). Orthographic: the constant `viewScale` (= base/R).
+	 * Perspective: the true pinhole scale `d / (z + R)`, where `d =
+	 * baseCameraDistance` is the fixed eye-to-screen distance. Returns NaN for
+	 * points at or behind the eye (denominator ≤ 0) so callers can skip them.
+	 */
+	private projectionScale(z: number): number {
+		if (!this.is3D || !this.isPerspective) {
+			return this.viewScale;
+		}
+		const denom = z + this.cameraDistance;
+		if (!(denom > PERSP_NEAR)) {
+			return NaN;
+		}
+		return this.baseCameraDistance / denom;
 	}
 
 	private get tool(): HologramTool {
@@ -650,6 +697,18 @@ export class SemanticHologramView extends ItemView {
 		this.updateCursor();
 	}
 
+	setProjectionMode(mode: ProjectionMode): void {
+		if (this.projectionBanner) {
+			const persp = mode === 'perspective';
+			this.projectionBanner.innerHTML = persp ? ICON_PROJ_PERSP : ICON_PROJ_ORTHO;
+			this.projectionBanner.classList.toggle('is-3d', persp);
+			this.projectionBanner.title = persp
+				? 'Projection: perspective — click (or press P) for orthographic'
+				: 'Projection: orthographic — click (or press P) for perspective';
+		}
+		this.requestRedraw();
+	}
+
 	fitToViewPublic(): void {
 		this.fitToView();
 	}
@@ -660,11 +719,12 @@ export class SemanticHologramView extends ItemView {
 	 * because the projection is orthographic the scene scales about T's screen
 	 * position — the one and only magnification in 3D.
 	 *
-	 * R is floored at `standoffMin` so it can never reach 0 (which would make
-	 * viewScale infinite), and `viewScale` is capped at `zoomMax`. Once that cap
-	 * bites, further scroll keeps shrinking R toward the floor: the camera closes
-	 * on the focal point until the rig degenerates into a turret that rotates in
-	 * place instead of translating.
+	 * R is floored at `standoffMin` (or the larger `PERSP_STANDOFF_MIN` under
+	 * perspective) so it can never reach 0 (which would make viewScale infinite),
+	 * and `viewScale` is capped at `zoomMax`. Once that cap bites, further scroll
+	 * keeps shrinking R toward the floor: the camera closes on the focal point
+	 * until the rig degenerates into a turret that rotates in place instead of
+	 * translating.
 	 */
 	private setStandoff(factor: number): void {
 		if (!this.is3D || !Number.isFinite(factor) || factor <= 0) {
@@ -674,7 +734,8 @@ export class SemanticHologramView extends ItemView {
 		if (!Number.isFinite(next) || next <= 0) {
 			return;
 		}
-		next = Math.max(PHYS.standoffMin, next);
+		const floor = this.isPerspective ? PERSP_STANDOFF_MIN : PHYS.standoffMin;
+		next = Math.max(floor, next);
 		if (next === this.cameraDistance) {
 			return;
 		}
@@ -801,6 +862,15 @@ export class SemanticHologramView extends ItemView {
 			void this.plugin.setMode(next);
 		});
 		this.setMode(this.plugin.settings.hologramMode);
+
+		this.projectionBanner = container.createDiv({
+			cls: 'sh-mode-banner sh-projection-banner sh-mode-indicator',
+		});
+		this.projectionBanner.addEventListener('click', () => {
+			const next = this.isPerspective ? 'orthographic' : 'perspective';
+			void this.plugin.setProjectionMode(next);
+		});
+		this.setProjectionMode(this.plugin.settings.projectionMode);
 
 		this.cursorOverlay = container.createDiv({ cls: 'sh-cursor-overlay' });
 		this.cursorOverlay.setAttribute('aria-hidden', 'true');
@@ -1621,9 +1691,11 @@ export class SemanticHologramView extends ItemView {
 			// untouched.
 			if (isShift && (horiz !== 0 || vert !== 0)) {
 				if (this.is3D) {
-					// Left decreases θ′, Right increases θ′; Up decreases φ′,
-					// Down increases φ′.
-					this.applyRotationDeltas(horiz * rotSpeed, vert * rotSpeed);
+					// Prime-frame rotation: θ′ about the assembly's own y′ and
+					// φ′ about its own x′ (docs sections 6.1 and 6.3). The world
+					// angles θ and φ are derived from the resulting basis, never
+					// set directly here.
+					this.applyRotationDeltas(horiz * rotSpeed, -vert * rotSpeed);
 					this.totalSpin += horiz * rotSpeed;
 				} else if (horiz !== 0) {
 					this.rotateAboutAxis([0, 1, 0], horiz * 0.01);
@@ -1790,34 +1862,37 @@ export class SemanticHologramView extends ItemView {
 		return total / this.links.length;
 	}
 
-	private toScreenX(x: number): number {
+	// `z` is the view-frame depth of the point (see `projectionScale`); it
+	// defaults to 0, i.e. the focal plane, where perspective and orthographic
+	// scales coincide. 3D callers that know a real depth must pass it.
+	private toScreenX(x: number, z = 0): number {
 		if (this.is3D) {
 			const w = this.canvas?.clientWidth ?? 800;
-			return w / 2 + x * this.viewScale;
+			return w / 2 + x * this.projectionScale(z);
 		}
 		return (x - this.viewX) * this.viewScale;
 	}
 
-	private toScreenY(y: number): number {
+	private toScreenY(y: number, z = 0): number {
 		if (this.is3D) {
 			const h = this.canvas?.clientHeight ?? 600;
-			return h / 2 + y * this.viewScale;
+			return h / 2 + y * this.projectionScale(z);
 		}
 		return (y - this.viewY) * this.viewScale;
 	}
 
-	private toWorldX(sx: number): number {
+	private toWorldX(sx: number, z = 0): number {
 		if (this.is3D) {
 			const w = this.canvas?.clientWidth ?? 800;
-			return (sx - w / 2) / this.viewScale;
+			return (sx - w / 2) / this.projectionScale(z);
 		}
 		return sx / this.viewScale + this.viewX;
 	}
 
-	private toWorldY(sy: number): number {
+	private toWorldY(sy: number, z = 0): number {
 		if (this.is3D) {
 			const h = this.canvas?.clientHeight ?? 600;
-			return (sy - h / 2) / this.viewScale;
+			return (sy - h / 2) / this.projectionScale(z);
 		}
 		return sy / this.viewScale + this.viewY;
 	}
@@ -1915,8 +1990,9 @@ export class SemanticHologramView extends ItemView {
 		}
 
 		// Screen extents about the framing centroid. 3D projects through the
-		// current basis (depth is ignored by the orthographic projection), 2D is
-		// a flat translation.
+		// current basis; depth is ignored, which frames the focal plane exactly
+		// (perspective and orthographic coincide there) but is only approximate
+		// for off-plane nodes under perspective. 2D is a flat translation.
 		let maxAbsX = 0;
 		let maxAbsY = 0;
 		for (const node of targetNodes) {
@@ -2261,13 +2337,19 @@ export class SemanticHologramView extends ItemView {
 					const pA = rotated[item.face[0]!]!;
 					const pB = rotated[item.face[1]!]!;
 					const pC = rotated[item.face[2]!]!;
+					const sA = this.projectionScale(pA.z);
+					const sB = this.projectionScale(pB.z);
+					const sC = this.projectionScale(pC.z);
+					if (!Number.isFinite(sA) || !Number.isFinite(sB) || !Number.isFinite(sC)) {
+						continue;
+					}
 					const depth = (item.z + maxAbsZ) / (2 * maxAbsZ || 1);
 					const opacity = Math.min(1.0, this.plugin.settings.facesOpacity * (0.3 + depth * 0.7));
 					ctx.fillStyle = this.withAlpha(this.plugin.settings.facesColor, opacity);
 					ctx.beginPath();
-					ctx.moveTo(this.toScreenX(pA.x), this.toScreenY(pA.y));
-					ctx.lineTo(this.toScreenX(pB.x), this.toScreenY(pB.y));
-					ctx.lineTo(this.toScreenX(pC.x), this.toScreenY(pC.y));
+					ctx.moveTo(w / 2 + pA.x * sA, h / 2 + pA.y * sA);
+					ctx.lineTo(w / 2 + pB.x * sB, h / 2 + pB.y * sB);
+					ctx.lineTo(w / 2 + pC.x * sC, h / 2 + pC.y * sC);
 					ctx.closePath();
 					ctx.fill();
 				}
@@ -2283,8 +2365,12 @@ export class SemanticHologramView extends ItemView {
 				if (!this.nodeMatchesSelectedHolograms(node)) {
 					continue;
 				}
-				const sx = this.toScreenX(p.x);
-				const sy = this.toScreenY(p.y);
+				const s = this.projectionScale(p.z);
+				if (!Number.isFinite(s)) {
+					continue;
+				}
+				const sx = w / 2 + p.x * s;
+				const sy = h / 2 + p.y * s;
 				const depth = (p.z + R) / (2 * R || 1);
 				const isHighlighted = this.hoverIndex === i || highlighted.has(i);
 				const isCandidate = this.candidateNodes.has(node.path);
@@ -2335,6 +2421,10 @@ export class SemanticHologramView extends ItemView {
 				if (!this.nodeMatchesSelectedHolograms(node)) {
 					continue;
 				}
+				const s = this.projectionScale(p.z);
+				if (!Number.isFinite(s)) {
+					continue;
+				}
 				const normZ = p.z / maxAbsZ;
 				let scale: number;
 				if (normZ <= 0) {
@@ -2346,7 +2436,7 @@ export class SemanticHologramView extends ItemView {
 				ctx.font = `${fontSize}px var(--font-interface)`;
 				const labelAlpha = (0.35 + ((p.z + R) / (2 * R || 1)) * 0.65) * (this.isNodeFadedByAnchors(i) ? 0.2 : 1);
 				ctx.fillStyle = this.withAlpha(this.labelColor, labelAlpha);
-				ctx.fillText(node.label, this.toScreenX(p.x) + this.nodeScreenRadius(node, p, maxAbsZ) + 3, this.toScreenY(p.y));
+				ctx.fillText(node.label, w / 2 + p.x * s + this.nodeScreenRadius(node, p, maxAbsZ) + 3, h / 2 + p.y * s);
 			}
 
 			// Edges are drawn in the foreground so arrowheads stay visible over nodes.
@@ -2359,17 +2449,22 @@ export class SemanticHologramView extends ItemView {
 				if (!a || !b || !ra || !rb || !this.nodeMatchesSelectedHolograms(a) || !this.nodeMatchesSelectedHolograms(b)) {
 					continue;
 				}
+				const sA = this.projectionScale(ra.z);
+				const sB = this.projectionScale(rb.z);
+				if (!Number.isFinite(sA) || !Number.isFinite(sB)) {
+					continue;
+				}
 				const sel = (a.selected ? 1 : 0) + (b.selected ? 1 : 0);
 				const normZA = ra.z / maxAbsZ;
 				const normZB = rb.z / maxAbsZ;
 				const edgeNormZ = (normZA + normZB) / 2;
 				ctx.globalAlpha = this.isNodeFadedByAnchors(l.a) || this.isNodeFadedByAnchors(l.b) ? 0.12 : 1;
 				this.strokeArrowLine(
-					this.toScreenX(ra.x),
-					this.toScreenY(ra.y),
+					w / 2 + ra.x * sA,
+					h / 2 + ra.y * sA,
 					this.nodeScreenRadius(a, ra, maxAbsZ, 12),
-					this.toScreenX(rb.x),
-					this.toScreenY(rb.y),
+					w / 2 + rb.x * sB,
+					h / 2 + rb.y * sB,
 					this.nodeScreenRadius(b, rb, maxAbsZ, 12),
 					l,
 					this.edgeStroke(l, sel, highlighted, distances, edgeNormZ),
@@ -2510,7 +2605,10 @@ export class SemanticHologramView extends ItemView {
 	private nodeScreenPos(node: GraphNode): { x: number, y: number } {
 		if (this.is3D) {
 			const rotated = this.rotatePoint(node.x, node.y, node.z, this.target[0], this.target[1], this.target[2]);
-			return { x: this.toScreenX(rotated.x), y: this.toScreenY(rotated.y) };
+			const s = this.projectionScale(rotated.z);
+			const w = this.canvas?.clientWidth ?? 800;
+			const h = this.canvas?.clientHeight ?? 600;
+			return { x: w / 2 + rotated.x * s, y: h / 2 + rotated.y * s };
 		}
 		return { x: this.toScreenX(node.x), y: this.toScreenY(node.y) };
 	}
@@ -2705,6 +2803,15 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	private nodeScreenRadius(node: GraphNode, p: { x: number; y: number; z: number }, R: number, buffer = 0): number {
+		// Under perspective the projection already carries the depth scaling, so
+		// use it directly instead of the stylistic orthographic depth cue.
+		if (this.is3D && this.isPerspective) {
+			const s = this.projectionScale(p.z);
+			if (!Number.isFinite(s)) {
+				return 0;
+			}
+			return Math.max(3, node.radius * s) + buffer;
+		}
 		let depthScale = 1;
 		if (this.is3D && R > 0) {
 			const normZ = p.z / R;
@@ -2839,8 +2946,14 @@ export class SemanticHologramView extends ItemView {
 			let sy: number;
 			if (this.is3D) {
 				const r = this.rotatePoint(node.x, node.y, node.z, this.target[0], this.target[1], this.target[2]);
-				sx = this.toScreenX(r.x);
-				sy = this.toScreenY(r.y);
+				const s = this.projectionScale(r.z);
+				if (!Number.isFinite(s)) {
+					continue;
+				}
+				const w = this.canvas?.clientWidth ?? 800;
+				const h = this.canvas?.clientHeight ?? 600;
+				sx = w / 2 + r.x * s;
+				sy = h / 2 + r.y * s;
 			} else {
 				sx = this.toScreenX(node.x);
 				sy = this.toScreenY(node.y);
@@ -2946,8 +3059,13 @@ export class SemanticHologramView extends ItemView {
 		}
 
 		const origin = this.rotatePoint(0, 0, 0, this.target[0], this.target[1], this.target[2]);
-		let ix = this.toScreenX(origin.x);
-		let iy = this.toScreenY(origin.y);
+		const originScale = this.projectionScale(origin.z);
+		let ix = this.toScreenX(origin.x, origin.z);
+		let iy = this.toScreenY(origin.y, origin.z);
+		if (!Number.isFinite(originScale)) {
+			ix = NaN;
+			iy = NaN;
+		}
 
 		const s = 13;
 		ctx.lineWidth = 1.25;
@@ -3293,6 +3411,8 @@ export class SemanticHologramView extends ItemView {
 			this.lastRotY = dyNow;
 			if (this.is3D) {
 				const degScale = 0.3;
+				// Prime-frame rotation, same as the keyboard handler: θ′ about
+				// y′, φ′ about x′; θ and φ stay derived.
 				this.applyRotationDeltas(ddx * degScale, -ddy * degScale);
 				this.totalSpin += ddx * 0.005;
 			} else {
@@ -3313,8 +3433,8 @@ export class SemanticHologramView extends ItemView {
 				const sx = e.clientX - rect.left;
 				const sy = e.clientY - rect.top;
 				const rOld = this.rotatePoint(node.x, node.y, node.z, this.target[0], this.target[1], this.target[2]);
-				const desiredRx = this.toWorldX(sx);
-				const desiredRy = this.toWorldY(sy);
+				const desiredRx = this.toWorldX(sx, rOld.z);
+				const desiredRy = this.toWorldY(sy, rOld.z);
 				const inv = this.inverseRotate(desiredRx, desiredRy, rOld.z, this.target[0], this.target[1], this.target[2]);
 				node.x = inv.x;
 				node.y = inv.y;
@@ -3588,6 +3708,8 @@ export class SemanticHologramView extends ItemView {
 			this.lastRotY = dyNow;
 			if (this.is3D) {
 				const degScale = 0.3;
+				// Prime-frame rotation, same as the keyboard handler: θ′ about
+				// y′, φ′ about x′; θ and φ stay derived.
 				this.applyRotationDeltas(ddx * degScale, -ddy * degScale);
 				this.totalSpin += ddx * 0.005;
 			} else {
@@ -3609,8 +3731,8 @@ export class SemanticHologramView extends ItemView {
 				const sx = e.clientX - rect.left;
 				const sy = e.clientY - rect.top;
 				const rOld = this.rotatePoint(node.x, node.y, node.z, this.target[0], this.target[1], this.target[2]);
-				const desiredRx = this.toWorldX(sx);
-				const desiredRy = this.toWorldY(sy);
+				const desiredRx = this.toWorldX(sx, rOld.z);
+				const desiredRy = this.toWorldY(sy, rOld.z);
 				const inv = this.inverseRotate(desiredRx, desiredRy, rOld.z, this.target[0], this.target[1], this.target[2]);
 				node.x = inv.x;
 				node.y = inv.y;
@@ -3876,10 +3998,16 @@ export class SemanticHologramView extends ItemView {
 		if (poly.length < 3) {
 			return;
 		}
+		const cw = this.canvas?.clientWidth ?? 800;
+		const ch = this.canvas?.clientHeight ?? 600;
 		this.nodes.forEach((node, i) => {
 			const r = this.rotatePoint(node.x, node.y, node.z, this.target[0], this.target[1], this.target[2]);
-			const sx = this.toScreenX(r.x);
-			const sy = this.toScreenY(r.y);
+			const s = this.projectionScale(r.z);
+			if (!Number.isFinite(s)) {
+				return;
+			}
+			const sx = cw / 2 + r.x * s;
+			const sy = ch / 2 + r.y * s;
 			if (this.pointInPolygon(sx, sy, poly)) {
 				this.selected.add(i);
 				node.selected = true;
@@ -4157,7 +4285,7 @@ export class SemanticHologramView extends ItemView {
 		const c = this.anchorCentroid(g);
 		if (this.is3D) {
 			const r = this.rotatePoint(c.x, c.y, c.z, this.target[0], this.target[1], this.target[2]);
-			return { x: c.x, y: c.y, sx: this.toScreenX(r.x), sy: this.toScreenY(r.y), z: r.z };
+			return { x: c.x, y: c.y, sx: this.toScreenX(r.x, r.z), sy: this.toScreenY(r.y, r.z), z: r.z };
 		}
 		return { x: c.x, y: c.y, sx: this.toScreenX(c.x), sy: this.toScreenY(c.y), z: 0 };
 	}
@@ -4195,6 +4323,9 @@ export class SemanticHologramView extends ItemView {
 		// Freeze the screen-parallel basis at drag start so the whole drag stays
 		// in one x'y' plane even if the user rotates mid-drag.
 		this.anchorDragBasis = [...this.rotM];
+		const anchorDepth = this.anchorScreen(g).z;
+		const anchorScale = this.projectionScale(anchorDepth);
+		this.anchorDragScale = Number.isFinite(anchorScale) && anchorScale > 0 ? anchorScale : 0;
 		this.anchorDragOrigins.clear();
 		for (const i of g.nodeIndices) {
 			const n = this.nodes[i];
@@ -4216,7 +4347,7 @@ export class SemanticHologramView extends ItemView {
 		if (!this.canvas) {
 			return;
 		}
-		const vs = this.viewScale || 1;
+		const vs = (this.is3D && this.anchorDragScale > 0 ? this.anchorDragScale : this.viewScale) || 1;
 		const dsx = (e.clientX - this.anchorDragStartX) / vs;
 		const dsy = (e.clientY - this.anchorDragStartY) / vs;
 		let dx = dsx;
@@ -4545,6 +4676,11 @@ export class SemanticHologramView extends ItemView {
 		} else if (key === 'h' && !e.repeat) {
 			e.preventDefault();
 			this.showHelp();
+		} else if (key === 'p' && !e.repeat) {
+			e.preventDefault();
+			const next = this.isPerspective ? 'orthographic' : 'perspective';
+			void this.plugin.setProjectionMode(next);
+			this.showToast(next === 'perspective' ? 'Projection: perspective' : 'Projection: orthographic');
 		} else if (key === 'a' && !e.repeat) {
 			// Hold to reveal hologram anchors for placement. Rebuild on reveal
 			// so membership matches the current tag graph.
@@ -4742,27 +4878,43 @@ private selectHovered(): void {
 		const el = this.contentEl.createDiv({ cls: 'sh-help-popup' });
 		el.innerHTML =
 			'<div class="sh-help-title">Semantic Hologram</div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">h</span><span class="sh-help-desc">show / hide help</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+f</span><span class="sh-help-desc">focus search</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">c</span><span class="sh-help-desc">center hovered node on rotation origin</span></div>' +
+			'<div class="sh-help-section">Keyboard</div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">h</span><span class="sh-help-desc">hold: show help</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+f</span><span class="sh-help-desc">focus node search</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+a</span><span class="sh-help-desc">select all nodes</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+z</span><span class="sh-help-desc">undo</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+Shift+z / Ctrl+y</span><span class="sh-help-desc">redo</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">c</span><span class="sh-help-desc">center hovered / selected node(s) on rotation origin</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">1</span><span class="sh-help-desc">flip view 180°</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">f</span><span class="sh-help-desc">toggle faces (3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+f</span><span class="sh-help-desc">fit graph to view</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">r</span><span class="sh-help-desc">cycle rotation: off → clockwise → counter-clockwise</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+r</span><span class="sh-help-desc">reset (fit to view, rotation to 0)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+=</span><span class="sh-help-desc">fit graph to view</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+Shift+=</span><span class="sh-help-desc">magnify (dolly in 3D)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+-</span><span class="sh-help-desc">demagnify (dolly in 3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">s</span><span class="sh-help-desc">hold: box/lasso select, tap: select hovered node</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">a</span><span class="sh-help-desc">hold: reveal hologram anchors, drag one to place its hologram</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Shift+s</span><span class="sh-help-desc">toggle split mode: move / copy</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Shift+m</span><span class="sh-help-desc">toggle merge mode: absorb / emulsify</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">p</span><span class="sh-help-desc">toggle projection: perspective / orthographic (3D)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">← ↑ ↓ →</span><span class="sh-help-desc">pan</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Shift+arrows</span><span class="sh-help-desc">rotate about the focal point (3D)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Space</span><span class="sh-help-desc">stop auto-rotation</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">PrtSc</span><span class="sh-help-desc">copy screenshot to clipboard</span></div>' +
 			'<div class="sh-help-section">Mouse</div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">drag</span><span class="sh-help-desc">pan background / move node / move selection</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+drag</span><span class="sh-help-desc">3D rotate about focal point (3D mode only)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">middle-drag</span><span class="sh-help-desc">3D rotate about focal point</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">s + drag</span><span class="sh-help-desc">box select (2D) / lasso select (3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+click</span><span class="sh-help-desc">toggle node selection</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">middle-drag</span><span class="sh-help-desc">3D rotate about focal point</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">scroll</span><span class="sh-help-desc">dolly in/out (focal-point centred)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+hover</span><span class="sh-help-desc">preview node / relationship card</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">scroll</span><span class="sh-help-desc">magnify / demagnify (standoff, focal-point centred)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Shift+scroll</span><span class="sh-help-desc">dolly the camera along the line of sight (3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">click bg</span><span class="sh-help-desc">clear selection</span></div>' +
 			'<div class="sh-help-section">Modes</div>' +
-			'<div class="sh-help-desc">2D canvas / 3D projected — toggle via the upper-left icon or side panel.</div>';
+			'<div class="sh-help-desc">2D canvas / 3D projected — toggle via the upper-left icon or side panel.</div>' +
+			'<div class="sh-help-desc">Projection (3D) perspective / orthographic — toggle via the second upper-left icon or P.</div>';
 		this.helpOverlay = el;
 	}
 
@@ -4877,13 +5029,30 @@ private selectHovered(): void {
 				continue;
 			}
 
-			const pA = this.is3D ? this.rotatePoint(nA.x, nA.y, nA.z, this.target[0], this.target[1], this.target[2]) : { x: nA.x, y: nA.y };
-			const pB = this.is3D ? this.rotatePoint(nB.x, nB.y, nB.z, this.target[0], this.target[1], this.target[2]) : { x: nB.x, y: nB.y };
-
-			const sxA = this.toScreenX(pA.x);
-			const syA = this.toScreenY(pA.y);
-			const sxB = this.toScreenX(pB.x);
-			const syB = this.toScreenY(pB.y);
+			let sxA: number;
+			let syA: number;
+			let sxB: number;
+			let syB: number;
+			if (this.is3D) {
+				const pA = this.rotatePoint(nA.x, nA.y, nA.z, this.target[0], this.target[1], this.target[2]);
+				const pB = this.rotatePoint(nB.x, nB.y, nB.z, this.target[0], this.target[1], this.target[2]);
+				const sA = this.projectionScale(pA.z);
+				const sB = this.projectionScale(pB.z);
+				if (!Number.isFinite(sA) || !Number.isFinite(sB)) {
+					continue;
+				}
+				const cw = this.canvas.clientWidth;
+				const ch = this.canvas.clientHeight;
+				sxA = cw / 2 + pA.x * sA;
+				syA = ch / 2 + pA.y * sA;
+				sxB = cw / 2 + pB.x * sB;
+				syB = ch / 2 + pB.y * sB;
+			} else {
+				sxA = this.toScreenX(nA.x);
+				syA = this.toScreenY(nA.y);
+				sxB = this.toScreenX(nB.x);
+				syB = this.toScreenY(nB.y);
+			}
 
 			const l2 = (sxB - sxA) ** 2 + (syB - syA) ** 2;
 			if (l2 === 0) continue;
@@ -4902,7 +5071,8 @@ private selectHovered(): void {
 		if (!this.canvas) {
 			return -1;
 		}
-		const rect = this.canvas.getBoundingClientRect();
+		const canvas = this.canvas;
+		const rect = canvas.getBoundingClientRect();
 		const x = e.clientX - rect.left;
 		const y = e.clientY - rect.top;
 		let best = -1;
@@ -4913,9 +5083,13 @@ private selectHovered(): void {
 					return;
 				}
 				const r = this.rotatePoint(node.x, node.y, node.z, this.target[0], this.target[1], this.target[2]);
-				const sx = this.toScreenX(r.x);
-				const sy = this.toScreenY(r.y);
-				const rad = Math.max(3, node.radius * this.viewScale);
+				const s = this.projectionScale(r.z);
+				if (!Number.isFinite(s)) {
+					return;
+				}
+				const sx = canvas.clientWidth / 2 + r.x * s;
+				const sy = canvas.clientHeight / 2 + r.y * s;
+				const rad = Math.max(3, node.radius * s);
 				const sd = Math.hypot(sx - x, sy - y);
 				if (sd < rad + 6 && sd < bestD) {
 					bestD = sd;

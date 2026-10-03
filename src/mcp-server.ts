@@ -168,7 +168,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 function parseHologram(content: string) {
     const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     const fm = fmMatch?.[1] || "";
-    const noteTypeMatch = fm.match(/^note-type:\s*(.+)$/im);
+    const noteTypeMatch = fm.match(/^(?:node-type|note-type):\s*(.+)$/im);
     const noteType = noteTypeMatch?.[1]?.trim() || null;
 
     const rels: { relId: string; target: string }[] = [];

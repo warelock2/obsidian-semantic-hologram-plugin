@@ -748,7 +748,7 @@ class CreateNodeModal extends Modal {
 		const created = new Date().toISOString().slice(0, 10);
 		const content = `---
 hologram-node: true
-note-type: ${this.noteType}
+node-type: ${this.noteType}
 created: ${created}
 ---
 

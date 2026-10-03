@@ -22,17 +22,17 @@ export class AuditConnectionsView extends ItemView {
     }
 
     async onOpen(): Promise<void> {
-        this.contentEl.empty();
         this.contentEl.addClass('sh-audit-view');
-        this.contentEl.createEl('h4', { text: 'Audit connections' });
-        
+
         await this.runAudit();
     }
 
     private async runAudit(): Promise<void> {
         const results = await auditHologramNodes(this.plugin);
-        
+
         const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('h4', { text: 'Audit connections' });
         contentEl.createDiv({ cls: 'sh-audit-results' }, (div) => {
             if (results.length === 0) {
                 div.createDiv({ text: 'No issues found.' });

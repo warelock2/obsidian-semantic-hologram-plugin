@@ -23,8 +23,8 @@ export function ensureHologramContent(content: string, defaultNoteType = 'concep
 			body = body.replace(/^hologram:\s*\[(.*)\]/im, `hologram: [$1, ${hologramTag}]`);
 			modified = true;
 		}
-		if (!/^note-type:/im.test(body)) {
-			body = `${body}\nnote-type: ${defaultNoteType}`;
+		if (!/^node-type:/im.test(body) && !/^note-type:/im.test(body)) {
+			body = `${body}\nnode-type: ${defaultNoteType}`;
 			modified = true;
 		}
 		if (!/^created:/im.test(body)) {
@@ -35,7 +35,7 @@ export function ensureHologramContent(content: string, defaultNoteType = 'concep
 			res = `---\n${body.trim()}\n---${res.slice(m[0].length)}`;
 		}
 	} else {
-		res = `---\nhologram-node: true\nnote-type: ${defaultNoteType}\ncreated: ${created}\n${hologramTag ? `hologram: [${hologramTag}]` : ''}\n---\n\n${res}`;
+		res = `---\nhologram-node: true\nnode-type: ${defaultNoteType}\ncreated: ${created}\n${hologramTag ? `hologram: [${hologramTag}]` : ''}\n---\n\n${res}`;
 	}
 
 	// 2. Ensure sections

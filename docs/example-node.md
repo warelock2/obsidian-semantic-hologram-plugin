@@ -2,16 +2,15 @@
 hologram-node: true
 node-type: concept
 created: {{date}}
-hologram: 
+hologram:
 groups:
-  - [[]]
+  - "[[Parent Node]]"
 ---
 
 # {{title}}
 
 ## Relationships
 
-- 
+- related [[Another Note]] (0.5)
 
-
-## Incoming Relationships (read only)
+## Incoming relationships (read only)

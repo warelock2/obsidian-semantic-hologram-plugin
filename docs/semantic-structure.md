@@ -1,99 +1,131 @@
 # Semantic Structure Specification: Hologram Topology & Abstraction Hierarchy
 
-## 1. Core Abstraction Hierarchy (The Multi-Level Model)
+This document describes how Semantic Hologram files are structured and how the
+knowledge graph is organised. It reflects the plugin's shipped defaults; every node
+type, relationship type, and level is configurable under **Settings → Semantic
+Hologram**.
 
-To reduce human cognitive load while preserving the precise dependency Directed Acyclic Graph (DAG), the full semantic hierarchy spans multiple abstraction tiers from atomic primitives up to macro-fields (inspired by the OSI-to-TCP/IP transition model; see [Appendix: Original Expanded Hierarchy Reference](#appendix-original-expanded-hierarchy-reference) for the pre-compression model).
+## 1. The Abstraction Hierarchy
 
-| Level | Term | Role & Definition | Examples |
-|---|---|---|---|
-| **0** | `concept` | **Atomic primitives**: Foundational hardware or kernel-level building blocks that require no further decomposition in this domain. | `CPU Ring`, `Syscall`, `Operating System`, `Page Table Entry (PTE)` |
-| **1** | `idea` | **Syntheses & mechanisms**: First-order abstractions combining multiple concepts into functional units or working schemas. Positioned at the geometric centroid of their supporting concepts in the topology. | `Process`, `Thread`, `Fork`, `Exec`, `Virtual Memory`, `Page Table`, `Page Fault`, `Scheduler`, `Preemption`, `Context Switch` |
-| **2** | `pattern` | **Recurring strategies**: Cross-cutting design patterns or policies that govern interactions between ideas and mechanisms. Positioned at the centroid of their supporting ideas. | `Copy On Write`, `Demand Paging`, `Zero Page`, `Anonymous Page`, `Dirty Bit`, `MAP_PRIVATE vs MAP_SHARED`, `Memory Accounting (RSS, VSZ, PSS)`, `SIGSEGV and SIGBUS`, `Page Cache` |
-| **3** | `topic` | **Topic**: A subject domain or grouping tier in the semantic hierarchy. Any abstraction level can serve as the top-level root of a hologram. | `Linux Kernel Internals` |
-| **4** | `domain` | **Sub-Field / Branch**: A category grouping multiple related topics and holograms together into a coherent sub-discipline. | `Operating Systems`, `Networking`, `Distributed Systems` |
-| **5** | `field` | **Macro-Discipline**: High-level umbrella category encompassing multiple domains across technical or scientific spheres. | `Computer Science`, `Systems Engineering`, `Physics` |
+Structured hologram nodes carry a **level** that places them on an abstraction ladder.
+Higher-level nodes are built from lower-level ones, which gives the graph its
+direction. `thought` nodes sit outside the ladder (no level), and evidence nodes sit
+beneath it.
+
+| Level | Node type | Role | Examples |
+| --- | --- | --- | --- |
+| — | `thought` | Free-form Zettelkasten thought or brainstorming note. No level, no evidence requirement. | any working idea |
+| 0 | `percept` | Atomic observed percept or raw data point. | a single measurement |
+| 1 | `concept` | A single foundational concept. | `Page Table Entry`, `Syscall` |
+| 2 | `idea` | A synthesis built from concepts. | `Virtual Memory`, `Scheduler` |
+| 3 | `pattern` | A recurring strategy among ideas. | `Copy On Write`, `Demand Paging` |
+| 4 | `topic` | A broader topical grouping. | `Linux Kernel Internals` |
+| 5 | `domain` | A subject domain or field of study. | `Operating Systems` |
+| 6 | `field` | A high-level academic or professional field. | `Computer Science` |
+
+**Evidence types** carry no level but anchor the base of the ladder:
+
+| Node type | Role |
+| --- | --- |
+| `source` | A source document: book, paper, video, interview, article. |
+| `authority` | A subject-matter expert lending authority as evidence. |
+| `data` | A measurement of objectively existing things. |
+
+Every level, node type, colour, and its enabled state is editable in settings. The
+ladder above is the shipped default, not a hard constraint.
 
 ---
 
-## 2. Frontmatter Schema & Groupings
+## 2. Frontmatter Schema
 
-Every semantic node note in the `hologram/` folder uses the following frontmatter conventions:
+Every semantic node note in the `hologram/` folder begins with frontmatter:
 
-### Frontmatter Fields
-- `hologram-node: true` — Identifies the note as part of the semantic topology graph.
-- `node-type: [concept | idea | pattern | topic | domain | field]` — Replaced the legacy `note-type` field to reflect the multi-level abstraction hierarchy.
-- `created: YYYY-MM-DD` — Creation date.
-- `hologram: [Name]` — The containing hologram or domain.
-- `groups: [...]` — Membership linkages connecting nodes upward through the hierarchy:
-  - **Concepts** list the `idea` nodes they participate in.
-  - **Ideas** list the `pattern` nodes they support.
-   - **Patterns** (and higher tiers) list their parent grouping nodes or hologram roots.
-   - **Topics** (and other tiers) roll up into `domain` categories.
-   - **Domains** roll up into `field` structures.
+| Field | Meaning |
+| --- | --- |
+| `hologram-node: true` | Marks the note as part of the semantic topology graph. **Required.** |
+| `node-type` | The node's type (see Section 1). `note-type` is accepted as a legacy alias. |
+| `created` | Creation date (`YYYY-MM-DD`). |
+| `hologram` / `holograms` | The containing hologram(s). |
+| `groups` | Parent node(s) this node rolls up into (membership edges). |
+| `local-confidence` | Optional user-set confidence, `0`–`1`. |
+| `source-kind` | For evidence notes, the credibility class (`source/data`, `source/scientific`, …). |
+
+The `groups` field expresses upward membership: an `idea` lists the `pattern` or
+`topic` it contributes to, a `topic` rolls up into a `domain`, and so on. This is how
+individual nodes are attached to the hierarchy rather than to each other directly.
 
 ---
 
-## 3. Multi-Dimensional Topology & Rendering Specification
+## 3. Relationship Semantics
 
-### Centroid Positioning Algorithm
-1. **Level 0 (Concepts)**: Rendered at the periphery as the atomic baseline nodes.
-2. **Level 1 (Ideas)**: Compute the geometric centroid of supporting `concept` nodes.
-3. **Level 2 (Patterns)**: Compute the geometric centroid of supporting `idea` nodes.
-4. **Level 3 (Topic)**: Bounding frame for the hologram set (if applicable to this abstraction level).
-5. **Level 4-5 (Domain / Field)**: Macro-bounding frames and multi-domain cluster centroids.
+Relationships are explicit lines under a `## Relationships` heading (a `## Relations`
+heading is also accepted):
 
-### Edge Semantics & Enhanced Relationships
-Beyond Obsidian's native bidirectional `[[link]]` syntax, relationship semantics are structured via typed logic families and strengths:
-- **Relation Families**: Expressed as `logic/supports`, `logic/enables`, `logic/conflicted-with`, `logic/prerequisite-of`.
-- **Confidence & Strength**: Unidirectional or weighted edges indicating the strength of application or dependency.
-- **Directional Arrows**: Flow from `concept` → `idea` → `pattern` → `topic` → `domain` → `field`.
+```
+- <relation-type> [[Target Note]] (<strength>)
+```
+
+- **Relation families.** Typed relationships such as `logic/supports`,
+  `logic/contradicts`, `structural/depends-on`, and `structural/subsumed-by` live in
+  families (`logic/…`, `structural/…`). The generic `related` type carries no family.
+- **Strength.** A `0`–`1` value. Stronger relationships pull nodes closer in the
+  layout and render more prominently. The fallback for any relationship created
+  without an explicit strength is **Settings → Default relationship strength**
+  (`0.5` by default).
+- **Direction.** Every edge is directed, from the note that declares it to its
+  target. Arrowheads show the direction. The `## Incoming relationships` section is
+  generated from other notes' edges and is read-only.
+
+All relationship types can be added, renamed, recoloured, enabled, disabled, or
+deleted in settings, so you can model your graph with whatever vocabulary your domain
+needs.
 
 ---
 
 ## 4. Holograms and Fields
 
-- **Hologram**: An independent, interconnected set of concepts representing a specific sub-topic or discipline. Any abstraction tier (from concept to field) can act as the top-level root of a hologram.
-- **Super-Hologram / Multi-Topic Vat**: A composite container created by pouring multiple holograms together, enabling cross-domain knowledge synthesis while preserving individual topological provenance.
+- **Hologram.** An interconnected set of nodes representing a specific sub-topic or
+  discipline. Any level can serve as the root of a hologram.
+- **Composite hologram (multi-topic vat).** A container created by pouring multiple
+  holograms together, enabling cross-domain synthesis while preserving each
+  hologram's individual provenance.
 
 ---
 
 ## 5. Standard Node Template
 
-For new semantic nodes in the `hologram/` folder, use the following standardized Obsidian template featuring clean, empty fields for rapid creation, Obsidian template variables (`{{date}}`, `{{title}}`), and an auto-populated incoming relationships section:
+The shipped template for a new semantic node is
+[`example-node.md`](example-node.md):
 
 ```markdown
 ---
 hologram-node: true
 node-type: concept
 created: {{date}}
-hologram: 
+hologram:
 groups:
-  - [[]]
+  - "[[Parent Node]]"
 ---
 
 # {{title}}
 
 ## Relationships
 
-- 
+- related [[Another Note]] (0.5)
 
-
-## Incoming Relationships (read only)
+## Incoming relationships (read only)
 ```
+
+`{{date}}` and `{{title}}` are Obsidian core **Templates** plugin variables. The
+plugin's **Create hologram node** command produces a note in the same shape without
+needing a template.
 
 ---
 
-## Appendix: Original Expanded Hierarchy Reference
+## 6. Thought Nodes vs. the DAG
 
-Before compression into the streamlined operational tiers, the semantic hierarchy extended across granular layers. For historical reference and architectural provenance, the full multi-level hierarchy is defined below:
-
-| Level | Term | Role & Definition | Examples |
-|---|---|---|---|
-| **1** | `concept` | Atomic baseline items requiring no decomposition. | `CPU Ring`, `Page Table Entry (PTE)` |
-| **2** | `idea` | First-order synthesis of raw concepts. | `Fork`, `Thread` |
-| **3** | `model` | System structures and working subsystems. | `Virtual Memory`, `Scheduler` |
-| **4** | `pattern` | Cross-cutting optimization strategies. | `Copy On Write`, `Demand Paging` |
-| **5** | `framework` | System integrators combining multiple patterns and models. | `Page Cache` |
-| **6** | `topic` | Root container for the domain hologram. | `Linux Kernel Internals` |
-| **7** | `domain` | Broader sub-field grouping multiple topics. | `Operating Systems` |
-| **8** | `field` | Macro-discipline container. | `Computer Science` |
+The structured node types form a **Directed Acyclic Graph**: directed edges with no
+directed cycles, layered by level, anchored at the bottom by evidence. `thought`
+nodes are deliberately **outside** that structure — they have no level and no
+mandatory evidence, so they can hold raw associations until they are ready to be
+promoted into levelled nodes.

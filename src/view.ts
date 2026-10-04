@@ -84,6 +84,21 @@ export interface AnchorGroup {
 	nodeIndices: number[];
 }
 
+/** Full camera state for temporary framing (hologram peek) and exact restore. */
+interface CameraSnapshot {
+	target: [number, number, number];
+	rotM: number[];
+	cameraDistance: number;
+	baseCameraDistance: number;
+	viewScale: number;
+	viewX: number;
+	viewY: number;
+	camZ: number;
+	totalSpin: number;
+	userAdjustedView: boolean;
+	autoFitCooldown: number;
+}
+
 interface Relation {
 	type: string;
 	strength: number;
@@ -269,12 +284,8 @@ export class SemanticHologramView extends ItemView {
 		return this.currentAzimuth;
 	}
 	private panViewY = 0;
-	private panRotCx = 0;
-	private panRotCy = 0;
-	private panRotCz = 0;
 	/** Persistent depth component of the camera's rotation center; panning needs it to move the view in pure screen space. */
 	private camZ = 0;
-	private panCamZ = 0;
 	private autoFitCooldown = 0;
 	private userAdjustedView = false;
 	private viewX = 0;
@@ -501,6 +512,9 @@ export class SemanticHologramView extends ItemView {
 	private touchGesture: 'none' | 'pan' | 'pin' | 'group' | 'select' | 'rotate' = 'none';
 	private candidateNodes: Set<string> = new Set();
 	private lastSearchPickPath: string | null = null;
+	private peekActive = false;
+	private peekTags: string[] = [];
+	private peekCamera: CameraSnapshot | null = null;
 	private isRecording = false;
 	private isEncoding = false;
 	private recordingFrames: ImageData[] = [];
@@ -528,8 +542,14 @@ export class SemanticHologramView extends ItemView {
 		return this.plugin.settings.hologramMode === '3d';
 	}
 
+	/**
+	 * Perspective exists only in 3D. A 2D view has no eye and no line of sight, so
+	 * the pinhole has nothing to act on and the projection degenerates to a flat
+	 * scale — so 2D reports orthographic. This is a read-time decision: the
+	 * persisted preference is never clobbered, so returning to 3D restores it.
+	 */
 	private get isPerspective(): boolean {
-		return this.plugin.settings.projectionMode === 'perspective';
+		return this.is3D && this.plugin.settings.projectionMode === 'perspective';
 	}
 
 	/**
@@ -689,6 +709,9 @@ export class SemanticHologramView extends ItemView {
 		if (this.toolDock && mode === '2d' && this.tool === 'rotate') {
 			void this.plugin.setTool('navigate');
 		}
+		// The effective projection depends on the mode, so the banner has to be
+		// re-read on every switch.
+		this.setProjectionMode(this.plugin.settings.projectionMode);
 		this.updateMagnifyTooltips();
 		this.updateToolDock();
 		this.updateCursor();
@@ -701,14 +724,27 @@ export class SemanticHologramView extends ItemView {
 
 	setProjectionMode(mode: ProjectionMode): void {
 		if (this.projectionBanner) {
-			const persp = mode === 'perspective';
+			const persp = this.is3D && mode === 'perspective';
 			this.projectionBanner.innerHTML = persp ? ICON_PROJ_PERSP : ICON_PROJ_ORTHO;
 			this.projectionBanner.classList.toggle('is-3d', persp);
-			this.projectionBanner.title = persp
-				? 'Projection: perspective — click (or press P) for orthographic'
-				: 'Projection: orthographic — click (or press P) for perspective';
+			this.projectionBanner.title = !this.is3D
+				? 'Projection: orthographic — 2D is always orthographic'
+				: persp
+					? 'Projection: perspective — click (or press P) for orthographic'
+					: 'Projection: orthographic — click (or press P) for perspective';
 		}
 		this.requestRedraw();
+	}
+
+	/** The projection toggle is a 3D control: 2D has no eye, so it stays orthographic. */
+	private toggleProjection(): void {
+		if (!this.is3D) {
+			this.showToast('Projection: orthographic (2D)');
+			return;
+		}
+		const next = this.isPerspective ? 'orthographic' : 'perspective';
+		void this.plugin.setProjectionMode(next);
+		this.showToast(next === 'perspective' ? 'Projection: perspective' : 'Projection: orthographic');
 	}
 
 	fitToViewPublic(): void {
@@ -791,6 +827,27 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
+	/** Scale the 2D view about the focal point, which is the canvas centre.
+	 *
+	 * The world point under the canvas centre is held fixed while `viewScale`
+	 * moves, so every node keeps a single common factor of screen offset from
+	 * the centre. This is the 2D counterpart of the 3D focal-point dolly — not a
+	 * dolly itself: 2D has no line of sight, so travel along F is impossible and
+	 * `dolly()` refuses to run. Here the cursor plays no part either, so wheel
+	 * and buttons magnify about the same place.
+	 */
+	private applyScaleAboutFocalPoint(factor: number): void {
+		if (!this.canvas) return;
+		const halfW = this.canvas.clientWidth / 2;
+		const halfH = this.canvas.clientHeight / 2;
+		const focalX = this.toWorldX(halfW);
+		const focalY = this.toWorldY(halfH);
+		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.viewScale * factor));
+		this.cameraDistance = this.baseCameraDistance / this.viewScale;
+		this.viewX = focalX - halfW / this.viewScale;
+		this.viewY = focalY - halfH / this.viewScale;
+	}
+
 	/** Increase the magnification of the graph. In 3D this changes the standoff
 	 * (scale about the focal point); with Shift held it instead travels the
 	 * assembly forward along the line of sight. In 2D it is a scale change about
@@ -808,15 +865,7 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		if (!this.canvas) return;
-		const sx = this.canvas.clientWidth / 2;
-		const sy = this.canvas.clientHeight / 2;
-		const factor = 1.25; 
-		const worldX = this.toWorldX(sx);
-		const worldY = this.toWorldY(sy);
-		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.viewScale * factor));
-		this.cameraDistance = this.baseCameraDistance / this.viewScale;
-		this.viewX = worldX - sx / this.viewScale;
-		this.viewY = worldY - sy / this.viewScale;
+		this.applyScaleAboutFocalPoint(1.25);
 		this.markViewAdjusted();
 	}
 
@@ -832,15 +881,7 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		if (!this.canvas) return;
-		const sx = this.canvas.clientWidth / 2;
-		const sy = this.canvas.clientHeight / 2;
-		const factor = 1 / 1.25; 
-		const worldX = this.toWorldX(sx);
-		const worldY = this.toWorldY(sy);
-		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.viewScale * factor));
-		this.cameraDistance = this.baseCameraDistance / this.viewScale;
-		this.viewX = worldX - sx / this.viewScale;
-		this.viewY = worldY - sy / this.viewScale;
+		this.applyScaleAboutFocalPoint(1 / 1.25);
 		this.markViewAdjusted();
 	}
 
@@ -869,8 +910,7 @@ export class SemanticHologramView extends ItemView {
 			cls: 'sh-mode-banner sh-projection-banner sh-mode-indicator',
 		});
 		this.projectionBanner.addEventListener('click', () => {
-			const next = this.isPerspective ? 'orthographic' : 'perspective';
-			void this.plugin.setProjectionMode(next);
+			this.toggleProjection();
 		});
 		this.setProjectionMode(this.plugin.settings.projectionMode);
 
@@ -1677,7 +1717,7 @@ export class SemanticHologramView extends ItemView {
 		const pluginPaneActive =
 			activeView === this ||
 			activeView?.getViewType() === 'semantic-hologram-controls';
-		if (this.pressedKeys.size > 0 && pluginPaneActive) {
+		if (this.pressedKeys.size > 0 && pluginPaneActive && !this.peekActive) {
 			const panSpeed = 5 / this.viewScale;
 			const rotSpeed = 3; // degrees per step
 			const isShift = this.shiftDown;
@@ -1730,11 +1770,17 @@ export class SemanticHologramView extends ItemView {
 		const { nodes, links } = this;
 		const R = this.worldR();
 		const is3D = this.is3D;
+		// Physics is scoped to the nodes that are actually drawn. When a hologram
+		// filter is active (or a peek is showing), the hidden nodes must not push
+		// or pull the visible subset, and the settle metric must describe that
+		// subset. With no filter every entry is true, so the all-visible layout is
+		// unchanged.
+		const visible = nodes.map((node) => this.isNodeVisible(node));
 
 		if (is3D) {
-			this.applyRepulsion3D();
+			this.applyRepulsion3D(visible);
 		} else {
-			this.applyRepulsion();
+			this.applyRepulsion(visible);
 		}
 
 		if (this.settled) {
@@ -1742,8 +1788,9 @@ export class SemanticHologramView extends ItemView {
 			// each node's home now holds the layout, so there is nothing to pull
 			// the graph inward. Re-enabling it would fight every anchor drag and
 			// drag the whole graph back to the origin.
-			for (const node of nodes) {
-				if (node.pinned || node.selected) {
+			for (let i = 0; i < nodes.length; i++) {
+				const node = nodes[i]!;
+				if (!visible[i] || node.pinned || node.selected) {
 					continue;
 				}
 				node.vx += (node.homeX - node.x) * PHYS.homeSpring;
@@ -1754,19 +1801,33 @@ export class SemanticHologramView extends ItemView {
 			}
 		} else {
 			if (is3D) {
-				this.applySprings3D();
-				this.applyCenter3D();
+				this.applySprings3D(visible);
+				this.applyCenter3D(visible);
 			} else {
-				this.applySprings();
-				this.applyCenter();
+				this.applySprings(visible);
+				this.applyCenter(visible);
 			}
 		}
 
 		let energy = 0;
-		for (const node of nodes) {
+		let visibleCount = 0;
+		for (let i = 0; i < nodes.length; i++) {
+			const node = nodes[i]!;
+			if (!visible[i]) {
+				// Hidden nodes are frozen rather than integrated, and their stale
+				// velocity is cleared so they do not lurch when they re-enter the
+				// filter.
+				node.vx = 0;
+				node.vy = 0;
+				if (is3D) {
+					node.vz = 0;
+				}
+				continue;
+			}
 			if (node.pinned || node.selected) {
 				continue;
 			}
+			visibleCount++;
 			node.vx *= PHYS.damping;
 			node.vy *= PHYS.damping;
 			if (is3D) {
@@ -1813,10 +1874,19 @@ export class SemanticHologramView extends ItemView {
 		}
 		if (!this.settled) {
 			this.layoutFrames++;
-			const avg = energy / Math.max(1, nodes.length);
-			const avgEdge = this.avgEdgeLength();
-			const restLen = (this.links.reduce((s, l) => s + l.restLen, 0) / Math.max(1, this.links.length)) * this.scale;
-			const spread = links.length === 0 || avgEdge >= restLen * 0.7;
+			const avg = energy / Math.max(1, visibleCount);
+			const avgEdge = this.avgEdgeLength(visible);
+			let restSum = 0;
+			let visibleLinkCount = 0;
+			for (const l of links) {
+				if (!visible[l.a] || !visible[l.b]) {
+					continue;
+				}
+				restSum += l.restLen;
+				visibleLinkCount++;
+			}
+			const restLen = (restSum / Math.max(1, visibleLinkCount)) * this.scale;
+			const spread = visibleLinkCount === 0 || avgEdge >= restLen * 0.7;
 			const timedOut = this.layoutFrames >= PHYS.forceSettleFrames;
 			if ((avg < PHYS.settleEnergy && spread) || timedOut) {
 				this.settleCount++;
@@ -1845,23 +1915,25 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
-	private avgEdgeLength(): number {
-		if (this.links.length === 0) {
-			return 0;
-		}
-		let total = 0;
+	private avgEdgeLength(visible?: boolean[]): number {
+		// Defaults to the drawn subset so a filtered view reports the edge length
+		// of the graph the user can actually see.
+		const vis = visible ?? this.nodes.map((node) => this.isNodeVisible(node));
 		const is3D = this.is3D;
+		let total = 0;
+		let count = 0;
 		for (const l of this.links) {
 			const a = this.nodes[l.a];
 			const b = this.nodes[l.b];
-			if (!a || !b) {
+			if (!a || !b || !vis[l.a] || !vis[l.b]) {
 				continue;
 			}
 			total += is3D
 				? Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)
 				: Math.hypot(b.x - a.x, b.y - a.y);
+			count++;
 		}
-		return total / this.links.length;
+		return count === 0 ? 0 : total / count;
 	}
 
 	// `z` is the view-frame depth of the point (see `projectionScale`); it
@@ -1910,8 +1982,6 @@ export class SemanticHologramView extends ItemView {
 		// the initial view is never a stale identity matrix.
 		const preserveOrientation = this.userAdjustedView;
 		this.userAdjustedView = false;
-		const w = canvas.clientWidth;
-		const h = canvas.clientHeight;
 
 		// Selection-aware fit. When there is a node selection or a hologram
 		// filter, frame exactly that subset and — when the user is reframing —
@@ -1931,6 +2001,27 @@ export class SemanticHologramView extends ItemView {
 		}
 		const hasSelection = selectionNodes.length > 0;
 		const targetNodes = hasSelection ? selectionNodes : this.nodes;
+
+		this.frameNodes(targetNodes, preserveOrientation, hasSelection);
+
+		console.log(`[SH] fitToView (${hasSelection ? 'selection' : 'home'}): nodes=${targetNodes.length}/${this.nodes.length} canvas=${this.canvas?.clientWidth}x${this.canvas?.clientHeight} view=(${this.is3D ? this.target : `${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}`}) scale=${this.viewScale.toFixed(3)}`);
+		this.markViewAdjusted();
+	}
+
+	/**
+	 * Frame `targetNodes` exactly, moving the focal point onto their centroid.
+	 * `preserveOrientation` keeps the current basis (only the focal point moves);
+	 * otherwise a selection resets to the home basis. `hasSelection` is false
+	 * only for the whole-graph home fit, which frames about the world origin.
+	 * Does not touch `userAdjustedView` or the controls panel; callers own that.
+	 */
+	private frameNodes(targetNodes: GraphNode[], preserveOrientation: boolean, hasSelection: boolean): void {
+		const canvas = this.canvas;
+		if (!canvas || targetNodes.length === 0) {
+			return;
+		}
+		const w = canvas.clientWidth;
+		const h = canvas.clientHeight;
 
 		// Centroid of the nodes being framed (world space). For the home fit
 		// this is the graph's centroid, but the home path deliberately frames
@@ -2022,9 +2113,6 @@ export class SemanticHologramView extends ItemView {
 			this.viewX = cx - w / (2 * this.viewScale);
 			this.viewY = cy - h / (2 * this.viewScale);
 		}
-
-		console.log(`[SH] fitToView (${hasSelection ? 'selection' : 'home'}): nodes=${targetNodes.length}/${this.nodes.length} canvas=${w}x${h} view=(${this.is3D ? this.target : `${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}`}) scale=${this.viewScale.toFixed(3)}`);
-		this.markViewAdjusted();
 	}
 
 	private resetView(): void {
@@ -2106,7 +2194,7 @@ export class SemanticHologramView extends ItemView {
 		this.cursorOverlay.style.display = 'block';
 	}
 
-	private applyRepulsion(): void {
+	private applyRepulsion(visible: boolean[]): void {
 		const { nodes } = this;
 		const cellSize = PHYS.cellSize * this.scale;
 		const grid = new Map<number, number[]>();
@@ -2116,6 +2204,9 @@ export class SemanticHologramView extends ItemView {
 			return cx * 100000 + cy;
 		};
 		nodes.forEach((node, i) => {
+			if (!visible[i]) {
+				return;
+			}
 			const key = cellOf(node.x, node.y);
 			const arr = grid.get(key);
 			if (arr) {
@@ -2127,7 +2218,7 @@ export class SemanticHologramView extends ItemView {
 
 		for (const i of nodes.keys()) {
 			const a = nodes[i]!;
-			if (a.pinned || a.selected) {
+			if (!visible[i] || a.pinned || a.selected) {
 				continue;
 			}
 			const cx = Math.floor(a.x / cellSize);
@@ -2165,11 +2256,16 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
-	private applySprings(): void {
+	private applySprings(visible: boolean[]): void {
 		for (const l of this.links) {
 			const a = this.nodes[l.a];
 			const b = this.nodes[l.b];
 			if (!a || !b) {
+				continue;
+			}
+			// Only links whose endpoints are both drawn exert a pull, so a hidden
+			// neighbour can neither yank nor spring the visible subset.
+			if (!visible[l.a] || !visible[l.b]) {
 				continue;
 			}
 			if (a.pinned || a.selected || b.pinned || b.selected) {
@@ -2188,9 +2284,10 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
-	private applyCenter(): void {
-		for (const node of this.nodes) {
-			if (node.pinned || node.selected) {
+	private applyCenter(visible: boolean[]): void {
+		for (let i = 0; i < this.nodes.length; i++) {
+			const node = this.nodes[i]!;
+			if (!visible[i] || node.pinned || node.selected) {
 				continue;
 			}
 			node.vx += (0 - node.x) * PHYS.center;
@@ -2198,17 +2295,17 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
-	private applyRepulsion3D(): void {
+	private applyRepulsion3D(visible: boolean[]): void {
 		const { nodes } = this;
 		const cellSize = PHYS.cellSize * this.scale;
 		for (let i = 0; i < nodes.length; i++) {
 			const a = nodes[i]!;
-			if (a.pinned || a.selected) {
+			if (!visible[i] || a.pinned || a.selected) {
 				continue;
 			}
 			for (let j = i + 1; j < nodes.length; j++) {
 				const b = nodes[j]!;
-				if (b.pinned || b.selected) {
+				if (!visible[j] || b.pinned || b.selected) {
 					continue;
 				}
 				const dx = b.x - a.x;
@@ -2232,11 +2329,14 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
-	private applySprings3D(): void {
+	private applySprings3D(visible: boolean[]): void {
 		for (const l of this.links) {
 			const a = this.nodes[l.a];
 			const b = this.nodes[l.b];
 			if (!a || !b) {
+				continue;
+			}
+			if (!visible[l.a] || !visible[l.b]) {
 				continue;
 			}
 			if (a.pinned || a.selected || b.pinned || b.selected) {
@@ -2259,9 +2359,10 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
-	private applyCenter3D(): void {
-		for (const node of this.nodes) {
-			if (node.pinned || node.selected) {
+	private applyCenter3D(visible: boolean[]): void {
+		for (let i = 0; i < this.nodes.length; i++) {
+			const node = this.nodes[i]!;
+			if (!visible[i] || node.pinned || node.selected) {
 				continue;
 			}
 			node.vx += (0 - node.x) * PHYS.center;
@@ -2328,7 +2429,7 @@ export class SemanticHologramView extends ItemView {
 			if (this.plugin.settings.facesEnabled && this.faces.length > 0) {
 				const renderables: { type: 'face'; face: number[]; z: number }[] = [];
 				for (const face of this.faces) {
-					if (face.every(idx => this.nodeMatchesSelectedHolograms(this.nodes[idx]!))) {
+					if (face.every(idx => this.isNodeVisible(this.nodes[idx]!))) {
 						const z = (rotated[face[0]!]!.z + rotated[face[1]!]!.z + rotated[face[2]!]!.z) / 3;
 						renderables.push({ type: 'face', face, z });
 					}
@@ -2364,7 +2465,7 @@ export class SemanticHologramView extends ItemView {
 			ctx.textBaseline = 'middle';
 			for (const { p, i } of order) {
 				const node = this.nodes[i]!;
-				if (!this.nodeMatchesSelectedHolograms(node)) {
+				if (!this.isNodeVisible(node)) {
 					continue;
 				}
 				const s = this.projectionScale(p.z);
@@ -2420,7 +2521,7 @@ export class SemanticHologramView extends ItemView {
 
 			for (const { p, i } of order) {
 				const node = this.nodes[i]!;
-				if (!this.nodeMatchesSelectedHolograms(node)) {
+				if (!this.isNodeVisible(node)) {
 					continue;
 				}
 				const s = this.projectionScale(p.z);
@@ -2448,7 +2549,7 @@ export class SemanticHologramView extends ItemView {
 				const b = this.nodes[l.b];
 				const ra = rotated[l.a];
 				const rb = rotated[l.b];
-				if (!a || !b || !ra || !rb || !this.nodeMatchesSelectedHolograms(a) || !this.nodeMatchesSelectedHolograms(b)) {
+				if (!a || !b || !ra || !rb || !this.isNodeVisible(a) || !this.isNodeVisible(b)) {
 					continue;
 				}
 				const sA = this.projectionScale(ra.z);
@@ -2496,7 +2597,7 @@ export class SemanticHologramView extends ItemView {
 		ctx.textAlign = 'left';
 		ctx.textBaseline = 'middle';
 		for (const node of this.nodes) {
-			if (!this.nodeMatchesSelectedHolograms(node)) {
+			if (!this.isNodeVisible(node)) {
 				continue;
 			}
 			const i = this.nodes.indexOf(node);
@@ -2547,7 +2648,7 @@ export class SemanticHologramView extends ItemView {
 		ctx.font = '10px var(--font-interface)';
 		for (let i = 0; i < this.nodes.length; i++) {
 			const node = this.nodes[i]!;
-			if (!this.nodeMatchesSelectedHolograms(node)) {
+			if (!this.isNodeVisible(node)) {
 				continue;
 			}
 			ctx.fillStyle = this.isNodeFadedByAnchors(i) ? this.withAlpha(this.labelColor, 0.15) : this.labelColor;
@@ -2558,7 +2659,7 @@ export class SemanticHologramView extends ItemView {
 		for (const l of this.links) {
 			const a = this.nodes[l.a];
 			const b = this.nodes[l.b];
-			if (!a || !b || !this.nodeMatchesSelectedHolograms(a) || !this.nodeMatchesSelectedHolograms(b)) {
+			if (!a || !b || !this.isNodeVisible(a) || !this.isNodeVisible(b)) {
 				continue;
 			}
 			const sel = (a.selected ? 1 : 0) + (b.selected ? 1 : 0);
@@ -3476,15 +3577,19 @@ export class SemanticHologramView extends ItemView {
 				this.target[2] = this.panTarget[2] - dz;
 				this.updateCameraMatrix();
 			} else {
-				const canvas = this.canvas;
-				const w = canvas?.clientWidth ?? 1;
-				const h = canvas?.clientHeight ?? 1;
-				this.rotCx = this.panRotCx - (dScreenX * (this.rotM[0] ?? 1) + dScreenY * (this.rotM[3] ?? 0));
-				this.rotCy = this.panRotCy - (dScreenX * (this.rotM[1] ?? 0) + dScreenY * (this.rotM[4] ?? 1));
-				this.camZ = this.panCamZ - (dScreenX * (this.rotM[2] ?? 0) + dScreenY * (this.rotM[5] ?? 0));
-				this.rotCz = this.camZ;
-				this.viewX = this.rotCx - w / (2 * this.viewScale);
-				this.viewY = this.rotCy - h / (2 * this.viewScale);
+				// The 2D projection is axis-aligned — toScreenX/toScreenY ignore
+				// rotM — so each screen axis pans its own world axis and the two are
+				// handled separately. Projecting both through the rotM rows fed the
+				// vertical term through the negated up row (-U_v), which inverted
+				// drag up/down, and sent the pan diagonal once the view had been
+				// rotated. Drag moves the content with the cursor: dragging up
+				// raises viewY, so content rises.
+				this.viewX = this.panViewX - dScreenX;
+				this.viewY = this.panViewY - dScreenY;
+				const w = this.canvas?.clientWidth ?? 1;
+				const h = this.canvas?.clientHeight ?? 1;
+				this.rotCx = this.viewX + w / (2 * this.viewScale);
+				this.rotCy = this.viewY + h / (2 * this.viewScale);
 			}
 			this.markViewAdjusted();
 			return;
@@ -3519,8 +3624,7 @@ export class SemanticHologramView extends ItemView {
 			this.selectLasso = [];
 			this.clearOnUp = false;
 		} else if (this.groupDragging) {
-			this.groupDragging = false;
-			this.groupOrigins.clear();
+			this.endGroupDrag();
 		} else if (this.rotating) {
 			this.rotating = false;
 		} else if (this.pinnedIndex >= 0) {
@@ -3546,6 +3650,9 @@ export class SemanticHologramView extends ItemView {
 	/* ── Pointer event handlers ─────────────────────────────────── */
 
 	private onPointerDown = (e: PointerEvent): void => {
+		if (this.peekActive) {
+			return;
+		}
 		if (this.touch) {
 			this.touchStart(e);
 			return;
@@ -3604,10 +3711,6 @@ export class SemanticHologramView extends ItemView {
 			this.panStartY = e.clientY;
 			this.panViewX = this.viewX;
 			this.panViewY = this.viewY;
-			this.panRotCx = this.rotCx;
-			this.panRotCy = this.rotCy;
-			this.panRotCz = this.rotCz;
-			this.panCamZ = this.camZ;
 			this.panTarget = [...this.target] as [number, number, number];
 			this.canvas?.setPointerCapture(e.pointerId);
 			this.markViewAdjusted();
@@ -3656,10 +3759,6 @@ export class SemanticHologramView extends ItemView {
 			this.panStartY = e.clientY;
 			this.panViewX = this.viewX;
 			this.panViewY = this.viewY;
-			this.panRotCx = this.rotCx;
-			this.panRotCy = this.rotCy;
-			this.panRotCz = this.rotCz;
-			this.panCamZ = this.camZ;
 			this.panTarget = [...this.target] as [number, number, number];
 			this.canvas?.setPointerCapture(e.pointerId);
 			this.markViewAdjusted();
@@ -3774,15 +3873,19 @@ export class SemanticHologramView extends ItemView {
 				this.target[2] = this.panTarget[2] - dz;
 				this.updateCameraMatrix();
 			} else {
-				const canvas = this.canvas;
-				const w = canvas?.clientWidth ?? 1;
-				const h = canvas?.clientHeight ?? 1;
-				this.rotCx = this.panRotCx - (dScreenX * (this.rotM[0] ?? 1) + dScreenY * (this.rotM[3] ?? 0));
-				this.rotCy = this.panRotCy - (dScreenX * (this.rotM[1] ?? 0) + dScreenY * (this.rotM[4] ?? 1));
-				this.camZ = this.panCamZ - (dScreenX * (this.rotM[2] ?? 0) + dScreenY * (this.rotM[5] ?? 0));
-				this.rotCz = this.camZ;
-				this.viewX = this.rotCx - w / (2 * this.viewScale);
-				this.viewY = this.rotCy - h / (2 * this.viewScale);
+				// The 2D projection is axis-aligned — toScreenX/toScreenY ignore
+				// rotM — so each screen axis pans its own world axis and the two are
+				// handled separately. Projecting both through the rotM rows fed the
+				// vertical term through the negated up row (-U_v), which inverted
+				// drag up/down, and sent the pan diagonal once the view had been
+				// rotated. Drag moves the content with the cursor: dragging up
+				// raises viewY, so content rises.
+				this.viewX = this.panViewX - dScreenX;
+				this.viewY = this.panViewY - dScreenY;
+				const w = this.canvas?.clientWidth ?? 1;
+				const h = this.canvas?.clientHeight ?? 1;
+				this.rotCx = this.viewX + w / (2 * this.viewScale);
+				this.rotCy = this.viewY + h / (2 * this.viewScale);
 			}
 			this.markViewAdjusted();
 			return;
@@ -3847,9 +3950,7 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		if (this.groupDragging) {
-			this.groupDragging = false;
-			this.groupOrigins.clear();
-			this.groupStartCentroid = null;
+			this.endGroupDrag();
 			this.dragSplitHandled = false;
 			this.pointerDown = false;
 			this.updateCursor();
@@ -4071,6 +4172,32 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
+	/**
+	 * Release a group drag, committing the dropped positions as the new homes.
+	 *
+	 * The settled home spring skips `node.selected`, so a dragged group holds
+	 * its new position only while it is selected. If the drop does not become
+	 * the home, deselecting hands the group back to a spring still anchored at
+	 * the pre-drag position and it snaps back with nothing visibly pulling it.
+	 * Committing the home here is what makes a manual placement stick, and it
+	 * matches what `endAnchorDrag` already does for anchor drags.
+	 */
+	private endGroupDrag(): void {
+		for (const i of this.groupOrigins.keys()) {
+			const n = this.nodes[i];
+			if (!n) {
+				continue;
+			}
+			n.homeX = n.x;
+			n.homeY = n.y;
+			n.homeZ = n.z;
+			n.homeSet = true;
+		}
+		this.groupDragging = false;
+		this.groupOrigins.clear();
+		this.groupStartCentroid = null;
+	}
+
 	private beginGroupDrag(e: PointerEvent): void {
 		this.groupDragging = true;
 		this.groupStartX = e.clientX;
@@ -4143,7 +4270,12 @@ export class SemanticHologramView extends ItemView {
 		const restC = this.centroidOfRest();
 		if (restC) {
 			const dRest = this.dist3(selCentroid, restC);
-			if (dRest > sd && dRest > this.lastRestDistance + 1) {
+			const movingOut = dRest > sd && dRest > this.lastRestDistance + 1;
+			// Dragging a set that is already a whole hologram (or whole holograms)
+			// away from another splits nothing — they were separate to begin with,
+			// so there is no new hologram to name. Fall through to the merge check,
+			// which still applies when the drag carries them toward another one.
+			if (movingOut && !this.selectionIsWholeHolograms()) {
 				this.dragSplitHandled = true;
 				void this.beginSplit();
 				return;
@@ -4154,13 +4286,68 @@ export class SemanticHologramView extends ItemView {
 		this.maybeMergeIntoHologram(selCentroid);
 	}
 
-	private nodeMatchesSelectedHolograms(node: GraphNode): boolean {
-		const sel = this.plugin.settings.selectedHolograms;
-		if (!sel || sel.length === 0) {
+	private nodeMatchesTags(node: GraphNode, tags: string[]): boolean {
+		if (!tags || tags.length === 0) {
 			return true;
 		}
-		const tags = this.plugin.hologramService.getTags(node.path);
-		return [...tags].some((t) => sel.includes(t));
+		const nodeTags = this.plugin.hologramService.getTags(node.path);
+		return [...nodeTags].some((t) => tags.includes(t));
+	}
+
+	private nodeMatchesSelectedHolograms(node: GraphNode): boolean {
+		return this.nodeMatchesTags(node, this.plugin.settings.selectedHolograms);
+	}
+
+	/** Visibility used by draw(): a live peek overrides the persisted filter without writing it. */
+	private isNodeVisible(node: GraphNode): boolean {
+		return this.peekActive
+			? this.nodeMatchesTags(node, this.peekTags)
+			: this.nodeMatchesSelectedHolograms(node);
+	}
+
+	/** Tags carried by any selected node. */
+	private selectedHologramTags(): Set<string> {
+		const tags = new Set<string>();
+		for (const i of this.selected) {
+			const node = this.nodes[i];
+			if (node) {
+				for (const t of this.plugin.hologramService.getTags(node.path)) {
+					tags.add(t);
+				}
+			}
+		}
+		return tags;
+	}
+
+	/**
+	 * True when the selection is already the *whole* of every hologram it
+	 * touches: for each tag represented in the selection, no node carrying that
+	 * tag is left behind.
+	 *
+	 * Such a set cannot be split. Moving it away from another hologram changes
+	 * no membership — the two are already separate — so asking for a name for a
+	 * "new" hologram would be wrong. A split is only meaningful when the
+	 * selection is a proper part of a hologram, or carries no hologram tag at
+	 * all, and those return false here.
+	 */
+	private selectionIsWholeHolograms(): boolean {
+		const tags = this.selectedHologramTags();
+		if (tags.size === 0) {
+			return false;
+		}
+		for (let i = 0; i < this.nodes.length; i++) {
+			const node = this.nodes[i];
+			if (!node || this.selected.has(i)) {
+				continue;
+			}
+			const nodeTags = this.plugin.hologramService.getTags(node.path);
+			for (const t of tags) {
+				if (nodeTags.has(t)) {
+					return false;
+				}
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -4691,9 +4878,7 @@ export class SemanticHologramView extends ItemView {
 			this.showHelp();
 		} else if (key === 'p' && !e.repeat) {
 			e.preventDefault();
-			const next = this.isPerspective ? 'orthographic' : 'perspective';
-			void this.plugin.setProjectionMode(next);
-			this.showToast(next === 'perspective' ? 'Projection: perspective' : 'Projection: orthographic');
+			this.toggleProjection();
 		} else if (key === 'a' && !e.repeat) {
 			// Hold to reveal hologram anchors for placement. Rebuild on reveal
 			// so membership matches the current tag graph.
@@ -4705,7 +4890,11 @@ export class SemanticHologramView extends ItemView {
 		} else if (key === 'c') {
 			this.centerSelectedOnOrigin();
 		} else if (key === 'f' && e.shiftKey) {
-			this.fitToView();
+			if (this.peekActive) {
+				this.commitHologramPeek();
+			} else {
+				this.fitToView();
+			}
 		} else if (key === 'f' && !e.repeat) {
 			this.plugin.settings.facesEnabled = !this.plugin.settings.facesEnabled;
 			void this.plugin.saveSettings();
@@ -4900,13 +5089,13 @@ private selectHovered(): void {
 			'<div class="sh-help-row"><span class="sh-help-key">c</span><span class="sh-help-desc">center hovered / selected node(s) on rotation origin</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">1</span><span class="sh-help-desc">flip view 180°</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">f</span><span class="sh-help-desc">toggle faces (3D)</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">Shift+f</span><span class="sh-help-desc">fit graph to view</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Shift+f</span><span class="sh-help-desc">fit graph to view; while previewing a hologram: keep that view</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">r</span><span class="sh-help-desc">cycle rotation: off → clockwise → counter-clockwise</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+r</span><span class="sh-help-desc">reset (fit to view, rotation to 0)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+=</span><span class="sh-help-desc">fit graph to view</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+Shift+=</span><span class="sh-help-desc">magnify (dolly in 3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+-</span><span class="sh-help-desc">demagnify (dolly in 3D)</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">s</span><span class="sh-help-desc">hold: box/lasso select, tap: select hovered node</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">s</span><span class="sh-help-desc">hold: box/lasso select, tap: select hovered node / candidates</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">a</span><span class="sh-help-desc">hold: reveal hologram anchors, drag one to place its hologram</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+s</span><span class="sh-help-desc">toggle split mode: move / copy</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+m</span><span class="sh-help-desc">toggle merge mode: absorb / emulsify</span></div>' +
@@ -4958,7 +5147,13 @@ private selectHovered(): void {
 		if (e.key.toLowerCase() === 's') {
 			this.selectMode = false;
 			if (!this.selectDragOccurred) {
-				this.selectHovered();
+				if (this.peekActive) {
+					this.commitHologramPeek({ select: true });
+				} else if (this.hoverIndex < 0 && this.candidateNodes.size > 0) {
+					this.selectCandidates();
+				} else {
+					this.selectHovered();
+				}
 			}
 			if (this.selecting) {
 				this.finishSelection();
@@ -4982,12 +5177,12 @@ private selectHovered(): void {
 
 	private onWheel = (e: WheelEvent): void => {
 		e.preventDefault();
-		const canvas = this.canvas;
-		if (!canvas) {
+		if (this.peekActive) {
 			return;
 		}
-		const rect = canvas.getBoundingClientRect();
-		const sy = e.clientY - rect.top;
+		if (!this.canvas) {
+			return;
+		}
 		const dy = Math.max(-100, Math.min(100, e.deltaY));
 
 		// If hovering over a node, change max depth instead of moving the camera
@@ -5013,16 +5208,10 @@ private selectHovered(): void {
 			return;
 		}
 
-		// 2D is a flat canvas and keeps its ordinary zoom-to-cursor behaviour.
-		const sx = e.clientX - rect.left;
-		const factor = Math.exp(-dy * PHYS.zoomSpeed);
-		const worldX = this.toWorldX(sx);
-		const worldY = this.toWorldY(sy);
-		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.viewScale * factor));
-		this.cameraDistance = this.baseCameraDistance / this.viewScale;
-		this.viewX = worldX - sx / this.viewScale;
-		this.viewY = worldY - sy / this.viewScale;
-
+		// 2D is a flat canvas, but magnification still anchors on the focal
+		// point (the canvas centre) so that wheel, buttons and 3D dolly all
+		// behave alike. The cursor does not participate.
+		this.applyScaleAboutFocalPoint(Math.exp(-dy * PHYS.zoomSpeed));
 		this.markViewAdjusted();
 	};
 
@@ -5172,6 +5361,131 @@ private selectHovered(): void {
 
 	getCandidateNodes(): ReadonlySet<string> {
 		return this.candidateNodes;
+	}
+
+	private snapshotCamera(): CameraSnapshot {
+		return {
+			target: [...this.target] as [number, number, number],
+			rotM: [...this.rotM],
+			cameraDistance: this.cameraDistance,
+			baseCameraDistance: this.baseCameraDistance,
+			viewScale: this.viewScale,
+			viewX: this.viewX,
+			viewY: this.viewY,
+			camZ: this.camZ,
+			totalSpin: this.totalSpin,
+			userAdjustedView: this.userAdjustedView,
+			autoFitCooldown: this.autoFitCooldown,
+		};
+	}
+
+	private restoreCamera(s: CameraSnapshot): void {
+		this.target = [...s.target] as [number, number, number];
+		this.rotM = [...s.rotM];
+		this.cameraDistance = s.cameraDistance;
+		this.baseCameraDistance = s.baseCameraDistance;
+		this.viewScale = s.viewScale;
+		this.viewX = s.viewX;
+		this.viewY = s.viewY;
+		this.camZ = s.camZ;
+		this.totalSpin = s.totalSpin;
+		this.userAdjustedView = s.userAdjustedView;
+		this.autoFitCooldown = s.autoFitCooldown;
+		this.updateCameraMatrix();
+	}
+
+	public isHologramPeeking(): boolean {
+		return this.peekActive;
+	}
+
+	/**
+	 * Temporarily view a hologram without committing the filter: only its nodes
+	 * (plus any already-selected holograms, when the hovered tag is one of them)
+	 * are drawn, the camera is fit to them, and they become selection candidates.
+	 * Render-only — `peekTags` never touches settings until a commit.
+	 */
+	public peekHologram(tag: string): void {
+		if (!this.settled) {
+			return;
+		}
+		if (!this.peekActive) {
+			this.peekCamera = this.snapshotCamera();
+			this.peekActive = true;
+		}
+		// Suppress the in-settle auto-fit while peeking; restored on end/commit.
+		this.userAdjustedView = true;
+		const selected = this.plugin.settings.selectedHolograms;
+		this.peekTags = selected.includes(tag) ? [...selected] : [tag];
+		const peekNodes = this.nodes.filter((n) => this.nodeMatchesTags(n, this.peekTags));
+		if (peekNodes.length === 0) {
+			return;
+		}
+		// Assign directly rather than setCandidateNodes(), which recenters the camera.
+		this.candidateNodes = new Set(peekNodes.map((n) => n.path));
+		this.pressedKeys.clear();
+		this.hoverIndex = -1;
+		this.frameNodes(peekNodes, true, true);
+	}
+
+	/** Discard the peek and restore the exact pre-peek camera. */
+	public endHologramPeek(): void {
+		if (!this.peekActive) {
+			return;
+		}
+		if (this.peekCamera) {
+			this.restoreCamera(this.peekCamera);
+		}
+		this.peekActive = false;
+		this.peekTags = [];
+		this.peekCamera = null;
+		this.candidateNodes.clear();
+	}
+
+	/**
+	 * Commit the peeked hologram filter, replacing `selectedHolograms`, keeping
+	 * the peeked camera and the candidate set live. Optionally select them.
+	 */
+	private commitHologramPeek(opts?: { select?: boolean }): void {
+		if (!this.peekActive) {
+			return;
+		}
+		this.plugin.settings.selectedHolograms = [...this.peekTags];
+		void this.plugin.saveSettings();
+		this.peekCamera = null;
+		this.peekActive = false;
+		this.peekTags = [];
+		this.userAdjustedView = true;
+		if (opts?.select) {
+			this.selectCandidates();
+		}
+		this.refreshControlsPanel();
+	}
+
+	/** Exit a peek but keep its camera (row click): discard the snapshot, drop candidates. */
+	public keepHologramPeekCamera(): void {
+		if (!this.peekActive) {
+			return;
+		}
+		this.peekCamera = null;
+		this.peekActive = false;
+		this.peekTags = [];
+		this.userAdjustedView = true;
+		this.candidateNodes.clear();
+	}
+
+	private selectCandidates(): void {
+		if (this.candidateNodes.size === 0) {
+			return;
+		}
+		for (let i = 0; i < this.nodes.length; i++) {
+			const n = this.nodes[i];
+			if (n && this.candidateNodes.has(n.path)) {
+				n.selected = true;
+				this.selected.add(i);
+			}
+		}
+		this.candidateNodes.clear();
+		this.updateCursor();
 	}
 
 	/** Searchable per-node metadata for the controls search box. */

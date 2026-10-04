@@ -10,6 +10,9 @@ export class SemanticHologramControlsView extends ItemView {
 	private plugin: SemanticHologramPlugin;
 	private lastHologramIndex = -1;
 	private searchQuery: string = '';
+	private peekTimer: number | null = null;
+	private peekedTag: string | null = null;
+	private panelClickHandler: ((e: MouseEvent) => void) | null = null;
 
 	private get mergeModeLabel(): 'absorb' | 'emulsify' {
 		return this.plugin.settings.mergeMode ?? 'emulsify';
@@ -38,6 +41,44 @@ export class SemanticHologramControlsView extends ItemView {
 			.getLeavesOfType(VIEW_TYPE_HOLOGRAM)
 			.map((l) => l.view)
 			.find((v): v is SemanticHologramView => v instanceof SemanticHologramView);
+	}
+
+	private clearPeekTimer(): void {
+		if (this.peekTimer !== null) {
+			window.clearTimeout(this.peekTimer);
+			this.peekTimer = null;
+		}
+	}
+
+	/** Hover/focus previews a hologram after a short dwell; row switches are immediate. */
+	private requestHologramPeek(tag: string, immediate: boolean): void {
+		const view = this.getView();
+		if (!view) return;
+		if (this.peekedTag === tag && view.isHologramPeeking()) return;
+		this.clearPeekTimer();
+		const fire = () => {
+			this.peekTimer = null;
+			this.peekedTag = tag;
+			view.peekHologram(tag);
+		};
+		if (immediate || view.isHologramPeeking()) {
+			fire();
+		} else {
+			this.peekTimer = window.setTimeout(fire, 180);
+		}
+	}
+
+	private endHologramPeek(): void {
+		this.clearPeekTimer();
+		this.peekedTag = null;
+		this.getView()?.endHologramPeek();
+	}
+
+	/** A row click is a filter action: end any preview but keep its camera. */
+	private commitPeekOnClick(): void {
+		this.clearPeekTimer();
+		this.peekedTag = null;
+		this.getView()?.keepHologramPeekCamera();
 	}
 
 	constructor(leaf: WorkspaceLeaf, plugin: SemanticHologramPlugin) {
@@ -91,6 +132,7 @@ export class SemanticHologramControlsView extends ItemView {
 
 	render(): void {
 		console.log('Rendering controls view, settings:', this.plugin.settings);
+		this.endHologramPeek();
 		const { contentEl } = this;
 		contentEl.empty();
 		document.querySelectorAll('.sh-node-preview-card').forEach(el => el.remove());
@@ -520,10 +562,9 @@ export class SemanticHologramControlsView extends ItemView {
 		const saveAndRefresh = () => {
 			this.plugin.settings.selectedHolograms = [...selected];
 			void this.plugin.saveSettings();
-			this.plugin.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM).forEach((leaf) => (leaf.view as any).render());
 		};
 
-		contentEl.createDiv({ cls: 'sh-controls-hint', text: 'Click: select · Shift+click: range · Ctrl+click: toggle' });
+		contentEl.createDiv({ cls: 'sh-controls-hint', text: 'Click: select · Shift+click: range · Ctrl+click: toggle · Click panel background: clear' });
 
 		if (allTags.length === 0) {
 			hologramList.createDiv({ cls: 'sh-controls-hint', text: 'No hologram tags yet — add `holograms:` to a note in scope.' });
@@ -537,7 +578,14 @@ export class SemanticHologramControlsView extends ItemView {
 				row.addClass('is-active');
 			}
 			row.createSpan({ text: tag, cls: 'sh-hologram-label' });
+			row.addEventListener('mouseenter', () => {
+				this.requestHologramPeek(tag, false);
+			});
+			row.addEventListener('focus', () => {
+				this.requestHologramPeek(tag, true);
+			});
 			row.addEventListener('click', (e) => {
+				this.commitPeekOnClick();
 				if (e.ctrlKey || e.metaKey) {
 					if (selected.has(tag)) {
 						selected.delete(tag);
@@ -572,6 +620,52 @@ export class SemanticHologramControlsView extends ItemView {
 				}
 			});
 		});
+
+		hologramList.addEventListener('mouseleave', () => {
+			this.endHologramPeek();
+		});
+		hologramList.addEventListener('focusout', (e) => {
+			const next = e.relatedTarget as Node | null;
+			if (next && hologramList.contains(next)) return;
+			this.endHologramPeek();
+		});
+		hologramList.addEventListener('keydown', (e) => {
+			if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+			const rows = Array.from(hologramList.querySelectorAll<HTMLElement>('.sh-hologram-row'));
+			const current = document.activeElement as HTMLElement | null;
+			const idx = current ? rows.indexOf(current) : -1;
+			const next = e.key === 'ArrowDown'
+				? (idx < 0 ? 0 : Math.min(rows.length - 1, idx + 1))
+				: (idx <= 0 ? 0 : idx - 1);
+			const target = rows[next];
+			if (!target) return;
+			e.preventDefault();
+			target.focus();
+			target.scrollIntoView({ block: 'nearest' });
+			const tag = target.getAttribute('data-tag');
+			if (tag) this.requestHologramPeek(tag, true);
+		});
+		// Clicking the panel background clears the hologram selection. The rows
+		// exactly fill `.sh-hologram-list`, so a real background click lands on
+		// `contentEl`, not on the list element. Ignore rows and interactive
+		// controls so those keep working. Detach the previous handler first:
+		// `render()` runs repeatedly and `contentEl` itself is never emptied.
+		if (this.panelClickHandler) {
+			contentEl.removeEventListener('click', this.panelClickHandler);
+		}
+		this.panelClickHandler = (e: MouseEvent) => {
+			const target = e.target as HTMLElement;
+			if (target.closest('.sh-hologram-row, button, input, select, textarea, a, .sh-search-bar, .sh-search-results')) {
+				return;
+			}
+			this.endHologramPeek();
+			if (selected.size === 0) return;
+			selected.clear();
+			this.lastHologramIndex = -1;
+			refreshRows();
+			saveAndRefresh();
+		};
+		contentEl.addEventListener('click', this.panelClickHandler);
 
 		const mode = this.plugin.settings.hologramMode;
 

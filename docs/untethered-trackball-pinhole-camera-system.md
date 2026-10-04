@@ -256,6 +256,17 @@ drifts.
   (magnify / demagnify), centred on the focal point.
 * **Shift + scroll:** dollies the assembly along the line of sight.
 
+In **2D** there is no dolly, and the `Shift` modifier has no effect. A dolly is
+travel along `F`, which is perpendicular to the image plane: on a flat scene it
+would translate everything rigidly and leave magnification unchanged, so it is
+not an operation 2D can express. `dolly()` therefore refuses to run when
+`is3D` is false, and the 2D wheel is a scale change about the canvas centre —
+the wheel, the `+`/`−` buttons, and plain vs. `Shift`+scroll are all the same
+magnification. "Focal point" in 2D is a convenience name for the canvas centre;
+there is no `T` in 2D. The canvas centre therefore plays the role that `T` does
+in 3D, which is why the wheel, the buttons, and the 3D dolly all magnify about
+the same place.
+
 The `+` / `−` buttons (and `Ctrl+Shift+=` / `Ctrl+-`) issue the same magnification in
 fixed increments and are not zoom controls in any other sense. They are named
 **Magnify** / **Demagnify**, since magnification is the observable effect in both
@@ -370,6 +381,18 @@ This is exact rather than iterative: no cross products, no accumulated error.
 Setting `θ = 90°`, `Φ = 0°` reproduces the home basis. It is used by
 `setCameraState` / `rebuildBasis` for **absolute framing** only — not by the
 continuous rotation control, which is prime-frame (Section 7).
+
+### 8.4 State ownership
+
+`src/view.ts` is the single source of truth for the camera. The live basis `rotM`
+and focal point `target` are the authoritative state; the eye `E`, the world
+angles `θ`/`Φ`, and the projection scale are always **re-derived** from them (never
+stored independently). Every other module is a **reader**: `src/controlsView.ts`
+(the side panel) and the plugin MCP must obtain `θ`/`Φ` and the focal point from
+the view (`getCameraState`, `getFocalPoint`, `rotM`, `target`) rather than keeping
+a second copy that can drift out of sync. Orientation is written only through the
+view's own rotation paths — `applyRotationDeltas` for continuous control, and
+`setCameraState` / `rebuildBasis` for absolute framing only (Section 7.3).
 
 ---
 

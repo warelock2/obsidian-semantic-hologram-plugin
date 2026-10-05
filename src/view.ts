@@ -3138,22 +3138,20 @@ export class SemanticHologramView extends ItemView {
 		const h = canvas.clientHeight;
 
 		if (this.is3D) {
-			const cx = w / 2;
-			const cy = h - 35;
+			const cxTrack = w / 2;
+			const cyTrack = h - 35;
 			const rx = 20;
 			const ry = 7;
 
-			// Draw X-Z plane rotation track ellipse at bottom center (fixed screen space, no zoom scaling)
 			ctx.save();
 			ctx.strokeStyle = this.withAlpha(this.nodeColor, 0.85);
 			ctx.lineWidth = 1.5;
 			ctx.beginPath();
-			ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+			ctx.ellipse(cxTrack, cyTrack, rx, ry, 0, 0, Math.PI * 2);
 			ctx.stroke();
 
-			// Draw orbiting node on the X-Z track (driven by rotY rotation around Y axis)
-			const dotSx = cx + rx * Math.cos(-this.totalSpin);
-			const dotSy = cy + ry * Math.sin(-this.totalSpin);
+			const dotSx = cxTrack + rx * Math.cos(-this.totalSpin);
+			const dotSy = cyTrack + ry * Math.sin(-this.totalSpin);
 			const dotRadius = 4.5;
 
 			ctx.fillStyle = this.nodeColor;
@@ -3166,60 +3164,94 @@ export class SemanticHologramView extends ItemView {
 			ctx.restore();
 		}
 
-		this.drawPrimeFrameGizmo();
-
 		if (!this.plugin.settings.showRotationCenter) {
 			return;
 		}
 
-		const origin = this.rotatePoint(0, 0, 0, this.target[0], this.target[1], this.target[2]);
-		const originScale = this.projectionScale(origin.z);
-		let ix = this.toScreenX(origin.x, origin.z);
-		let iy = this.toScreenY(origin.y, origin.z);
-		if (!Number.isFinite(originScale)) {
-			ix = NaN;
-			iy = NaN;
-		}
-
-		const s = 13;
-		ctx.lineWidth = 1.25;
-		ctx.strokeStyle = this.withAlpha(this.labelColor, 0.85);
-		ctx.fillStyle = this.withAlpha(this.labelColor, 0.92);
-		ctx.font = '9px var(--font-interface)';
-		ctx.textAlign = 'left';
-		ctx.textBaseline = 'middle';
-
-		const drawAxis = (ax: number, ay: number, label: string): void => {
-			const len = Math.hypot(ax, ay);
-			if (len < 0.001) {
-				ctx.beginPath();
-				ctx.arc(ix, iy, 1.5, 0, Math.PI * 2);
-				ctx.fill();
-				ctx.fillText(label, ix + 3, iy - 6);
+		if (this.is3D) {
+			const origin = this.rotatePoint(0, 0, 0, this.target[0], this.target[1], this.target[2]);
+			const originScale = this.projectionScale(origin.z);
+			const ix = this.toScreenX(origin.x, origin.z);
+			const iy = this.toScreenY(origin.y, origin.z);
+			if (!Number.isFinite(originScale)) {
 				return;
 			}
-			const ex = (ax / len) * s;
-			const ey = (ay / len) * s;
+
+			const s = 24;
+			const BLUE = '#43AA8B';
+
+			const worldX = this.rotatePoint(1, 0, 0, 0, 0, 0);
+			const worldY = this.rotatePoint(0, 1, 0, 0, 0, 0);
+			const worldZ = this.rotatePoint(0, 0, 1, 0, 0, 0);
+
+			const axes: Array<{ v: { x: number; y: number }; label: string }> = [
+				{ v: { x: worldX.x, y: worldX.y }, label: 'x' },
+				{ v: { x: worldY.x, y: worldY.y }, label: 'y' },
+				{ v: { x: worldZ.x, y: worldZ.y }, label: 'z' },
+			];
+
+			ctx.save();
+			ctx.strokeStyle = BLUE;
+			ctx.fillStyle = BLUE;
+			ctx.lineWidth = 2;
+			ctx.lineCap = 'round';
+			ctx.lineJoin = 'round';
+			ctx.font = '10px var(--font-interface)';
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+
 			ctx.beginPath();
-			ctx.moveTo(ix, iy);
-			ctx.lineTo(ix + ex, iy + ey);
+			ctx.arc(ix, iy, 3, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.beginPath();
+			ctx.arc(ix, iy, 6.5, 0, Math.PI * 2);
 			ctx.stroke();
-			const lx = ix + ex + (Math.abs(ax) < Math.abs(ay) ? 3 : Math.sign(ax) * 3 + 2);
-			const ly = iy + ey + (Math.abs(ay) < Math.abs(ax) ? -6 : Math.sign(ay) * 3 - 2);
-			ctx.fillText(label, lx, ly);
-		};
+
+			for (const ax of axes) {
+				const vx = ax.v.x;
+				const vy = ax.v.y;
+				const len = Math.hypot(vx, vy);
+
+				if (len < 0.001) {
+					ctx.beginPath();
+					ctx.arc(ix, iy, 3, 0, Math.PI * 2);
+					ctx.fill();
+					ctx.beginPath();
+					ctx.arc(ix, iy, 6.5, 0, Math.PI * 2);
+					ctx.stroke();
+					ctx.fillText(ax.label, ix + 12, iy + 12);
+					continue;
+				}
+
+				const ex = vx / len;
+				const ey = vy / len;
+				const tx = ix + ex * s;
+				const ty = iy + ey * s;
+
+				ctx.beginPath();
+				ctx.moveTo(ix, iy);
+				ctx.lineTo(tx, ty);
+				ctx.stroke();
+
+				const head = 6;
+				const px = -ey;
+				const py = ex;
+
+				ctx.beginPath();
+				ctx.moveTo(tx, ty);
+				ctx.lineTo(tx - ex * head + px * head * 0.55, ty - ey * head + py * head * 0.55);
+				ctx.lineTo(tx - ex * head - px * head * 0.55, ty - ey * head - py * head * 0.55);
+				ctx.closePath();
+				ctx.fill();
+
+				ctx.fillText(ax.label, ix + ex * (s + 9), iy + ey * (s + 9));
+			}
+			ctx.restore();
+		}
+
+		this.drawPrimeFrameGizmo();
 
 		if (this.is3D) {
-			const rx = this.rotatePoint(1, 0, 0, 0, 0, 0);
-			const ry = this.rotatePoint(0, 1, 0, 0, 0, 0);
-			const rz = this.rotatePoint(0, 0, 1, 0, 0, 0);
-			drawAxis(rx.x, rx.y, 'x');
-			drawAxis(ry.x, ry.y, 'y');
-			drawAxis(rz.x, rz.y, 'z');
-
-			// Focal Point Indicator (red crosshair with whitespace in the center at viewport midpoint)
-			const w = this.canvas?.clientWidth ?? 800;
-			const h = this.canvas?.clientHeight ?? 600;
 			const cx = w / 2;
 			const cy = h / 2;
 			const gap = 8;
@@ -3229,23 +3261,59 @@ export class SemanticHologramView extends ItemView {
 			ctx.strokeStyle = 'rgba(255, 0, 0, 0.9)';
 			ctx.lineWidth = 1.5;
 			ctx.beginPath();
-			// Top line
 			ctx.moveTo(cx, cy - gap - len);
 			ctx.lineTo(cx, cy - gap);
-			// Bottom line
 			ctx.moveTo(cx, cy + gap);
 			ctx.lineTo(cx, cy + gap + len);
-			// Left line
 			ctx.moveTo(cx - gap - len, cy);
 			ctx.lineTo(cx - gap, cy);
-			// Right line
 			ctx.moveTo(cx + gap, cy);
 			ctx.lineTo(cx + gap + len, cy);
 			ctx.stroke();
 			ctx.restore();
-		} else {
-			drawAxis(1, 0, 'x');
-			drawAxis(0, 1, 'y');
+		}
+
+		if (!this.is3D) {
+			const cx = w / 2;
+			const cy = h / 2;
+			const s = 24;
+			const BLUE = '#43AA8B';
+
+			ctx.save();
+			ctx.strokeStyle = BLUE;
+			ctx.fillStyle = BLUE;
+			ctx.lineWidth = 2;
+			ctx.lineCap = 'round';
+			ctx.lineJoin = 'round';
+			ctx.font = '10px var(--font-interface)';
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+
+			const draw2DAxis = (ex: number, ey: number, label: string): void => {
+				const tx = cx + ex * s;
+				const ty = cy + ey * s;
+				ctx.beginPath();
+				ctx.moveTo(cx, cy);
+				ctx.lineTo(tx, ty);
+				ctx.stroke();
+
+				const head = 6;
+				const px = -ey;
+				const py = ex;
+
+				ctx.beginPath();
+				ctx.moveTo(tx, ty);
+				ctx.lineTo(tx - ex * head + px * head * 0.55, ty - ey * head + py * head * 0.55);
+				ctx.lineTo(tx - ex * head - px * head * 0.55, ty - ey * head - py * head * 0.55);
+				ctx.closePath();
+				ctx.fill();
+
+				ctx.fillText(label, cx + ex * (s + 9), cy + ey * (s + 9));
+			};
+
+			draw2DAxis(1, 0, 'x');
+			draw2DAxis(0, 1, 'y');
+			ctx.restore();
 		}
 	}
 

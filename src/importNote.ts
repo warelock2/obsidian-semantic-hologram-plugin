@@ -4,7 +4,7 @@ import { auditHologramNodes, HologramAuditModal } from './audit';
 import type SemanticHologramPlugin from './main';
 
 /** Ensure a note declares `hologram-node: true`, preserving existing frontmatter. */
-export function ensureHologramContent(content: string, defaultNoteType = 'concept', source: TFile, plugin: SemanticHologramPlugin, hologramTag?: string): string {
+export function ensureHologramContent(content: string, defaultNoteType = 'thought', source: TFile, plugin: SemanticHologramPlugin, hologramTag?: string): string {
 	const created = new Date().toISOString().slice(0, 10);
 	// 1. Ensure frontmatter
 	let res = content;
@@ -262,8 +262,7 @@ export async function importNoteIntoHolograms(plugin: SemanticHologramPlugin, so
 	}
 
 	finalContent = rewriteLinks(plugin, finalContent);
-	const defaultType = plugin.settings.nodeTypes[0]?.id ?? 'concept';
-	finalContent = ensureHologramContent(finalContent, defaultType, source, plugin, hologramTag);
+	finalContent = ensureHologramContent(finalContent, 'thought', source, plugin, hologramTag);
 	
 	try {
 		let f: TFile;

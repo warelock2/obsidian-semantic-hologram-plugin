@@ -53,8 +53,7 @@ export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFi
 		}
 		
 		content = rewriteLinks(plugin, content);
-		const defaultType = plugin.settings.nodeTypes[0]?.id ?? 'concept';
-		content = ensureHologramContent(content, defaultType, source, plugin, hologramTag);
+		content = ensureHologramContent(content, 'thought', source, plugin, hologramTag);
 		try {
 			if (existingFile instanceof TFile) {
 				await vault.modify(existingFile, content);

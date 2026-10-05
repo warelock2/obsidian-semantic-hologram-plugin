@@ -315,6 +315,7 @@ any time for the in-app help overlay. The full control set:
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |
 | `c` | Center hovered / selected node(s) on the rotation origin |
+| `Delete` | Delete selected nodes — moves their notes to the vault trash after two confirmations |
 | `1` | Flip the view 180° |
 | `f` | Toggle faces (3D) |
 | `Shift+F` | Fit graph to view |

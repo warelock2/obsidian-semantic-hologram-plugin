@@ -4896,10 +4896,16 @@ export class SemanticHologramView extends ItemView {
 		if (e.ctrlKey || e.metaKey || e.altKey) {
 			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !e.repeat) {
 				e.preventDefault();
+				let count = 0;
 				for (let i = 0; i < this.nodes.length; i++) {
+					const node = this.nodes[i];
+					if (!node || !this.isNodeVisible(node)) {
+						continue;
+					}
 					this.selected.add(i);
+					count++;
 				}
-				this.showToast(`Selected all ${this.nodes.length} nodes`);
+				this.showToast(`Selected all ${count} nodes`);
 				return;
 			}
 			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.repeat) {
@@ -4957,6 +4963,9 @@ export class SemanticHologramView extends ItemView {
 			}
 		} else if (key === 'c') {
 			this.centerSelectedOnOrigin();
+		} else if (e.key === 'Delete' && !e.repeat) {
+			e.preventDefault();
+			void this.deleteSelectedNodes();
 		} else if (key === 'f' && e.shiftKey) {
 			if (this.peekActive) {
 				this.commitHologramPeek();
@@ -5041,8 +5050,9 @@ private selectHovered(): void {
 		let tx = 0;
 		let ty = 0;
 		let tz = 0;
+		let count = 0;
+
 		if (this.selected.size > 0) {
-			let count = 0;
 			for (const i of this.selected) {
 				const n = this.nodes[i];
 				if (!n) {
@@ -5053,12 +5063,16 @@ private selectHovered(): void {
 				tz += n.z;
 				count++;
 			}
-			if (count === 0) {
-				return;
+		} else if (this.plugin.settings.selectedHolograms.length > 0) {
+			for (const n of this.nodes) {
+				if (!this.nodeMatchesSelectedHolograms(n)) {
+					continue;
+				}
+				tx += n.x;
+				ty += n.y;
+				tz += n.z;
+				count++;
 			}
-			tx /= count;
-			ty /= count;
-			tz /= count;
 		} else {
 			const idx = this.hoverIndex >= 0 ? this.hoverIndex : this.pinnedIndex >= 0 ? this.pinnedIndex : -1;
 			if (idx < 0) {
@@ -5071,16 +5085,106 @@ private selectHovered(): void {
 			tx = node.x;
 			ty = node.y;
 			tz = node.z;
+			count = 1;
 		}
+
+		if (count === 0) {
+			return;
+		}
+
+		tx /= count;
+		ty /= count;
+		tz /= count;
+
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
 		if (w === 0 || h === 0) {
 			return;
 		}
-		this.viewX = tx - w / (2 * this.viewScale);
-		this.viewY = ty - h / (2 * this.viewScale);
-		console.log(`[SH] centerSelectedOnOrigin: view=(${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}) scale=${this.viewScale.toFixed(3)}`);
+
+		if (this.is3D) {
+			this.target = [tx, ty, tz];
+		} else {
+			this.viewX = tx - w / (2 * this.viewScale);
+			this.viewY = ty - h / (2 * this.viewScale);
+		}
 		this.markViewAdjusted();
+	}
+
+	/** Resolve true only after both confirmation stages are accepted. */
+	private confirmNodeDeletion(targets: DeleteTarget[]): Promise<boolean> {
+		return new Promise((resolve) => {
+			let settled = false;
+			const settle = (ok: boolean): void => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				resolve(ok);
+			};
+			new DeleteNodesModal(this.app, targets, (ok) => {
+				if (!ok) {
+					settle(false);
+					return;
+				}
+				new DeleteNodesConfirmModal(this.app, targets, settle).open();
+			}).open();
+		});
+	}
+
+	private async deleteSelectedNodes(): Promise<void> {
+		const targets: DeleteTarget[] = [];
+		const seen = new Set<string>();
+		for (const i of this.selected) {
+			const node = this.nodes[i];
+			if (!node || seen.has(node.path)) {
+				continue;
+			}
+			const file = this.app.vault.getAbstractFileByPath(node.path);
+			if (!(file instanceof TFile)) {
+				continue;
+			}
+			seen.add(node.path);
+			targets.push({
+				file,
+				title: node.label || file.basename,
+				holograms: [...this.plugin.hologramService.getTags(node.path)].sort((a, b) => a.localeCompare(b)),
+			});
+		}
+		if (targets.length === 0) {
+			this.showToast('No selected nodes to delete');
+			return;
+		}
+
+		if (!(await this.confirmNodeDeletion(targets))) {
+			return;
+		}
+
+		let deleted = 0;
+		const failures: string[] = [];
+		for (const t of targets) {
+			try {
+				await this.app.vault.trash(t.file, true);
+				deleted++;
+			} catch (err) {
+				failures.push(`${t.file.path}: ${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
+
+		this.selected.clear();
+		for (const node of this.nodes) {
+			node.selected = false;
+		}
+		this.hoverIndex = -1;
+		this.pinnedIndex = -1;
+		await this.plugin.refreshIncomingRelationships();
+		await this.plugin.refreshGraphs();
+
+		if (failures.length > 0) {
+			this.showToast(`Trashed ${deleted}; failed ${failures.length} (${failures[0]})`);
+		} else {
+			this.showToast(`Moved ${deleted} note${deleted === 1 ? '' : 's'} to trash`);
+		}
 	}
 
 	private async takeScreenshot(): Promise<void> {
@@ -5151,10 +5255,11 @@ private selectHovered(): void {
 			'<div class="sh-help-section">Keyboard</div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">h</span><span class="sh-help-desc">hold: show help</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+f</span><span class="sh-help-desc">focus node search</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+a</span><span class="sh-help-desc">select all nodes</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+a</span><span class="sh-help-desc">select all visible nodes</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+z</span><span class="sh-help-desc">undo</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+Shift+z / Ctrl+y</span><span class="sh-help-desc">redo</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">c</span><span class="sh-help-desc">center hovered / selected node(s) on rotation origin</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Delete</span><span class="sh-help-desc">delete selected nodes (notes to trash, confirmed twice)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">1</span><span class="sh-help-desc">flip view 180°</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">f</span><span class="sh-help-desc">toggle faces (3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+f</span><span class="sh-help-desc">fit graph to view; while previewing a hologram: keep that view</span></div>' +
@@ -5860,6 +5965,131 @@ class HologramSplitModal extends Modal {
 		if (!this.done) {
 			this.done = true;
 			this.resolveFirst(null);
+		}
+	}
+}
+
+/** One note a delete would remove, with the metadata the confirm table shows. */
+interface DeleteTarget {
+	file: TFile;
+	title: string;
+	holograms: string[];
+}
+
+/** Renders the title/hologram table a delete would remove, shared by both confirm stages. */
+function buildDeleteNodeTable(contentEl: HTMLElement, targets: DeleteTarget[]): void {
+	const n = targets.length;
+	contentEl.createDiv({
+		cls: 'sh-split-desc',
+		text: `${n} note${n === 1 ? '' : 's'} will be moved to the trash:`,
+	});
+	const table = contentEl.createEl('table', { cls: 'sh-delete-node-table' });
+	const head = table.createEl('thead').createEl('tr');
+	head.createEl('th', { text: 'Title' });
+	head.createEl('th', { text: 'Hologram' });
+	const body = table.createEl('tbody');
+	for (const t of targets) {
+		const row = body.createEl('tr');
+		row.createEl('td', { text: t.title });
+		row.createEl('td', { text: `[${t.holograms.join(', ')}]` });
+	}
+}
+
+/** Stage 1 of node deletion: states the consequence, requires an explicit continue. */
+class DeleteNodesModal extends Modal {
+	private resolveStage: (ok: boolean) => void;
+	private done = false;
+
+	constructor(
+		app: App,
+		private targets: DeleteTarget[],
+		resolve: (ok: boolean) => void,
+	) {
+		super(app);
+		this.resolveStage = resolve;
+	}
+
+	private finish(ok: boolean): void {
+		if (this.done) {
+			return;
+		}
+		this.done = true;
+		this.resolveStage(ok);
+		this.close();
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.addClass('sh-split-modal');
+		this.titleEl.setText('Are you sure?');
+		buildDeleteNodeTable(contentEl, this.targets);
+		contentEl.createDiv({ cls: 'sh-split-buttons' }, (el) => {
+			el.createEl('button', { text: 'Cancel', cls: 'mod-ghost' }, (btn) => {
+				btn.addEventListener('click', () => this.finish(false));
+			});
+			el.createEl('button', { text: 'Continue', cls: 'mod-warning' }, (btn) => {
+				btn.addEventListener('click', () => this.finish(true));
+			});
+		});
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+		if (!this.done) {
+			this.done = true;
+			this.resolveStage(false);
+		}
+	}
+}
+
+/** Stage 2 of node deletion: the irreversible-looking final gate. */
+class DeleteNodesConfirmModal extends Modal {
+	private resolveStage: (ok: boolean) => void;
+	private done = false;
+
+	constructor(
+		app: App,
+		private targets: DeleteTarget[],
+		resolve: (ok: boolean) => void,
+	) {
+		super(app);
+		this.resolveStage = resolve;
+	}
+
+	private finish(ok: boolean): void {
+		if (this.done) {
+			return;
+		}
+		this.done = true;
+		this.resolveStage(ok);
+		this.close();
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.addClass('sh-split-modal');
+		this.titleEl.setText('Are you absolutely sure?');
+		const n = this.targets.length;
+		contentEl.createDiv({
+			cls: 'sh-split-desc',
+			text: `Last chance. ${n === 1 ? 'This note' : `These ${n} notes`} will leave the vault. You can restore ${n === 1 ? 'it' : 'them'} from the trash afterwards, but the graph will not offer an undo.`,
+		});
+		buildDeleteNodeTable(contentEl, this.targets);
+		contentEl.createDiv({ cls: 'sh-split-buttons' }, (el) => {
+			el.createEl('button', { text: 'Cancel', cls: 'mod-ghost' }, (btn) => {
+				btn.addEventListener('click', () => this.finish(false));
+			});
+			el.createEl('button', { text: 'Delete', cls: 'mod-warning' }, (btn) => {
+				btn.addEventListener('click', () => this.finish(true));
+			});
+		});
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+		if (!this.done) {
+			this.done = true;
+			this.resolveStage(false);
 		}
 	}
 }

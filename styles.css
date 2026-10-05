@@ -1315,3 +1315,31 @@
 }
 
 
+
+/* Two-stage node deletion confirmation table (title / hologram list) */
+.sh-delete-node-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: var(--font-ui-small);
+	table-layout: fixed;
+}
+
+.sh-delete-node-table th,
+.sh-delete-node-table td {
+	text-align: left;
+	vertical-align: top;
+	padding: 4px 8px 4px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+	overflow-wrap: anywhere;
+}
+
+.sh-delete-node-table th {
+	color: var(--text-muted);
+	font-weight: 500;
+}
+
+.sh-delete-node-table td:nth-child(2) {
+	color: var(--text-muted);
+	font-family: var(--font-monospace);
+	font-size: var(--font-smallest);
+}

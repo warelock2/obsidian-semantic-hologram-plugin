@@ -8,13 +8,14 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { runDiffractometerScan, detectStructuralDefects } from "./discovery";
-import { TFile } from "obsidian";
 
 const VAULT_ROOT = process.cwd();
 const HOLOGRAM_DIR = path.join(VAULT_ROOT, "hologram");
 const DATA_JSON_PATH = path.join(VAULT_ROOT, "data.json");
 const GRAPH_STATE_PATH = path.join(VAULT_ROOT, "graph-state.json");
+
+/** How long to wait for the plugin to answer a scan command. */
+const SCAN_TIMEOUT_MS = 20000;
 
 function getSettings() {
 	if (!fs.existsSync(DATA_JSON_PATH)) {
@@ -134,35 +135,184 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 			},
 			{
 				name: "dump_graph_state",
-				description: "Get the current dumped graph state JSON.",
+				description: "Dump the LIVE plugin graph state (camera, layout, nodes, links) and return it. Asks the running plugin to produce a fresh dump, so this is current state, not whatever the last debug command left on disk.",
 				inputSchema: {
 					type: "object",
 					properties: {},
 				},
 			},
-			{
-				name: "run_diffractometer_scan",
-				description: "Run an energy diffusion (spreading activation) scan from a source hologram node to uncover latent connections.",
-				inputSchema: {
-					type: "object",
-					properties: {
-						filename: { type: "string", description: "Source hologram filename" },
-						iterations: { type: "number", description: "Diffusion steps (default 15)" },
-					},
-					required: ["filename"],
+{
+			name: "run_diffraction_scan",
+			description:
+				"Run the diffraction scan over the LIVE plugin graph: activation from an optional source, plus bridges, resonance, gaps and ranked chains. Computed by the plugin against in-memory state, not from a dump file. Omit `filename` for a structural pass with no injection.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					filename: { type: "string", description: "Optional source note: path or title" },
+					target: { type: "string", description: "Optional second note to explain a connection to" },
 				},
 			},
-			{
-				name: "detect_structural_defects",
-				description: "Scan the hologram network for structural defects, circular reasoning (cycles), and orphaned nodes.",
-				inputSchema: {
-					type: "object",
-					properties: {},
+		},
+		{
+			name: "find_bridges",
+			description: "Notes whose neighbours barely connect to each other — they hold two regions together. Read from a live diffraction scan.",
+			inputSchema: { type: "object", properties: {} },
+		},
+		{
+			name: "find_unlinked_pairs",
+			description:
+				"Pairs of notes that both lit up during a scan but have no edge between them. An absence, so the result is bounded and the scan reports how many candidates it found versus drew.",
+			inputSchema: { type: "object", properties: {} },
+		},
+		{
+			name: "explain_connection",
+			description:
+				"Shortest path between two notes, plus which intermediate notes actually carry activation charge — the hop path alone cannot tell a load-bearing route from a dead one.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					filename: { type: "string", description: "First note: path or title" },
+					target: { type: "string", description: "Second note: path or title" },
 				},
+				required: ["filename", "target"],
 			},
-		],
+		},
+	],
 	};
 });
+
+const COMMAND_PATH = path.join(VAULT_ROOT, ".hologram-command.json");
+const SCAN_RESULT_PATH = path.join(VAULT_ROOT, ".hologram-scan.json");
+
+/**
+ * Ask the plugin to dump its graph state *now* and return that dump.
+ *
+ * This used to be a bare `readFileSync`. The dump file is written by the
+ * `dump-graph-state` debug command, so reading it returned whatever the last
+ * manual invocation left there — with no way to tell it apart from current
+ * state. It was once 29 hours stale and still showed a reflection matrix
+ * (det = -1) while the live camera read det = +1, which sent a reader hunting
+ * a bug in the negated up-row that did not exist.
+ *
+ * So: stamp a nonce, ask the plugin to re-dump with it, and accept the file
+ * only when that nonce comes back. Any other content is a previous dump.
+ */
+async function requestGraphStateDump(): Promise<string> {
+    const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+    fs.writeFileSync(COMMAND_PATH, JSON.stringify({ action: "dump_graph_state", nonce, timestamp: Date.now() }));
+
+    const deadline = Date.now() + SCAN_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 150));
+        let current: string;
+        try {
+            current = fs.readFileSync(GRAPH_STATE_PATH, "utf8");
+        } catch {
+            continue;
+        }
+        let parsed: Record<string, unknown>;
+        try {
+            parsed = JSON.parse(current) as Record<string, unknown>;
+        } catch {
+            continue; // half-written; try again
+        }
+        if (parsed.nonce !== nonce) continue; // a previous dump, or not ours yet
+
+        if (typeof parsed.error === "string") {
+            return JSON.stringify({ tool: "dump_graph_state", error: parsed.error }, null, 2);
+        }
+        return current;
+    }
+    return JSON.stringify(
+        { tool: "dump_graph_state", error: "plugin did not produce a dump in time; is the graph view open?" },
+        null,
+        2,
+    );
+}
+
+/**
+ * Ask the plugin to run a scan and read what it produced.
+ *
+ * This server is a separate OS process with no handle on the Obsidian view, so
+ * computing a scan here would mean re-parsing markdown from disk and reading a
+ * dump file that can be arbitrarily stale. Instead we ask the plugin — which
+ * holds the graph in memory — via the command file, and read the bytes it
+ * writes. Same bytes the render layer reads.
+ *
+ * Each request stamps a nonce and waits for the result to change, so a stale
+ * result from a previous scan is never returned as if it were fresh.
+ */
+async function requestScan(name: string, args: Record<string, unknown>): Promise<string> {
+    const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+    let previous = "";
+    try {
+        previous = fs.readFileSync(SCAN_RESULT_PATH, "utf8");
+    } catch {
+        previous = "";
+    }
+
+    fs.writeFileSync(
+        COMMAND_PATH,
+        JSON.stringify({
+            action: "run_scan",
+            nonce,
+            filename: typeof args.filename === "string" ? args.filename : undefined,
+            target: typeof args.target === "string" ? args.target : undefined,
+            timestamp: Date.now(),
+        }),
+    );
+
+    const deadline = Date.now() + SCAN_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 150));
+        let current: string;
+        try {
+            current = fs.readFileSync(SCAN_RESULT_PATH, "utf8");
+        } catch {
+            continue;
+        }
+        if (current === previous) continue;
+
+        let parsed: Record<string, unknown>;
+        try {
+            parsed = JSON.parse(current) as Record<string, unknown>;
+        } catch {
+            continue; // half-written; try again
+        }
+
+        if (typeof parsed.error === "string") {
+            return JSON.stringify({ tool: name, error: parsed.error }, null, 2);
+        }
+
+        // Surface the "found nothing" and "never ran" distinction to the caller
+        // rather than letting an empty result read as a finding.
+        const head: Record<string, unknown> = {
+            tool: name,
+            degenerate: parsed.degenerate,
+            diagnostics: parsed.diagnostics,
+        };
+
+        switch (name) {
+            case "find_bridges":
+                return JSON.stringify({ ...head, bridges: parsed.bridges }, null, 2);
+            case "find_unlinked_pairs":
+                return JSON.stringify({ ...head, gaps: parsed.gaps }, null, 2);
+            case "explain_connection":
+                return JSON.stringify({ ...head, connection: parsed.connection }, null, 2);
+            default:
+                return JSON.stringify({ ...head, ...parsed }, null, 2);
+        }
+    }
+
+    return JSON.stringify({
+        tool: name,
+        error:
+            "timed out waiting for the plugin to publish a scan. Is the Semantic Hologram graph view open?",
+        waitedMs: SCAN_TIMEOUT_MS,
+    }, null, 2);
+}
 
 // Minimal parser helpers
 function parseHologram(content: string) {
@@ -268,124 +418,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
 	if (name === "dump_graph_state") {
-		if (!fs.existsSync(GRAPH_STATE_PATH)) {
-			return { content: [{ type: "text", text: JSON.stringify({ error: "Graph state not yet dumped. Run the debug command in Obsidian." }) }] };
-		}
-		const content = fs.readFileSync(GRAPH_STATE_PATH, "utf8");
-		return { content: [{ type: "text", text: content }] };
+		return { content: [{ type: "text", text: await requestGraphStateDump() }] };
 	}
 
-    if (name === "run_diffractometer_scan") {
-        const sourceFile = typedArgs.filename;
-        const iterations = typedArgs.iterations ? parseInt(typedArgs.iterations, 10) : 15;
-        if (!sourceFile) throw new Error("Missing 'filename' argument.");
-
-        if (!fs.existsSync(HOLOGRAM_DIR)) {
-            return { content: [{ type: "text", text: JSON.stringify({ error: "Hologram directory not found." }) }] };
+    if (name === "run_diffraction_scan" || name === "find_bridges" || name === "find_unlinked_pairs" || name === "explain_connection") {
+        if (name === "explain_connection" && (!typedArgs.filename || !typedArgs.target)) {
+            throw new Error("explain_connection requires both 'filename' and 'target'.");
         }
-
-        const files = fs.readdirSync(HOLOGRAM_DIR).filter((f) => f.endsWith(".md"));
-        const adj = new Map<string, Set<string>>();
-        const fileNames = new Set(files);
-
-        for (const file of files) {
-            const content = fs.readFileSync(path.join(HOLOGRAM_DIR, file), "utf8");
-            const parsed = parseHologram(content);
-            if (!adj.has(file)) adj.set(file, new Set());
-            for (const rel of parsed.rels) {
-                const target = rel.target;
-                if (fileNames.has(target)) {
-                    adj.get(file)!.add(target);
-                    if (!adj.has(target)) adj.set(target, new Set());
-                    adj.get(target)!.add(file);
-                }
-            }
-        }
-
-        let energy = new Map<string, number>();
-        for (const f of files) energy.set(f, 0.0);
-        if (energy.has(sourceFile)) energy.set(sourceFile, 1.0);
-
-        for (let i = 0; i < iterations; i++) {
-            const nextEnergy = new Map<string, number>(energy);
-            for (const [node, val] of energy.entries()) {
-                if (val > 0.001) {
-                    const neighbors = adj.get(node);
-                    if (neighbors && neighbors.size > 0) {
-                        const spread = (val * 0.3) / neighbors.size;
-                        for (const nbr of neighbors) {
-                            nextEnergy.set(nbr, (nextEnergy.get(nbr) ?? 0) + spread);
-                        }
-                    }
-                }
-            }
-            energy = nextEnergy;
-            for (const [node, val] of energy.entries()) {
-                energy.set(node, val * 0.85);
-            }
-        }
-
-        // Find unlinked high energy nodes (latent discoveries)
-        const directNeighbors = adj.get(sourceFile) || new Set();
-        const results = Array.from(energy.entries())
-            .filter(([node, score]) => node !== sourceFile && !directNeighbors.has(node) && score > 0.01)
-            .sort((a, b) => b[1] - a[1])
-            .map(([node, score]) => ({ filename: node, energyScore: score }));
-
-        return { content: [{ type: "text", text: JSON.stringify({ source: sourceFile, latentDiscoveries: results }, null, 2) }] };
-    }
-
-    if (name === "detect_structural_defects") {
-        if (!fs.existsSync(HOLOGRAM_DIR)) {
-            return { content: [{ type: "text", text: JSON.stringify({ error: "Hologram directory not found." }) }] };
-        }
-
-        const files = fs.readdirSync(HOLOGRAM_DIR).filter((f) => f.endsWith(".md"));
-        const adj = new Map<string, string[]>();
-        const fileNames = new Set(files);
-
-        for (const file of files) {
-            const content = fs.readFileSync(path.join(HOLOGRAM_DIR, file), "utf8");
-            const parsed = parseHologram(content);
-            if (!adj.has(file)) adj.set(file, []);
-            for (const rel of parsed.rels) {
-                if (fileNames.has(rel.target)) {
-                    adj.get(file)!.push(rel.target);
-                }
-            }
-        }
-
-        const visited = new Set<string>();
-        const recStack = new Set<string>();
-        const cycles: string[][] = [];
-        const orphans: string[] = [];
-
-        for (const file of files) {
-            if ((adj.get(file)?.length ?? 0) === 0) {
-                orphans.push(file);
-            }
-        }
-
-        function findCycles(u: string, path: string[]) {
-            visited.add(u);
-            recStack.add(u);
-            for (const v of adj.get(u) ?? []) {
-                if (recStack.has(v)) {
-                    cycles.push([...path, v]);
-                } else if (!visited.has(v)) {
-                    findCycles(v, [...path, v]);
-                }
-            }
-            recStack.delete(u);
-        }
-
-        for (const file of files) {
-            if (!visited.has(file)) {
-                findCycles(file, [file]);
-            }
-        }
-
-        return { content: [{ type: "text", text: JSON.stringify({ cycles, orphans }, null, 2) }] };
+        return { content: [{ type: "text", text: await requestScan(name, typedArgs) }] };
     }
 
 	throw new Error(`Unknown tool: ${name}`);

@@ -12,6 +12,10 @@ node_modules
 # They should be uploaded to GitHub releases instead.
 main.js
 
+# Same for the MCP server bundle — derived from src/mcp-server.ts by
+# `npm run build:mcp`. A stale copy keeps serving requests from old code.
+mcp-server.js
+
 # Exclude sourcemaps
 *.map
 
@@ -25,3 +29,41 @@ graph-state.json
 # The plugin directory is symlinked from the vault, so vault folders land in the
 # repo working tree. hologram/ is user note content, not plugin source.
 hologram/
+
+# --- runtime channel between the plugin and the MCP server ---------------------
+# Both live in the plugin directory, because that is where the MCP server writes
+# and the plugin watches. They are regenerated every call and are not project files.
+.hologram-command.json
+.hologram-scan.json
+.hologram-status.json
+
+# --- agent session transcripts -------------------------------------------------
+# opencode exports these into the cwd. Multi-megabyte, nothing reads them, and
+# they can capture credentials printed to the terminal. Never commit one.
+# Root only: oldproject/session.json is deliberately NOT ignored, see below.
+/session.json
+
+# --- abandoned prior project ----------------------------------------------------
+# oldproject/ is a read-only reference: never edited, only read and ported from.
+#
+# `oldproject/.git.disabled` IS tracked, on purpose. It is the only copy of that
+# project's own git history — 89 objects and 2.3 MB. It was committed by accident
+# when the directory was added wholesale, and it looks like cruft, but untracking
+# it would destroy the sole recoverable copy of that history, particularly around
+# the planned filter-repo purge and origin re-creation. Two bytes of metadata
+# (`120000` symlinks, no `160000` gitlink) are what keep git from treating the
+# directory as a submodule; the absence of a literal `.git` is what does.
+#
+# Only the generated simulation output is ignored — `electromagnetic_3d.py`
+# regenerates both copies.
+/oldproject/electromagnetic_3d.json
+/oldproject/src/electromagnetic_3d.json
+
+# --- vault config, from someone opening this directory as a vault ----------------
+# A plugin needs none of it; the real vault config lives in the vault's own
+# .obsidian, which the plugin directory is symlinked into.
+.obsidian/
+
+# --- screenshots from CDP verification -------------------------------------------
+# Ad-hoc captures, several of which showed vault note labels.
+/screenshot*.png

@@ -895,6 +895,22 @@
 	text-align: center;
 }
 
+.sh-progress-hint {
+	font-size: 12px;
+	color: var(--text-muted);
+	line-height: 1.4;
+	margin: 6px 0 8px;
+}
+
+.sh-stop-record-btn {
+	width: 100%;
+	cursor: pointer;
+}
+
+.sh-stop-record-btn:hover {
+	background: var(--interactive-accent-hover, var(--background-modifier-hover));
+}
+
 .sh-search-input {
     flex: 1;
     min-width: 0;
@@ -1342,4 +1358,105 @@
 	color: var(--text-muted);
 	font-family: var(--font-monospace);
 	font-size: var(--font-smallest);
+}
+
+/* --- Diffraction highlight layers -----------------------------------------
+   A table, not a list of checkboxes: runScan computes all five layers on every
+   pass, so a count for a disabled layer is already known and hiding it would
+   withhold data we have. The row dims when its layer is off; the number stays
+   readable. The ring itself is drawn on the canvas — these are the controls and
+   the counts. */
+.sh-controls-heading {
+	margin: 12px 0 4px;
+	font-size: 0.8em;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	opacity: 0.7;
+}
+
+.sh-controls-select {
+	max-width: 160px;
+}
+
+.sh-scan-table {
+	margin: 4px 0;
+}
+
+.sh-scan-layers {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.sh-scan-layers th {
+	text-align: left;
+	font-size: 0.75em;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	opacity: 0.6;
+	padding: 2px 4px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.sh-scan-layers th:nth-child(2),
+.sh-scan-layers td:nth-child(2) {
+	width: 2.2em;
+	text-align: center;
+}
+
+.sh-scan-layers th:nth-child(3),
+.sh-scan-layers td:nth-child(3) {
+	width: 3.2em;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.sh-scan-layer-row td {
+	padding: 3px 4px;
+	vertical-align: top;
+	border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+
+.sh-scan-layer-name {
+	display: flex;
+	flex-direction: column;
+	line-height: 1.25;
+}
+
+.sh-scan-layer-name small {
+	font-size: 0.78em;
+	opacity: 0.55;
+}
+
+.sh-scan-layer-count {
+	opacity: 0.85;
+}
+
+/* Layer off: the count is still real, already-computed data — dim the row, not
+   the number. */
+.sh-scan-layer-off td {
+	opacity: 0.55;
+}
+
+.sh-scan-layer-count[title] {
+	cursor: help;
+}
+
+.sh-scan-legend {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 6px 0 2px;
+	font-size: 0.8em;
+}
+
+.sh-scan-legend-note,
+.sh-scan-legend-empty {
+	opacity: 0.65;
+}
+
+/* A degenerate scan is a broken instrument, not an empty result — say so loudly
+   enough that it cannot be read as "nothing found". */
+.sh-scan-legend-warn {
+	color: var(--text-error, #e06c75);
+	font-weight: 500;
 }

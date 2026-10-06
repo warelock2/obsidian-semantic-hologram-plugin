@@ -3,6 +3,7 @@ import type SemanticHologramPlugin from './main';
 import { SemanticHologramView, VIEW_TYPE_HOLOGRAM, buildNodePreviewModel } from './view';
 import type { SearchIndexEntry } from './view';
 import { parseSearchQuery, matchEntry } from './searchLogic';
+import type { ScanLayerSettings } from './settings';
 
 export const VIEW_TYPE_HOLOGRAM_CONTROLS = 'semantic-hologram-controls';
 
@@ -106,16 +107,28 @@ export class SemanticHologramControlsView extends ItemView {
 		this.registerEvent(
 			this.app.workspace.on('layout-change', () => this.render()),
 		);
-		// Listen for cache updates
-		this.registerEvent(
-			this.app.vault.on('modify', () => setTimeout(() => this.render(), 100)),
-		);
-		this.registerEvent(
-			this.app.vault.on('create', () => setTimeout(() => this.render(), 100)),
-		);
+		// Re-render when the derived state this panel shows changes. `delete` and
+		// `rename` used to be absent, so a trashed or renamed note left its tag
+		// listed in the Hologram Manager until an unrelated modify landed.
+		const rerenderSoon = () => setTimeout(() => this.render(), 100);
+		this.registerEvent(this.app.vault.on('modify', rerenderSoon));
+		this.registerEvent(this.app.vault.on('create', rerenderSoon));
+		this.registerEvent(this.app.vault.on('delete', rerenderSoon));
+		this.registerEvent(this.app.vault.on('rename', rerenderSoon));
+
+		// The scan counts below are derived from the graph, so they have to be
+		// re-read when the graph changes — not only when the user touches a
+		// checkbox. Without this, opening this panel while the graph was still
+		// loading left zeros and a "scan degenerate" warning on screen with no
+		// way to clear them short of toggling something.
+		const resubscribe = () => {
+			const scanView = this.getView();
+			if (scanView) this.register(() => scanView.onGraphChanged(() => this.refreshScanLegend()));
+		};
+		resubscribe();
+		this.registerEvent(this.app.workspace.on('layout-change', resubscribe));
 
 		// Add a listener to re-render when camera changes
-		this.registerEvent(this.app.workspace.on('layout-change', () => this.render()));
 		// Also re-render periodically or when the view indicates it's changed? 
 		// Actually, let's just make sure the fields update.
 		// For simplicity, we can just force-re-render the whole controls view on view updates.
@@ -128,6 +141,94 @@ export class SemanticHologramControlsView extends ItemView {
 	onClose(): Promise<void> {
 		this.contentEl.empty();
 		return Promise.resolve();
+	}
+
+	/**
+	 * Redraw only the diffraction legend, in place.
+	 *
+	 * Three things this has to get right, all of them found by looking at the
+	 * rendered panel rather than the code:
+	 *
+	 *  - It must not call `render()`. That empties the panel and resets scroll.
+	 *  - It must force the scan. `setScanLayer` only invalidates; the recompute
+	 *    otherwise happens lazily in the graph's next animation frame, so counts
+	 *    read straight after a toggle are one frame stale.
+	 *  - It must always say something. Previously, with no graph view open the
+	 *    branch was skipped and the element was left empty — an invisible legend
+	 *    that reads as "no legend" rather than "no graph".
+	 */
+	private refreshScanLegend(): void {
+		const legendRow = this.contentEl.querySelector('.sh-scan-legend');
+		const rows = Array.from(this.contentEl.querySelectorAll<HTMLElement>('.sh-scan-layer-row'));
+
+		const scanView = this.getView();
+		if (!scanView) {
+			legendRow?.empty();
+			legendRow?.createSpan({ text: 'Open the graph view to run a scan.', cls: 'sh-scan-legend-empty' });
+			for (const row of rows) {
+				const cell = row.querySelector<HTMLElement>('.sh-scan-layer-count');
+				if (cell) cell.textContent = '\u2014';
+			}
+			return;
+		}
+
+		// Stamp-guarded, so this is free when nothing actually changed.
+		scanView.refreshScan();
+		const legend = scanView.getScanLegend();
+		const hasSource = this.plugin.settings.scanSource.trim().length > 0;
+
+		for (const row of rows) {
+			const key = row.dataset.layer as keyof ScanLayerSettings | undefined;
+			const cell = row.querySelector<HTMLElement>('.sh-scan-layer-count');
+			if (!key || !cell) continue;
+			const entry = legend.layers.find((l) => l.key === key);
+			const count = entry?.count ?? 0;
+			const needsSource = row.dataset.needsSource === 'true';
+
+			cell.textContent = String(count);
+			// Dim the row when its layer is off, but leave the number readable: it
+			// is already-computed data, not something that was switched off.
+			row.classList.toggle('sh-scan-layer-off', entry?.on !== true);
+
+			const notes: string[] = [];
+			// A zero has to be distinguishable from a finding. Gaps, resonance and
+			// activation all read the activation field, which is empty in a
+			// structural pass — reporting "0" there would state an absence the
+			// scan never had the means to detect.
+			if (count === 0 && needsSource && !hasSource) {
+				notes.push('Needs an injection source — this layer reads the activation field, which is empty in a structural pass.');
+			}
+			// Truncation disclosure: a bounded view that reports only what it drew
+			// tells the flattering half of the truth.
+			if (entry?.found != null && entry.limit != null && entry.found > entry.limit) {
+				notes.push(`${entry.found} found, ${entry.limit} drawn — ${entry.found - entry.limit} not shown.`);
+			}
+			if (notes.length > 0) {
+				cell.setAttribute('data-note', notes.join(' '));
+				cell.title = notes.join(' ');
+			} else {
+				cell.removeAttribute('data-note');
+				cell.removeAttribute('title');
+			}
+		}
+
+		if (!legendRow) return;
+		legendRow.empty();
+
+		if (legend.degenerate) {
+			legendRow.createSpan({
+				text: 'Scan degenerate \u2014 the graph has no usable edges, so every count here is meaningless.',
+				cls: 'sh-scan-legend-warn',
+			});
+			return;
+		}
+
+		if (legend.suppressed > 0) {
+			legendRow.createSpan({
+				text: `${legend.suppressed} node(s) matched more than one layer; the strongest is drawn.`,
+				cls: 'sh-scan-legend-note',
+			});
+		}
 	}
 
 	render(): void {
@@ -690,6 +791,72 @@ export class SemanticHologramControlsView extends ItemView {
 		centerCheckbox.addEventListener('change', () => {
 			void this.plugin.setShowRotationCenter(centerCheckbox.checked);
 		});
+
+		// --- diffraction highlight layers ---------------------------------------
+		//
+		// Five read-only projections of one scan. Shown as a table rather than five
+		// loose checkboxes because `runScan` computes all five on every pass
+		// regardless of which are enabled — the counts for a disabled layer are
+		// already known, so hiding them behind a checkbox would be withholding
+		// information we have. The count column is therefore always populated.
+		contentEl.createEl('h4', { text: 'Diffraction layers', cls: 'sh-controls-heading' });
+
+		const scanView = this.getView();
+		const scanSettings = this.plugin.settings.scanLayers;
+		const layerRows: Array<[keyof ScanLayerSettings, string, string, boolean]> = [
+			['activation', 'Activation', 'raw charge field — a measurement, not a finding', true],
+			['gaps', 'Gaps', 'lit notes with no edge between them — an absence', true],
+			['resonance', 'Resonance', 'lit by the field but not linked to the source', true],
+			['bridges', 'Bridges', 'notes holding two regions together — a fact', false],
+			['discovered', 'Discovered', 'ranked resonance chains — the strongest reading', false],
+		];
+
+		// Injection source as a dropdown: the graph already knows every node, so
+		// there is no reason to ask anyone to type a name we could have listed.
+		const sourceRow = contentEl.createDiv({ cls: 'sh-controls-row' });
+		sourceRow.createEl('span', { text: 'Injection source', cls: 'sh-controls-label' });
+		const sourceSelect = sourceRow.createEl('select', { cls: 'sh-controls-select' });
+		sourceSelect.createEl('option', { value: '', text: 'none (structural pass)' });
+		for (const node of scanView ? scanView.scanGraph().nodes : []) {
+			sourceSelect.createEl('option', { value: node.path, text: node.label });
+		}
+		sourceSelect.value = this.plugin.settings.scanSource;
+		sourceSelect.addEventListener('change', () => {
+			void this.plugin.setScanSource(sourceSelect.value);
+			this.refreshScanLegend();
+		});
+
+		const tableWrap = contentEl.createDiv({ cls: 'sh-scan-table' });
+		const table = tableWrap.createEl('table', { cls: 'sh-scan-layers' });
+		const thead = table.createEl('thead');
+		const headRow = thead.createEl('tr');
+		headRow.createEl('th', { text: 'Layer' });
+		headRow.createEl('th', { text: 'On' });
+		headRow.createEl('th', { text: 'Nodes' });
+		const tbody = table.createEl('tbody');
+
+		for (const [key, label, hint, needsSource] of layerRows) {
+			const row = tbody.createEl('tr', { cls: 'sh-scan-layer-row' });
+			row.dataset.layer = key;
+			const nameCell = row.createEl('td', { cls: 'sh-scan-layer-name' });
+			nameCell.createSpan({ text: label });
+			nameCell.createEl('small', { text: hint });
+			const onCell = row.createEl('td', { cls: 'sh-scan-layer-on' });
+			const box = onCell.createEl('input', { type: 'checkbox' }) as HTMLInputElement;
+			box.checked = scanSettings[key];
+			row.dataset.needsSource = String(needsSource);
+			box.addEventListener('change', () => {
+				void this.plugin.setScanLayer(key, box.checked);
+				// Only the counts change — the checkbox is already in the right
+				// state — so update those cells alone. Calling this.render() here
+				// emptied the panel and reset its scroll position.
+				this.refreshScanLegend();
+			});
+			row.createEl('td', { cls: 'sh-scan-layer-count', text: '—' });
+		}
+
+		contentEl.createDiv({ cls: 'sh-scan-legend' });
+		this.refreshScanLegend();
 
 		const depthRow = contentEl.createDiv({ cls: 'sh-controls-row' });
 		depthRow.createEl('span', { text: `Hover depth: ${this.plugin.settings.hoverDepth}`, cls: 'sh-controls-label' });

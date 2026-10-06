@@ -10,11 +10,25 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = process.argv[2] === 'production';
 
+// Two bundles from one config. `node esbuild.config.mjs production mcp`
+// emits the MCP server instead of the plugin.
+//
+// The MCP server is a plain Node stdio process, so it targets node and is
+// emitted as ESM — this package.json sets "type": "module", so a CJS bundle
+// written to mcp-server.js would be loaded as ESM and fail on its first
+// `require`. main.js stays CJS: Obsidian loads plugins through its own module
+// system and never consults this file's package.json.
+//
+// The SDK is left unbundled — the plugin directory *is* this repo, so
+// node_modules is always present — which keeps the artifact a few KB instead
+// of bundling the SDK into ~800 KB.
+const buildMcp = process.argv[3] === 'mcp';
+
 const context = await esbuild.context({
 	banner: {
 		js: banner,
 	},
-	entryPoints: ['src/main.ts'],
+	entryPoints: [buildMcp ? 'src/mcp-server.ts' : 'src/main.ts'],
 	bundle: true,
 	external: [
 		'obsidian',
@@ -31,13 +45,15 @@ const context = await esbuild.context({
 		'@lezer/highlight',
 		'@lezer/lr',
 		...builtinModules,
+		...(buildMcp ? ['@modelcontextprotocol/sdk'] : []),
 	],
-	format: 'cjs',
+	format: buildMcp ? 'esm' : 'cjs',
+	platform: buildMcp ? 'node' : 'browser',
 	target: 'es2021',
 	logLevel: 'info',
 	sourcemap: prod ? false : 'inline',
 	treeShaking: true,
-	outfile: 'main.js',
+	outfile: buildMcp ? 'mcp-server.js' : 'main.js',
 	minify: prod,
 });
 

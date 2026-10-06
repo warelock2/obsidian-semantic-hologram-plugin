@@ -37,6 +37,15 @@ export interface SourceKindEntry {
 	description?: string;
 }
 
+/** The five diffraction highlight layers, in order of authority (weakest first). */
+export interface ScanLayerSettings {
+	activation: boolean;
+	gaps: boolean;
+	resonance: boolean;
+	bridges: boolean;
+	discovered: boolean;
+}
+
 export interface SemanticHologramSettings {
 	hologramMode: HologramMode;
 	hologramTool: HologramTool;
@@ -65,6 +74,17 @@ export interface SemanticHologramSettings {
 	defaultConfidence: number;
 	showGravitasColor: boolean;
 	showConfidenceHalo: boolean;
+	/**
+	 * Diffraction highlight layers, each independently switchable.
+	 *
+	 * All five are read-only projections of the same scan, recomputed per pass
+	 * and never persisted. Order here is the order of *authority*, weakest
+	 * claim first, and it is also the render precedence: a node shows the
+	 * strongest layer it belongs to, and the rest stay queryable over MCP.
+	 */
+	scanLayers: ScanLayerSettings;
+	/** Injection source for the scan, as a note path. Empty means no injection. */
+	scanSource: string;
 	selectedHolograms: string[];
 	incomingFolderPath: string;
 
@@ -156,6 +176,14 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	defaultConfidence: 0.5,
 	showGravitasColor: true,
 	showConfidenceHalo: true,
+	scanLayers: {
+		activation: false,
+		gaps: false,
+		resonance: false,
+		bridges: false,
+		discovered: false,
+	},
+	scanSource: '',
 	selectedHolograms: [],
 
 	separationDistance: 500,

@@ -50,8 +50,6 @@ export function ensureHologramContent(content: string, defaultNoteType = 'though
 // Regex for matching a relation line anywhere in the note body
 const REL_LINE_SEARCH = /-\s+([a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?)\s+\[\[([^\]]+)\]\]\s*(\{R\})?\s*\((\d{1,2}(?:\.\d{1,2})?)\)/;
 
-import { injectWikilinksAsRelations as injectLogic } from './importLogic';
-
 export function injectWikilinksAsRelations(content: string, source: TFile, plugin: SemanticHologramPlugin): string {
 	// 1. Parse existing Relations section
 	const relHeaderMatch = content.match(/(^|\n)(#{1,6}\s+Relations(?:hips)?\s*\r?\n)/i);

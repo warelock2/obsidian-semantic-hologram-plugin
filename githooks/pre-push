@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# pre-push: block direct pushes to public mirrors so secrets can never leave
+# the private origin. Mirrors are updated with scripts/push_public, which
+# force-pushes a sanitized copy with sensitive paths stripped from history.
+# This hook is activated by `git config core.hooksPath githooks` (per-clone).
+set -u
+
+REMOTE="${1:-}"
+
+# Public mirror remote names. `origin` is the private LAN origin and is
+# deliberately NOT matched — it may receive the full, unsanitized history.
+case "$REMOTE" in
+  dmz|github)
+    echo "pre-push: direct pushes to '$REMOTE' are blocked; use scripts/push_public (strips sensitive files from history)" >&2
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac

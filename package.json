@@ -7,8 +7,13 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"version": "node version-bump.mjs && git add manifest.json versions.json",
-		"lint": "eslint ."
+		"build:mcp": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production mcp",
+		"typecheck": "tsc -noEmit -skipLibCheck",
+		"check": "npm run typecheck && npm run lint",
+		"lint": "eslint .",
+		"lint:fix": "eslint . --fix",
+		"clean": "node scripts/clean.mjs",
+		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
 	"keywords": [],
 	"license": "GPL-3.0-or-later",

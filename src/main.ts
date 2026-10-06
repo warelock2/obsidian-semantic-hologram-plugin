@@ -1,4 +1,6 @@
 import { App, Modal, Notice, Plugin, Setting, TFile, WorkspaceLeaf } from 'obsidian';
+import { readFileSync, watch, writeFileSync } from 'fs';
+import { join } from 'path';
 import {
 	DEFAULT_SETTINGS,
 	HOLOGRAM_FOLDER,
@@ -8,6 +10,7 @@ import {
 	SemanticHologramSettings,
 	SemanticHologramSettingTab,
 } from './settings';
+import type { ScanLayerSettings } from './settings';
 import { SemanticHologramControlsView, VIEW_TYPE_HOLOGRAM_CONTROLS } from './controlsView';
 import { SemanticHologramView, VIEW_TYPE_HOLOGRAM } from './view';
 import { syncIncomingRelationships } from './incoming';
@@ -22,60 +25,118 @@ import { auditHologramNodes, HologramAuditModal } from './audit';
 import { NodeConfidenceModal } from './confidence';
 import { IncomingImportModal } from './incomingImportModal';
 
-import { IncomingIndex } from './incomingIndex';
 import { HologramService } from './hologramService';
+
+/** Vault file the MCP server writes to ask the plugin to run something. */
+const COMMAND_FILE = '.hologram-command.json';
+
+/** Where the plugin publishes a scan result for the MCP server to read. */
+const SCAN_RESULT_FILE = '.hologram-scan.json';
+
+/** Backstop poll interval for the command file. Stat-cheap, and it must not be slow. */
+const COMMAND_POLL_MS = 1000;
+
+/** Coalescing window for cache reloads and path-keyed graph rebuilds. */
+const CACHE_REFRESH_DEBOUNCE_MS = 250;
+
+/** `DataAdapter.getBasePath` exists at runtime but is absent from the typings. */
+type BasePathAdapter = { getBasePath(): string };
 
 export default class SemanticHologramPlugin extends Plugin {
 	settings!: SemanticHologramSettings;
-	incomingIndex!: IncomingIndex;
 	hologramService!: HologramService;
 	private ribbonIcon: HTMLElement | null = null;
+	private cacheRefreshTimer: number | null = null;
+	private renameRebuildTimer: number | null = null;
+	private lastCommandStamp = '';
+
+	/**
+	 * Coalesce hologram-tag cache reloads into a single pass.
+	 *
+	 * Every vault event that can change a note's `holograms:` frontmatter has to
+	 * invalidate this cache, because `getAllTags()` and the anchor groups are
+	 * both derived from it. `delete` and `rename` used to be missing from that
+	 * set entirely, so a trashed or renamed note kept contributing its tags
+	 * until some unrelated modify reloaded the whole map. Reloading is O(vault),
+	 * so bulk operations collapse into one reload rather than N.
+	 */
+	private scheduleCacheRefresh(): void {
+		if (this.cacheRefreshTimer !== null) {
+			window.clearTimeout(this.cacheRefreshTimer);
+		}
+		this.cacheRefreshTimer = window.setTimeout(() => {
+			this.cacheRefreshTimer = null;
+			void this.hologramService.loadCache();
+		}, CACHE_REFRESH_DEBOUNCE_MS);
+	}
+
+	/**
+	 * Debounced graph rebuild for path-keyed events.
+	 *
+	 * Renaming a folder fires one event per file, and a rebuild is a full
+	 * re-derive of the graph, so the last event wins instead of the first.
+	 */
+	private scheduleRebuild(): void {
+		if (this.renameRebuildTimer !== null) {
+			window.clearTimeout(this.renameRebuildTimer);
+		}
+		this.renameRebuildTimer = window.setTimeout(() => {
+			this.renameRebuildTimer = null;
+			void this.refreshGraphs();
+		}, CACHE_REFRESH_DEBOUNCE_MS);
+	}
 
 	async onload() {
 		await this.loadSettings();
 		this.hologramService = new HologramService(this);
 		await this.hologramService.loadCache();
-		this.incomingIndex = new IncomingIndex(this);
-		await this.incomingIndex.update();
+		this.startCommandListener();
 
 		this.registerEvent(
 			this.app.vault.on('modify', async (file) => {
 				if (file instanceof TFile) {
-					void this.incomingIndex.update();
-					void this.hologramService.loadCache();
+					this.scheduleCacheRefresh();
 					// Only sync if it's a hologram note to avoid infinite loops and bloat
 					if (this.isInScope(file.path)) {
 						await this.refreshIncomingRelationships();
 						await this.refreshGravitasSections();
 					}
 				}
-				if (file.path === '.hologram-command.json') {
-					void this.handleCommandFile();
-				}
 			})
 		);
 		this.registerEvent(
 			this.app.vault.on('create', async (file) => {
 				if (file instanceof TFile && this.isInScope(file.path)) {
-					void this.hologramService.loadCache();
+					this.scheduleCacheRefresh();
 					await this.refreshIncomingRelationships();
 					await this.refreshGravitasSections();
-				}
-				if (file.path === '.hologram-command.json') {
-					void this.handleCommandFile();
 				}
 			})
 		);
 		this.registerEvent(
 			this.app.vault.on('delete', async (file) => {
-				void this.incomingIndex.update();
 				if (file instanceof TFile && this.isInScope(file.path)) {
+					this.scheduleCacheRefresh();
 					await this.refreshIncomingRelationships();
 					await this.refreshGravitasSections();
 				}
 			})
 		);
-
+		this.registerEvent(
+			this.app.vault.on('rename', (file, oldPath) => {
+				if (!(file instanceof TFile)) {
+					return;
+				}
+				// Both the tag cache and the graph are keyed by path, and a rename
+				// can move a note either into or out of scope, so re-derive both.
+				this.scheduleCacheRefresh();
+				this.scheduleRebuild();
+				if (this.isInScope(file.path) || this.isInScope(oldPath)) {
+					void this.refreshIncomingRelationships();
+					void this.refreshGravitasSections();
+				}
+			})
+		);
 
 		// Post-processor removed in favor of dedicated side panel view
 
@@ -304,28 +365,6 @@ export default class SemanticHologramPlugin extends Plugin {
 		this.registerEditorSuggest(new RelationSuggest(this.app, this));
 		this.registerEditorExtension(relationGhostExtension(this));
 
-		this.registerEvent(
-			this.app.vault.on('modify', (file) => {
-				if (file instanceof TFile && this.isInScope(file.path)) {
-					void this.refreshGraphs();
-				}
-			}),
-		);
-		this.registerEvent(
-			this.app.vault.on('create', (file) => {
-				if (file instanceof TFile && this.isInScope(file.path)) {
-					void this.refreshGraphs();
-				}
-			}),
-		);
-		this.registerEvent(
-			this.app.vault.on('delete', (file) => {
-				if (file instanceof TFile && this.isInScope(file.path)) {
-					void this.refreshGraphs();
-				}
-			}),
-		);
-
 		this.app.workspace.onLayoutReady(() => {
 			void this.activateControlsView();
 		});
@@ -380,6 +419,31 @@ export default class SemanticHologramPlugin extends Plugin {
 
 	getShowRotationCenter(): boolean {
 		return this.settings.showRotationCenter;
+	}
+
+	/**
+	 * Switch one diffraction highlight layer.
+	 *
+	 * Layers are independent toggles, and precedence is resolved at scan time
+	 * rather than here, so switching one never silently turns another off. The
+	 * controls panel re-renders and the graph recomputes on its next frame.
+	 */
+	async setScanLayer(key: keyof ScanLayerSettings, value: boolean): Promise<void> {
+		this.settings.scanLayers[key] = value;
+		await this.saveSettings();
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramView) v.invalidateScan();
+		}
+	}
+
+	async setScanSource(value: string): Promise<void> {
+		this.settings.scanSource = value;
+		await this.saveSettings();
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramView) v.invalidateScan();
+		}
 	}
 
 	async setShowRotationCenter(value: boolean): Promise<void> {
@@ -644,27 +708,242 @@ export default class SemanticHologramPlugin extends Plugin {
 			this.settings.hoverDepth = (saved as any).maxDepth;
 			this.settings.maxDepth = (saved as any).maxDepth;
 		}
-		if (this.settings.maxDepth === undefined) this.settings.maxDepth = this.settings.hoverDepth;
+		if ((this.settings.maxDepth as number) === undefined) this.settings.maxDepth = this.settings.hoverDepth;
 		if ((this.settings as any).depthBase === undefined) (this.settings as any).depthBase = 0.55;
+		// scanLayers was added as a nested object; a settings blob written before it
+		// merges to undefined rather than picking up the default, so fill it in.
+		const stored = (saved as { scanLayers?: Partial<SemanticHologramSettings['scanLayers']> })?.scanLayers;
+		const defaults = DEFAULT_SETTINGS.scanLayers;
+		this.settings.scanLayers = { ...defaults, ...(stored ?? {}) };
+		if (typeof this.settings.scanSource !== 'string') this.settings.scanSource = '';
 	}
 
-	private async handleCommandFile() {
-		const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
-		if (view) {
-			(view as any).startRecording();
-		} else {
-			const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM);
-			if (leaves.length > 0 && leaves[0]?.view) {
-				const v = leaves[0].view as SemanticHologramView;
-				(v as any).startRecording();
-			} else {
-				await this.activateView();
-				const newView = this.app.workspace.getActiveViewOfType(SemanticHologramView);
-				if (newView) {
-					(newView as any).startRecording();
-				}
-			}
+	/**
+ * Absolute path of this plugin's own directory.
+ *
+ * `manifest.dir` is **relative** (`.obsidian/plugins/semantic-hologram`), and it
+ * resolves against two different bases depending on the caller: the vault base
+ * for `vault.adapter`, but Obsidian's own process cwd for `fs` — which is the
+ * user's home directory, not the plugin. Anything using `fs` has to anchor it
+ * here or it silently reads the wrong path.
+ */
+pluginDir(): string {
+		const relative = this.manifest.dir;
+		if (!relative) {
+			// Never guess the config folder name: it is user-configurable, and a
+			// wrong guess here silently reads and writes outside the plugin.
+			throw new Error('semantic-hologram: manifest.dir is missing; cannot resolve the plugin directory');
 		}
+		const adapter = this.app.vault.adapter as unknown as BasePathAdapter;
+		// The vault base, not `Vault.configDir` — for this vault the two disagree,
+		// and only the base is the directory `manifest.dir` is relative to.
+		return join(adapter.getBasePath(), relative);
+	}
+
+/**
+	 * Watch the plugin directory for commands from the MCP server.
+	 *
+	 * The plugin directory is **not inside the vault** — it is symlinked in from
+	 * outside, so nothing written there ever raises a vault event. The previous
+	 * implementation listened for `.hologram-command.json` via `vault.on('create')`,
+	 * which could therefore never fire, and the one tool that depended on it had
+	 * been silently dead. The MCP server writes to its own cwd, which is this
+	 * directory, so the directory itself is what has to be watched.
+	 *
+	 * A stat-only poll runs alongside `fs.watch` as a backstop: watch is not
+	 * reliable on every filesystem, and a missed command fails silently.
+	 */
+	private startCommandListener(): void {
+		const dir = this.pluginDir();
+		if (!dir) return;
+
+		const commandPath = join(dir, COMMAND_FILE);
+		const tryHandle = (): void => {
+			let raw: string;
+			try {
+				raw = readFileSync(commandPath, 'utf8');
+			} catch {
+				return; // no command pending
+			}
+			// Content-addressed, so the same command cannot run twice however it arrived.
+			if (raw === this.lastCommandStamp) return;
+			this.lastCommandStamp = raw;
+			void this.handleCommand(raw);
+		};
+
+		try {
+			const watcher = watch(dir, (_event, filename) => {
+				if (filename === COMMAND_FILE) tryHandle();
+			});
+			this.register(() => watcher.close());
+		} catch {
+			// Watch unsupported here; the poll below still delivers.
+		}
+
+		this.registerInterval(window.setInterval(tryHandle, COMMAND_POLL_MS));
+	}
+
+	/**
+	 * Run one command from the MCP server.
+	 *
+	 * Dispatching on `action` is what lets the MCP server reach *live* state. It is
+	 * a separate OS process with no handle on the view, so anything it computed
+	 * itself would be reading a snapshot that can be arbitrarily stale. Asking the
+	 * plugin makes it do the work against the graph it actually holds.
+	 */
+	private async handleCommand(raw: string): Promise<void> {
+		let command: { action?: string; filename?: string; target?: string; nonce?: string };
+		try {
+			command = JSON.parse(raw) as { action?: string };
+		} catch {
+			return; // a half-written command file is not an error worth surfacing
+		}
+
+		switch (command.action) {
+			case 'record_gif':
+				await this.startGifRecording();
+				return;
+			case 'run_scan':
+				await this.runScanCommand(command);
+				return;
+			case 'dump_graph_state':
+				await this.dumpGraphStateCommand(command.nonce);
+				return;
+			default:
+				return;
+		}
+	}
+
+	/**
+	 * Re-dump the graph state on demand.
+	 *
+	 * The file this writes used to be the *only* thing behind the MCP
+	 * `dump_graph_state` tool, which made that tool report whatever the last
+	 * manual debug command happened to leave behind — arbitrarily stale, and
+	 * indistinguishable from current. Asking for a dump now triggers one.
+	 */
+	private async dumpGraphStateCommand(nonce?: string): Promise<void> {
+		const view = this.app.workspace
+			.getLeavesOfType(VIEW_TYPE_HOLOGRAM)
+			.map((leaf) => leaf.view)
+			.find((v): v is SemanticHologramView => v instanceof SemanticHologramView);
+		if (!view) {
+			// Still write the file, so the requester's wait terminates with a
+			// readable reason instead of timing out on a missing file.
+			writeFileSync(
+				join(this.pluginDir(), 'graph-state.json'),
+				JSON.stringify({ error: 'Semantic Hologram graph view is not open', nonce: nonce ?? null }, null, 2),
+			);
+			return;
+		}
+		await view.dumpGraphState(nonce);
+	}
+
+	private async startGifRecording() {
+		const active = this.app.workspace.getActiveViewOfType(SemanticHologramView);
+		if (active) {
+			(active as unknown as { startRecording: () => void }).startRecording();
+			return;
+		}
+		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM);
+		const existing = leaves[0]?.view as unknown as { startRecording?: () => void } | undefined;
+		if (existing && typeof existing.startRecording === 'function') {
+			existing.startRecording();
+			return;
+		}
+		await this.activateView();
+		const opened = this.app.workspace.getActiveViewOfType(SemanticHologramView) as unknown as
+			| { startRecording?: () => void }
+			| null;
+		if (opened && typeof opened.startRecording === 'function') {
+			opened.startRecording();
+		}
+	}
+
+	/**
+	 * Run the diffraction scan and publish the result.
+	 *
+	 * `filename` is an optional injection source, `target` an optional second note
+	 * to explain a connection to. The output is a plain JSON file rather than an MCP
+	 * response so the render layer and the server read the same bytes.
+	 */
+	private async runScanCommand(command: { filename?: string; target?: string }) {
+		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM);
+		const view = leaves
+			.map((l) => l.view)
+			.find((v): v is SemanticHologramView => v instanceof SemanticHologramView);
+		if (!view) {
+			await this.writeScanResult({
+				error: 'no open Semantic Hologram graph view; open one and retry',
+				timestamp: Date.now(),
+			});
+			return;
+		}
+
+		const sourceIndex = command.filename ? view.resolveScanNode(command.filename) : undefined;
+		if (sourceIndex === -1) {
+			await this.writeScanResult({
+				error: `no node matched "${command.filename}"`,
+				timestamp: Date.now(),
+			});
+			return;
+		}
+		const sources = sourceIndex === undefined ? [] : [sourceIndex];
+
+		const resolvedTarget = command.target ? view.resolveScanNode(command.target) : undefined;
+		if (resolvedTarget === -1) {
+			await this.writeScanResult({
+				error: `no node matched "${command.target}"`,
+				timestamp: Date.now(),
+			});
+			return;
+		}
+
+		const { result, targetExplanation } = view.runDiffractionScan(sources, resolvedTarget);
+		const graph = view.scanGraph();
+		const name = (i: number): { label: string; path: string } => ({
+			label: graph.nodes[i]?.label ?? `#${i}`,
+			path: graph.nodes[i]?.path ?? '',
+		});
+
+		await this.writeScanResult({
+			timestamp: Date.now(),
+			requestedSource: command.filename ?? null,
+			requestedTarget: command.target ?? null,
+			// A scan that found nothing and a scan that never ran must not look alike.
+			degenerate: result.diagnostics.degenerate,
+			degenerateReason: result.diagnostics.degenerateReason,
+			diagnostics: result.diagnostics,
+			sources: sources.map(name),
+			activation: {
+				maxEnergy: result.activation.maxEnergy,
+				meanEnergy: result.activation.meanEnergy,
+				litCount: result.activation.litCount,
+				loudest: result.activation.loudestNode === null ? null : name(result.activation.loudestNode),
+			},
+			bridges: result.bridges.map((b) => ({ ...b, ...name(b.node) })),
+			resonance: result.resonance.map((r) => ({ ...r, ...name(r.node) })),
+			gaps: result.gaps.map((g) => ({ a: name(g.a), b: name(g.b), combined: g.combined })),
+			chains: result.chains.map((c) => ({
+				nodes: c.chain.map(name),
+				truth: c.truth,
+				novelty: c.novelty,
+				usefulness: c.usefulness,
+				composite: c.composite,
+				span: c.span,
+				communities: c.communities,
+			})),
+			connection: targetExplanation,
+		});
+	}
+
+	private async writeScanResult(payload: unknown): Promise<void> {
+		// Written with `fs`, not `vault.adapter`: the adapter treats its path as
+		// vault-relative and prepends the vault base, which would double an already
+		// absolute path. The command channel reads this file with `fs` too, so one
+		// convention covers the whole handshake. Nothing indexes this directory, so
+		// no vault change event is needed.
+		writeFileSync(join(this.pluginDir(), SCAN_RESULT_FILE), JSON.stringify(payload, null, 2));
 	}
 
 	async saveSettings() {

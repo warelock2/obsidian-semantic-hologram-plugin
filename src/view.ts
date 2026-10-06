@@ -1,4 +1,6 @@
 import { App, ItemView, Modal, Notice, Platform, TFile, TextComponent, WorkspaceLeaf } from 'obsidian';
+import { writeFileSync } from 'fs';
+import { join } from 'path';
 // @ts-ignore
 import * as gifenc from 'gifenc';
 const { GIFEncoder, quantize, applyPalette } = gifenc;
@@ -11,8 +13,16 @@ import { addRelation, removeRelation } from './reviewCommon';
 import { computeNodeStats, isEvidenceType, readNodeMetas, scanGravitas } from './gravitas';
 import { ReviewConnectionsModal } from './review';
 import type { GravitasScan } from './gravitas';
+import type { ScanGraph, ScanResult } from './diffraction';
+import { buildAdjacency, explainConnection, findNodeByRef, runScan } from './diffraction';
+import type { ScanLayerSettings } from './settings';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
+
+const GIF_MAX_FRAMES = 240;
+const GIF_SAMPLE_MS = 150;
+const GIF_MAX_WIDTH = 640;
+const GIF_MAX_PIXELS = 200_000;
 
 export interface UndoAction {
 	undo(): void;
@@ -118,6 +128,23 @@ interface GraphLink {
 	dir: 'ab' | 'ba' | 'both';
 	relations: Relation[];
 	edgeColor: string;
+}
+
+/** One node's resolved highlight layer, as the renderer sees it. */
+interface ScanLayerAssignment {
+	key: keyof ScanLayerSettings;
+	/** 0..1, normalised within the layer. Drives ring alpha, never geometry. */
+	strength: number;
+	detail: string;
+}
+
+/** How two notes are connected, resolved to display names for the MCP surface. */
+interface ScanConnectionExplanation {
+	source: string;
+	target: string;
+	connected: boolean;
+	shortestPath: string[];
+	intermediates: Array<{ label: string; path: string; charge: number; degree: number }>;
 }
 
 export interface SearchIndexEntry {
@@ -229,6 +256,25 @@ const ICON_PROJ_ORTHO =
 const WHITE_EDGE = '#DDDDDD';
 
 const CANDIDATE_COLOR = '#9B5DE5';
+
+// Diffraction layer colours. Chosen to sit apart from both the gravitas spectrum
+// (red→green ramp) and the eleven editable node-type colours: the two cool hues
+// here and the warm-to-green ramp there cannot be confused, and each layer is
+// separated by roughly 60 degrees of hue so two lit layers stay tellable apart.
+// Rendered as a ring at r + 5, clear of the r + 4 "special" ring and the
+// r * 1.25 confidence halo.
+const SCAN_LAYER_COLORS: Record<string, string> = {
+	activation: '#4CC9F0',
+	gaps: '#F72585',
+	resonance: '#B5179E',
+	bridges: '#7209B7',
+	discovered: '#3A0CA3',
+};
+
+// Per-entity cap on the debug graph-state dump. The dump exists to make live
+// state inspectable, and a bounded capture has to say so — an unqualified
+// first-200 is indistinguishable from a graph that only has 200 nodes.
+const DUMP_ENTITY_LIMIT = 200;
 
 const ICON_ROTATE =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="3.6"/><ellipse cx="12" cy="12" rx="3.6" ry="9"/></svg>';
@@ -517,8 +563,20 @@ export class SemanticHologramView extends ItemView {
 	private peekCamera: CameraSnapshot | null = null;
 	private isRecording = false;
 	private isEncoding = false;
-	private recordingFrames: ImageData[] = [];
-	private recordingSpinStart = 0;
+	/**
+	 * Frames are quantised the moment they are captured and stored as indices
+	 * plus their palette, not as raw ImageData.
+	 *
+	 * Raw RGBA at the capture size is ~1.6 MB per frame; a few hundred of those
+	 * is close to a gigabyte held in memory for the length of a recording. Indexed
+	 * data is one byte per pixel, so the same clip costs a quarter as much and the
+	 * encode step at the end has nothing left to do.
+	 */
+	private recordingFrames: Array<{ index: Uint8Array; palette: number[][]; width: number; height: number }> = [];
+	private recordingStartedAt = 0;
+	private recordingStopRequested = false;
+	private recordingHitCap = false;
+	private lastCaptureAt = 0;
 	private recordingProgressEl: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: SemanticHologramPlugin) {
@@ -886,7 +944,389 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	rebuildGraph(): Promise<void> {
-		return this.buildGraph(false);
+		// Incremental: a save must not re-randomise the layout, drop the
+		// selection, or move the camera. Measured before this change, a single
+		// frontmatter edit on a settled 25-node graph moved nodes by 382 world
+		// units and cleared a 3-node selection, with the drift floor at 0.
+		return this.buildGraph(true).then((r) => {
+			this.notifyGraphChanged();
+			return r;
+		});
+	}
+
+	/**
+	 * Notified whenever the graph finishes (re)building.
+	 *
+	 * The controls panel shows scan counts derived from this graph, and it used
+	 * to read them once at render time. Opening the panel while the graph was
+	 * still loading therefore left it showing zeros and the "scan degenerate"
+	 * warning — permanently, since the only thing that re-read the counts was a
+	 * checkbox the user had to touch. It has no way to poll for this cheaply, so
+	 * the graph announces it instead.
+	 */
+	private graphChangedCallbacks: Array<() => void> = [];
+
+	onGraphChanged(cb: () => void): () => void {
+		this.graphChangedCallbacks.push(cb);
+		return () => {
+			this.graphChangedCallbacks = this.graphChangedCallbacks.filter((c) => c !== cb);
+		};
+	}
+
+	private notifyGraphChanged(): void {
+		for (const cb of [...this.graphChangedCallbacks]) {
+			try {
+				cb();
+			} catch (err) {
+				console.error('[SH] graph-changed callback failed:', err);
+			}
+		}
+	}
+
+	/**
+	 * The live graph as a body-free structure the analysis can consume.
+	 *
+	 * Deliberately drops positions, gravitas-as-render-state and everything DOM.
+	 * The analysis only needs identity and connection strength, so this is the
+	 * seam that lets `diffraction.ts` stay pure and lets a scan run off the
+	 * in-memory graph with no vault reads at all.
+	 */
+		scanGraph(): ScanGraph {
+		return {
+			nodes: this.nodes.map((n) => ({ path: n.path, label: n.label })),
+			edges: this.links.map((l) => {
+				// A link can carry several typed relations; conductance is their
+				// mean strength, which is what the layout's rest length already uses.
+				const strengths = l.relations.map((r) => r.strength).filter((s) => Number.isFinite(s));
+				const strength = strengths.length > 0
+					? strengths.reduce((a, b) => a + b, 0) / strengths.length
+					: 0.5;
+				return { a: l.a, b: l.b, strength };
+			}),
+		};
+	}
+
+	/**
+	 * Run the diffraction pass over the current graph.
+	 *
+	 * `sources` are node indices; empty means "no injection", which still yields
+	 * the bridge and chain layers because those are properties of the graph
+	 * rather than of a propagation.
+	 *
+	 * Called by the render layer and by the MCP scan action. Pure with respect to
+	 * the view: reads graph state, writes nothing.
+	 */
+	runDiffractionScan(
+		sources: readonly number[] = [],
+		target?: number,
+	): { result: ScanResult; targetExplanation: ScanConnectionExplanation | null } {
+		const graph = this.scanGraph();
+		// Gravitas is the honest weight for the truth axis — it already aggregates
+		// mass through the derivation DAG — so the scan reads it rather than
+		// re-deriving something weaker from edge strength.
+		const nodeWeight = this.nodes.map((n) => n.gravitasReal);
+		const result = runScan(graph, { sources, nodeWeight });
+		return {
+			result,
+			targetExplanation: target === undefined
+				? null
+				: this.explainScanConnection(graph, result, sources[0] ?? 0, target),
+		};
+	}
+
+	private explainScanConnection(
+		graph: ScanGraph,
+		result: ScanResult,
+		source: number,
+		target: number,
+	): ScanConnectionExplanation {
+		const adj = buildAdjacency(graph);
+		const explanation = explainConnection(graph, source, target, result.activation.energy, adj);
+		const name = (i: number): { label: string; path: string } => ({
+			label: graph.nodes[i]?.label ?? `#${i}`,
+			path: graph.nodes[i]?.path ?? '',
+		});
+		return {
+			source: name(explanation.source).label,
+			target: name(explanation.target).label,
+			connected: explanation.connected,
+			shortestPath: explanation.shortestPath.map((i) => name(i).label),
+			intermediates: explanation.intermediates.map((i) => ({
+				...name(i.node),
+				charge: Math.round(i.charge * 10000) / 10000,
+				degree: i.degree,
+			})),
+		};
+	}
+
+	/** Resolve a path or label against the live graph, for the MCP surface. */
+	resolveScanNode(ref: string): number {
+		return findNodeByRef(this.scanGraph(), ref);
+	}
+
+	// --- diffraction highlight layers -----------------------------------------
+	//
+	// Read-only projections of one scan. Three rules hold here and must keep
+	// holding:
+	//
+	//  1. Recomputed once per pass, never per frame. `draw()` runs on every rAF,
+	//     and a scan is O(steps x edges); running it there would make the frame
+	//     cost scale with the graph.
+	//  2. No inferred edge ever reaches the layout. The layers read activation
+	//     values and write colour only. A candidate edge fed to `applySprings`
+	//     would make the graph physically rearrange around a fiction, and the
+	//     fiction would then look confirmed by the shape.
+	//  3. Nothing here touches projection, camera, or the layout maths. It is
+	//     colour, alpha and ring width inside the existing draw pass.
+
+	private scanResult: ScanResult | null = null;
+	private scanStamp = '';
+	private scanLayerOfNode: Map<number, ScanLayerAssignment> = new Map();
+	private scanCounts = { nodes: 0, suppressed: 0 };
+
+	/**
+	 * What the scan found, per layer — independent of what is switched on.
+	 *
+	 * This must read `scanResult`, not `scanLayerOfNode`. The latter only holds
+	 * *highlighted* nodes, because `resolveScanLayers` skips disabled layers, so
+	 * counting it would report zero for a layer the scan actually found things
+	 * in. The panel shows every count whether or not its layer is on, so the
+	 * numbers have to describe the analysis rather than the display.
+	 *
+	 * `found` vs `reported` is the truncation disclosure: a bounded view that
+	 * reports only what it drew tells the flattering half of the truth.
+	 */
+	getScanLegend(): {
+		layers: Array<{
+			key: keyof ScanLayerSettings;
+			label: string;
+			count: number;
+			on: boolean;
+			found: number | null;
+			limit: number | null;
+		}>;
+		suppressed: number;
+		degenerate: boolean;
+		scanned: boolean;
+	} {
+		const settings = this.plugin.settings.scanLayers;
+		const result = this.scanResult;
+		const bounds = result?.diagnostics.bounds ?? {};
+
+		// Distinct nodes each layer touches, which is what the column means.
+		const nodesFor = (key: keyof ScanLayerSettings): number => {
+			if (!result) return 0;
+			switch (key) {
+				case 'activation':
+					return result.activation.litCount;
+				case 'resonance':
+					return new Set(result.resonance.map((r) => r.node)).size;
+				case 'bridges':
+					return new Set(result.bridges.map((b) => b.node)).size;
+				case 'gaps': {
+					const nodes = new Set<number>();
+					for (const g of result.gaps) { nodes.add(g.a); nodes.add(g.b); }
+					return nodes.size;
+				}
+				case 'discovered': {
+					const nodes = new Set<number>();
+					for (const c of result.chains) for (const n of c.chain) nodes.add(n);
+					return nodes.size;
+				}
+			}
+		};
+
+		const order: Array<{ key: keyof ScanLayerSettings; label: string; bound: string }> = [
+			{ key: 'discovered', label: 'Discovered', bound: 'chains' },
+			{ key: 'bridges', label: 'Bridges', bound: 'bridges' },
+			{ key: 'gaps', label: 'Gaps', bound: 'gaps' },
+			{ key: 'resonance', label: 'Resonance', bound: 'resonance' },
+			{ key: 'activation', label: 'Activation', bound: '' },
+		];
+
+		return {
+			layers: order.map(({ key, label, bound }) => ({
+				key,
+				label,
+				count: nodesFor(key),
+				on: settings[key] === true,
+				found: bound ? (bounds[bound]?.found ?? null) : null,
+				limit: bound ? (bounds[bound]?.limit ?? null) : null,
+			})),
+			suppressed: this.scanCounts.suppressed,
+			degenerate: result?.diagnostics.degenerate ?? false,
+			scanned: result !== null,
+		};
+	}
+
+	/**
+	 * Force the layers to be up to date now, rather than on the next frame.
+	 *
+	 * The draw loop recomputes them lazily, which is right for rendering but too
+	 * late for a control panel that wants to print counts immediately after a
+	 * toggle. Stamp-guarded, so calling it when nothing changed costs a string
+	 * comparison.
+	 */
+	refreshScan(): void {
+		this.ensureScan();
+	}
+
+	/** Whether a given highlight layer is currently switched on. */
+	isScanLayerOn(key: keyof ScanLayerSettings): boolean {
+		return this.plugin.settings.scanLayers[key] === true;
+	}
+
+	/**
+	 * Recompute the scan if anything it depends on has changed.
+	 *
+	 * The stamp covers the graph shape and the layer settings, so toggling a
+	 * layer recomputes and an unchanged graph does not.
+	 */
+	private ensureScan(): void {
+		const settings = this.plugin.settings.scanLayers;
+
+		// Deliberately NOT skipped when every layer is off. The panel shows a count
+		// for all five layers whether or not they are highlighted, and runScan
+		// computes all five on a single pass anyway — so an early-out here would
+		// report a row of zeroes for bridges and chains, which need no injection
+		// source and are perfectly well defined in a structural pass.
+		//
+		// This runs from draw() every frame, but it is stamp-guarded below, so
+		// steady-state cost is one string comparison.
+		const stamp = [
+			this.nodes.length,
+			this.links.length,
+			settings.activation, settings.gaps, settings.resonance,
+			settings.bridges, settings.discovered,
+			this.plugin.settings.scanSource,
+		].join('|');
+		if (stamp === this.scanStamp) return;
+		this.scanStamp = stamp;
+
+		const sourceRef = this.plugin.settings.scanSource.trim();
+		const sources = sourceRef ? [this.resolveScanNode(sourceRef)] : [];
+		if (sources[0] === -1) sources.length = 0;
+
+		const graph = this.scanGraph();
+		const result = runScan(graph, { sources, nodeWeight: this.nodes.map((n) => n.gravitasReal) });
+		this.scanResult = result;
+		this.scanCounts = { nodes: 0, suppressed: this.countOverlap(result) };
+		this.scanLayerOfNode = this.resolveScanLayers(result, settings);
+	}
+
+	/**
+	 * Assign each node the strongest layer it belongs to.
+	 *
+	 * Precedence is by authority, weakest claim first, so the strongest wins.
+	 * `suppressed` counts nodes that matched more than one layer — the number
+	 * that would otherwise be invisible, since a bounded view that reports only
+	 * what it drew tells the flattering half of the truth.
+	 */
+	private resolveScanLayers(result: ScanResult, settings: ScanLayerSettings): Map<number, ScanLayerAssignment> {
+		const out = new Map<number, ScanLayerAssignment>();
+
+		// Strongest layer FIRST, first claim wins. A node renders its most
+		// authoritative reading; weaker readings it also belongs to are counted in
+		// `suppressed` rather than drawn, because they remain queryable over MCP
+		// and the render is the bounded view.
+		const claim = (node: number, key: keyof ScanLayerSettings, strength: number, detail: string): void => {
+			if (!settings[key]) return;
+			const existing = out.get(node);
+			if (existing === undefined) {
+				out.set(node, { key, strength, detail });
+				return;
+			}
+			// Same layer claiming twice: keep the stronger reading.
+			if (key === existing.key && strength > existing.strength) {
+				existing.strength = strength;
+				existing.detail = detail;
+			}
+		};
+
+		if (settings.discovered) {
+			const max = result.chains.reduce((m, c) => Math.max(m, c.composite), 0);
+			for (const c of result.chains) {
+				const s = max > 0 ? c.composite / max : 0.5;
+				for (const node of c.chain) {
+					claim(node, 'discovered', s, `chain score ${c.composite}`);
+				}
+			}
+		}
+		if (settings.bridges) {
+			const max = result.bridges.reduce((m, b) => Math.max(m, b.bridgingPower), 0);
+			for (const b of result.bridges) {
+				claim(b.node, 'bridges', max > 0 ? b.bridgingPower / max : 0.5,
+					`bridges ${b.bridgingPower} of ${b.neighbourCount} neighbours`);
+			}
+		}
+		if (settings.gaps) {
+			// Both endpoints of a gap carry it; the score is their joint prominence.
+			const max = result.gaps.reduce((m, g) => Math.max(m, g.combined), 0);
+			for (const g of result.gaps) {
+				const s = max > 0 ? g.combined / max : 0.5;
+				claim(g.a, 'gaps', s, 'lit but unlinked');
+				claim(g.b, 'gaps', s, 'lit but unlinked');
+			}
+		}
+		if (settings.resonance) {
+			// Normalised by the strongest resonance rather than a flat constant —
+			// otherwise every resonance ring draws at the same alpha and the layer
+			// says nothing about relative prominence.
+			const max = result.resonance.reduce((m, r) => Math.max(m, r.charge), 0);
+			for (const r of result.resonance) {
+				claim(r.node, 'resonance', max > 0 ? r.charge / max : 0.5, `charge ${r.charge.toFixed(3)}`);
+			}
+		}
+		if (settings.activation) {
+			// The fallback, and deliberately last: it is diffuse across the whole
+			// field, so it only shows on a node no more specific layer claimed.
+			const max = result.activation.maxEnergy;
+			for (const [node, charge] of result.activation.energy) {
+				if (charge <= 0 || max <= 0) continue;
+				claim(node, 'activation', charge / max, `charge ${charge.toFixed(3)}`);
+			}
+		}
+
+		return out;
+	}
+
+	/**
+	 * Nodes appearing in more than one layer's result.
+	 *
+	 * Computed from the results, not from `scanLayerOfNode`, so it does not change
+	 * when layers are toggled — it is a property of the scan rather than of the
+	 * current display. `resolveScanLayers` counts overlaps among *highlighted*
+	 * layers only, which would report a different number every time a box is
+	 * ticked and silently disagree with the table.
+	 */
+	private countOverlap(result: ScanResult): number {
+		const membership = new Map<number, number>();
+		const add = (n: number): void => {
+			membership.set(n, (membership.get(n) ?? 0) + 1);
+		};
+		for (const b of result.bridges) add(b.node);
+		for (const r of result.resonance) add(r.node);
+		for (const g of result.gaps) { add(g.a); add(g.b); }
+		for (const c of result.chains) for (const n of c.chain) add(n);
+		for (const n of result.activation.energy.keys()) add(n);
+		let overlapping = 0;
+		for (const count of membership.values()) if (count > 1) overlapping++;
+		return overlapping;
+	}
+
+	/** Force the next frame to recompute the layers. Called by the settings setters. */
+	invalidateScan(): void {
+		this.scanStamp = '';
+	}
+
+	/** The resolved layer for a node index, or null. Called from `draw()`. */
+	scanLayerAt(index: number): ScanLayerAssignment | null {
+		return this.scanLayerOfNode.get(index) ?? null;
+	}
+
+	/** Whether any node belongs to a scan layer at all, for the link pass. */
+	hasScanLayers(): boolean {
+		return this.scanLayerOfNode.size > 0;
 	}
 
 	async onOpen(): Promise<void> {
@@ -961,10 +1401,16 @@ export class SemanticHologramView extends ItemView {
 		this.resizeObserver.observe(this.canvas);
 		this.resize();
 
-		void this.buildGraph();
+		void this.buildGraph().then(() => {
+			// First open frames the graph. This lives at the call site rather than
+			// inside buildGraph so that an incremental rebuild — which happens on
+			// every save — cannot move the camera out from under the user.
+			this.fitToView();
+			this.notifyGraphChanged();
+		});
 
 		this.registerEvent(
-			this.app.metadataCache.on('resolved', () => this.buildGraph(true)),
+			this.app.metadataCache.on('resolved', () => this.buildGraph(true).then(() => this.notifyGraphChanged())),
 		);
 
 		this.loop();
@@ -1205,6 +1651,10 @@ export class SemanticHologramView extends ItemView {
 			let node: GraphNode;
 			if (oldIdx !== undefined && incremental && this.nodes[oldIdx]) {
 				node = this.nodes[oldIdx]!;
+				// label is part of the reused object's state. Without this a renamed
+				// or retitled note would keep rendering its old name forever, since
+				// the incremental branch is now the normal rebuild path.
+				node.label = f.basename;
 				node.gravitasDisplay = gd;
 				node.gravitasReal = gr;
 				node.confidenceLocal = cl;
@@ -1401,6 +1851,10 @@ export class SemanticHologramView extends ItemView {
 
 		this.loadingNotice?.hide();
 		this.loadingNotice = null;
+		// Captured before the swap: the shape of the previous graph is what tells
+		// us whether physics needs to re-arm below.
+		const prevNodeCount = this.nodes?.length ?? 0;
+		const prevLinkCount = this.links?.length ?? 0;
 		this.nodes = nodes;
 		this.links = links;
 		for (const i of this.selected) {
@@ -1412,12 +1866,20 @@ export class SemanticHologramView extends ItemView {
 		this.calculateFaces();
 		this.rebuildAnchors();
 		console.log(`[SH] buildGraph: nodes=${nodes.length} links=${links.length} faces=${this.faces.length} settled=${this.settled}`);
-		if (!incremental) {
+		const topologyChanged = nodes.length !== prevNodeCount || links.length !== prevLinkCount;
+		if (!incremental || topologyChanged) {
+			// Physics must re-arm when the shape changes. `settled` is a one-way
+			// latch — the settle detector is gated on `!this.settled` — and a node
+			// arriving while settled is true is home-locked at its seed position, so
+			// without this a newly added note would sit on the ring forever instead
+			// of integrating. A content-only edit re-runs no physics at all, which is
+			// what keeps the layout stable across a save.
 			this.settled = false;
 			this.settleCount = 0;
 			this.layoutFrames = 0;
+		}
+		if (!incremental) {
 			this.selected.clear();
-			this.fitToView();
 		}
 	}
 
@@ -1536,102 +1998,261 @@ export class SemanticHologramView extends ItemView {
 		this.step();
 		this.draw();
 		if (this.isRecording) {
-			console.log('[SH] loop: isRecording=true, calling captureFrame');
 			this.captureFrame();
 		}
 		this.raf = requestAnimationFrame(this.loop);
 	};
 
+	/**
+	 * Start recording whatever happens on screen.
+	 *
+	 * Deliberately does not rotate anything. Recording a spinning animation and
+	 * recording someone panning, selecting or merging are both legitimate, and the
+	 * only one that can be right without knowing the intent is the one that
+	 * captures what actually happened. The user stops it.
+	 */
 	public async startRecording(): Promise<void> {
-		console.log('[SH] startRecording called, is3D:', this.is3D);
 		if (!this.is3D) {
 			this.showToast('Recording only supported in 3D mode');
+			return;
+		}
+		if (this.isEncoding) {
+			this.showToast('Still encoding the previous capture');
 			return;
 		}
 		this.isRecording = true;
 		this.isEncoding = false;
 		this.recordingFrames = [];
-		this.recordingSpinStart = this.totalSpin;
-		this.showToast('Recording 3D rotation...');
+		this.recordingStartedAt = performance.now();
+		this.recordingStopRequested = false;
+		this.recordingHitCap = false;
+		this.lastCaptureAt = 0;
+		this.showToast('Recording — press Stop to finish');
 
 		if (!this.recordingProgressEl) {
-			console.log('[SH] Creating recordingProgressEl and attaching to document.body');
 			this.recordingProgressEl = document.body.createDiv({ cls: 'sh-recording-progress' });
 		}
-		this.recordingProgressEl.style.cssText = 'display: block !important; visibility: visible !important;';
-		console.log('[SH] progress bar set to display block');
-		this.updateProgressUI(0, 1257);
+		this.recordingProgressEl.empty();
+		this.renderRecordingPanel();
+		this.updateProgressUI(0);
 
-		// Write status file for MCP
-		const statusPath = '.hologram-status.json';
-		const statusData = JSON.stringify({ status: 'recording', timestamp: Date.now() });
-		
-        // Use adapter directly to overwrite reliably
-        await (this.app.vault.adapter as any).write(statusPath, statusData);
+		this.writeGifStatus({ status: 'recording', frames: 0, timestamp: Date.now() });
 	}
 
-	private updateProgressUI(current: number, total: number): void {
-		if (!this.recordingProgressEl) return;
-		const pct = Math.min(100, Math.round((current / total) * 100));
-		this.recordingProgressEl.innerHTML = `
-			<div class="sh-progress-bar-title">Generating GIF: ${pct}%</div>
-			<div class="sh-progress-bar-track"><div class="sh-progress-bar-fill" style="width: ${pct}%"></div></div>
-		`;
+	/**
+	 * Write the status file the MCP server polls.
+	 *
+	 * It has to land in the plugin directory: the MCP server resolves it
+	 * against its own `process.cwd()`, which is the plugin directory, not the
+	 * vault. Writing through `vault.adapter` put it at the vault root, so
+	 * `get_gif_status` reported "no status found" while a recording was
+	 * demonstrably running.
+	 */
+	private writeGifStatus(payload: Record<string, unknown>): void {
+		try {
+			writeFileSync(
+				join(this.plugin.pluginDir(), '.hologram-status.json'),
+				JSON.stringify(payload, null, 2),
+			);
+		} catch (err) {
+			console.error('[SH] failed to write GIF status file:', err);
+		}
 	}
 
+	/**
+	 * Progress panel for a recording in progress, with the control that ends it.
+	 *
+	 * There was previously no way to stop a recording other than letting it run
+	 * into a frame limit derived from auto-rotation, which only advanced in one
+	 * rotation mode. So "record something I do" was not actually possible.
+	 */
+	private renderRecordingPanel(): void {
+		const el = this.recordingProgressEl;
+		if (!el) return;
+		el.style.cssText = 'display: block !important; visibility: visible !important;';
+		el.empty();
+		el.createDiv({ cls: 'sh-progress-bar-title', text: `Recording — ${this.recordingFrames.length} / ${GIF_MAX_FRAMES} frames` });
+		el.createDiv({ cls: 'sh-progress-bar-track' }).createDiv({ cls: 'sh-progress-bar-fill', attr: { style: 'width: 0%' } });
+		const hint = el.createDiv({ cls: 'sh-progress-hint' });
+		hint.createSpan({ text: `Captures whatever you do on the canvas. Stops at ${GIF_MAX_FRAMES} frames.` });
+		const stop = el.createEl('button', { text: 'Stop and save', cls: 'sh-stop-record-btn' });
+		stop.addEventListener('click', () => {
+			this.recordingStopRequested = true;
+			this.updateProgressUI(this.recordingFrames.length);
+		});
+	}
+
+	private updateProgressUI(current: number): void {
+		const el = this.recordingProgressEl;
+		if (!el) return;
+		const title = el.querySelector('.sh-progress-bar-title');
+		const fill = el.querySelector('.sh-progress-bar-fill') as HTMLElement | null;
+		if (title) {
+			title.textContent = current >= GIF_MAX_FRAMES
+				? `Frame cap reached (${GIF_MAX_FRAMES}) — finishing…`
+				: `Recording — ${current} / ${GIF_MAX_FRAMES} frames`;
+		}
+		if (fill) {
+			const pct = Math.min(100, Math.round((current / GIF_MAX_FRAMES) * 100));
+			fill.style.width = `${pct}%`;
+		}
+	}
+
+	/**
+	 * Capture one frame of whatever is currently on the canvas.
+	 *
+	 * Two defects this replaces, both found by measuring a live recording:
+	 *
+	 *  - The old gate was `recordingFrames.length % 2 === 0`. Length only ever
+	 *    increments on a push, so it went 0 -> push -> 1 and then `1 % 2` could
+	 *    never push again. It captured exactly ONE frame for the whole recording,
+	 *    which is why the output was a still image and why the progress bar sat at
+	 *    0% — 1 of 628 rounds to zero.
+	 *  - Stopping was tied to `totalSpin` reaching 2π, and totalSpin only advances
+	 *    in one auto-rotation mode. Recording therefore never ended on its own
+	 *    unless that mode was on, and nothing in the UI could stop it.
+	 *
+	 * There is no rotation and no spin condition here. The recording ends when the
+	 * user presses Stop, or when the frame cap is reached.
+	 *
+	 // Sampling is throttled to GIF_SAMPLE_MS. This is called from the render loop,
+	 * so unthrottled it captured at display refresh rate: the frame cap would have
+	// been reached in about four seconds, and a per-frame getImageData plus
+	// quantise pass over a quarter of a million pixels is far too expensive to
+	 * run inside the frame budget.
+	 */
 	private captureFrame(): void {
 		if (!this.canvas || !this.ctx) return;
-		
-		// Capture every 2nd frame to reduce size and frame count
-		if (this.recordingFrames.length % 2 === 0) {
-			const targetWidth = 800;
-			const aspect = this.canvas.height / this.canvas.width;
-			const targetHeight = Math.round(targetWidth * aspect);
 
-			const offscreen = document.createElement('canvas');
-			offscreen.width = targetWidth;
-			offscreen.height = targetHeight;
-			const offCtx = offscreen.getContext('2d');
-			if (offCtx) {
-				offCtx.drawImage(this.canvas, 0, 0, targetWidth, targetHeight);
-				const imageData = offCtx.getImageData(0, 0, targetWidth, targetHeight);
-				this.recordingFrames.push(imageData as any);
-			}
+		const now = performance.now();
+		if (now - this.lastCaptureAt < GIF_SAMPLE_MS) return;
+		this.lastCaptureAt = now;
+
+		if (this.recordingFrames.length >= GIF_MAX_FRAMES) {
+			this.recordingHitCap = true;
+			this.stopAndEncode();
+			return;
 		}
 
-		const totalExpected = 1257;
-		this.updateProgressUI(this.recordingFrames.length, totalExpected / 2);
+		const { width: targetWidth, height: targetHeight } = this.captureSize();
 
-		// Stop after one full rotation (approx 2π / 0.005)
-		if (Math.abs(this.totalSpin - this.recordingSpinStart) >= Math.PI * 2 || this.recordingFrames.length >= totalExpected / 2) {
+		const offscreen = document.createElement('canvas');
+		offscreen.width = targetWidth;
+		offscreen.height = targetHeight;
+		const offCtx = offscreen.getContext('2d');
+		if (!offCtx) return;
+
+		// Paint the resolved background first. The canvas is cleared to
+		// transparent and never filled, so without this the translucent face
+		// triangles and the antialiased edges composite against nothing and the
+		// GIF renders them over the viewer's default background — which is why
+		// captures looked washed out and did not match the screen.
+		const background = this.resolvedCanvasBackground();
+		offCtx.fillStyle = background;
+		offCtx.fillRect(0, 0, targetWidth, targetHeight);
+		offCtx.drawImage(this.canvas, 0, 0, targetWidth, targetHeight);
+
+		// Quantise immediately rather than holding raw RGBA for the whole
+		// recording: one byte per pixel instead of four.
+		const data = offCtx.getImageData(0, 0, targetWidth, targetHeight).data;
+		const palette = quantize(data, 256);
+		const index = applyPalette(data, palette);
+		this.recordingFrames.push({ index, palette, width: targetWidth, height: targetHeight });
+
+		this.updateProgressUI(this.recordingFrames.length);
+
+		if (this.recordingStopRequested) {
 			this.stopAndEncode();
 		}
+	}
+
+	/**
+	 * Frame size for a capture, as a downscale of the live canvas.
+	 *
+	 * It never upscales. Sizing off a fixed target width meant a 298x614 sidebar
+	 * was captured at 720x1483 — 1.07 million pixels, 2.4x more than the source
+	 * had, buying no detail while making each frame's quantise pass expensive
+	 * enough to dominate the render loop (measured: ~390 ms per capture, so a
+	 * 240-frame recording would have taken 90 seconds of real time to accrue 36
+	 * seconds of playback). The pixel budget bounds that cost independently of
+	 * window shape.
+	 */
+	private captureSize(): { width: number; height: number } {
+		const srcW = Math.max(1, this.canvas ? this.canvas.width : 1);
+		const srcH = Math.max(1, this.canvas ? this.canvas.height : 1);
+		let scale = 1;
+		if (srcW > GIF_MAX_WIDTH) scale = GIF_MAX_WIDTH / srcW;
+		if (srcW * srcH * scale * scale > GIF_MAX_PIXELS) {
+			scale = Math.sqrt(GIF_MAX_PIXELS / (srcW * srcH));
+		}
+		return {
+			width: Math.max(1, Math.round(srcW * scale)),
+			height: Math.max(1, Math.round(srcH * scale)),
+		};
+	}
+
+	/** The theme background the canvas is drawn on, as a CSS colour. */
+	private resolvedCanvasBackground(): string {
+		const canvas = this.canvas;
+		if (!canvas) return '#000000';
+		const view = getComputedStyle(canvas);
+		const primary = view.getPropertyValue('--background-primary').trim();
+		if (primary) return primary;
+		const secondary = getComputedStyle(document.body).getPropertyValue('--background-primary').trim();
+		return secondary || '#000000';
 	}
 
 	private stopAndEncode(): void {
 		this.isRecording = false;
 		this.isEncoding = true;
-		if (this.recordingProgressEl) {
-			this.recordingProgressEl.innerHTML = `<div class="sh-progress-bar-title">Encoding GIF... Please wait</div>`;
-		}
-		this.showToast('Encoding GIF...');
+		const frames = this.recordingFrames;
+		this.recordingFrames = [];
 
-		// Run encoding asynchronously
+		// Playback speed follows what the user actually did. The recorder samples
+		// on a fixed timer, so the honest delay is the measured wall time per
+		// captured frame — otherwise a recording made while panning fast plays
+		// back at the same speed as one made while the graph was static.
+		const elapsedMs = Math.max(1, performance.now() - this.recordingStartedAt);
+		const perFrameMs = frames.length > 0 ? elapsedMs / frames.length : 100;
+		const delay = Math.max(20, Math.min(500, Math.round(perFrameMs)));
+
+		if (this.recordingProgressEl) {
+			this.recordingProgressEl.empty();
+			this.recordingProgressEl.createDiv({ cls: 'sh-progress-bar-title', text: `Encoding ${frames.length} frames...` });
+		}
+		this.showToast(`Encoding ${frames.length} frames...`);
+
+		if (frames.length === 0) {
+			this.isEncoding = false;
+			this.writeGifStatus({ status: 'error', error: 'no frames were captured', timestamp: Date.now() });
+			this.showToast('GIF recording captured no frames');
+			if (this.recordingProgressEl) this.recordingProgressEl.style.display = 'none';
+			return;
+		}
+
+		this.writeGifStatus({
+			status: 'encoding',
+			frames: frames.length,
+			hitCap: this.recordingHitCap,
+			delay,
+			timestamp: Date.now(),
+		});
+
 		setTimeout(async () => {
 			try {
 				const gif = GIFEncoder();
 
-				this.recordingFrames.forEach((frame, i) => {
-					const data = frame.data;
-					const fWidth = frame.width;
-					const fHeight = frame.height;
-					const palette = quantize(data, 256);
-					const index = applyPalette(data, palette);
-					
-					const opts: any = { palette, delay: 10 };
-					if (i === 0) opts.repeat = 0;
-					
-					gif.writeFrame(index, fWidth, fHeight, opts);
+				// Frames were already quantised at capture time, one byte per pixel.
+				// Quantising the whole array again would be both pointless and
+				// slow.
+				frames.forEach((frame) => {
+					const opts: Record<string, unknown> = {
+						palette: frame.palette,
+						delay,
+						// 0 = loop forever. The user asked for an endless cycle.
+						repeat: 0,
+					};
+					gif.writeFrame(frame.index, frame.width, frame.height, opts as any);
 				});
 
 				gif.finish();
@@ -1645,49 +2266,42 @@ export class SemanticHologramView extends ItemView {
 					await vault.createFolder(folderName);
 				}
 
-				const fileName = `${folderName}/hologram-${Date.now()}.gif`;
-				const arrayBuffer = await blob.arrayBuffer();
-                
-                // Ensure unique filename
-                let finalFileName = fileName;
-                let counter = 1;
-                while (vault.getAbstractFileByPath(finalFileName)) {
-                    finalFileName = `${folderName}/hologram-${Date.now()}-${counter++}.gif`;
-                }
-                
-				await vault.createBinary(finalFileName, arrayBuffer);
+				const stamp = Date.now();
+				let finalFileName = `${folderName}/hologram-${stamp}.gif`;
+				let counter = 1;
+				while (vault.getAbstractFileByPath(finalFileName)) {
+					finalFileName = `${folderName}/hologram-${stamp}-${counter++}.gif`;
+				}
+
+				await vault.createBinary(finalFileName, await blob.arrayBuffer());
 
 				this.showToast(`Saved GIF to ${finalFileName}`);
-
-				// Write status file for MCP
-				const statusPath = '.hologram-status.json';
-				const statusData = JSON.stringify({ status: 'success', path: finalFileName, timestamp: Date.now() });
-				await (vault.adapter as any).write(statusPath, statusData);
+				this.writeGifStatus({
+					status: 'success',
+					path: finalFileName,
+					frames: frames.length,
+					bytes: buffer.byteLength,
+					delay,
+					loopsForever: true,
+					timestamp: Date.now(),
+				});
 
 				if (this.recordingProgressEl) {
-					this.recordingProgressEl.innerHTML = `
-						<div class="sh-progress-bar-title">Saved to ${finalFileName}</div>
-						<div class="sh-preview-container"><img class="sh-gif-preview" src="${url}" /></div>
-						<div class="sh-progress-actions">
-							<button class="sh-dismiss-progress-btn">Close</button>
-						</div>
-					`;
-					this.recordingProgressEl.querySelector('.sh-dismiss-progress-btn')?.addEventListener('click', () => {
-						this.recordingProgressEl!.style.display = 'none';
+					this.recordingProgressEl.empty();
+					this.recordingProgressEl.createDiv({ cls: 'sh-progress-bar-title', text: `Saved to ${finalFileName}` });
+					this.recordingProgressEl.createDiv({ cls: 'sh-preview-container' })
+						.createEl('img', { cls: 'sh-gif-preview', attr: { src: url } });
+					const actions = this.recordingProgressEl.createDiv({ cls: 'sh-progress-actions' });
+					const close = actions.createEl('button', { text: 'Close', cls: 'sh-dismiss-progress-btn' });
+					close.addEventListener('click', () => {
+						if (this.recordingProgressEl) this.recordingProgressEl.style.display = 'none';
+						URL.revokeObjectURL(url);
 					});
-					
-					// Open the file in a new leaf/pane
-					await this.app.workspace.openLinkText(fileName, '', true);
 				}
 			} catch (err) {
 				console.error('[SH] GIF encoding error:', err);
 				this.showToast('GIF encoding failed');
-				
-				// Write error status
-				const statusPath = '.hologram-status.json';
-				const statusData = JSON.stringify({ status: 'error', error: String(err), timestamp: Date.now() });
-				await (this.app.vault.adapter as any).write(statusPath, statusData);
-
+				this.writeGifStatus({ status: 'error', error: String(err), timestamp: Date.now() });
 				if (this.recordingProgressEl) {
 					this.recordingProgressEl.style.display = 'none';
 				}
@@ -2413,6 +3027,10 @@ export class SemanticHologramView extends ItemView {
 		}
 		ctx.clearRect(0, 0, w, h);
 
+	// Recompute the diffraction layers here, once per frame rather than per node.
+	// The stamp short-circuits unless the graph or the toggles changed.
+	this.ensureScan();
+
 		this.rotCx = this.viewX + w / (2 * this.viewScale);
 		this.rotCy = this.viewY + h / (2 * this.viewScale);
 		this.rotCz = this.camZ;
@@ -2507,6 +3125,18 @@ export class SemanticHologramView extends ItemView {
 					: (isCandidate
 						? CANDIDATE_COLOR
 						: (isSpecial ? baseColor : this.withAlpha(nodeColor, alpha)));
+				// Diffraction ring. Strength drives alpha only — never radius, so a
+				// scan layer cannot be mistaken for a change in node size, and the
+				// projection maths stays untouched.
+				const scanLayer = this.scanLayerAt(i);
+				if (scanLayer) {
+					const hue = SCAN_LAYER_COLORS[scanLayer.key] ?? SCAN_LAYER_COLORS.activation!;
+					ctx.beginPath();
+					ctx.arc(sx, sy, r + 5, 0, Math.PI * 2);
+					ctx.strokeStyle = this.withAlpha(hue, 0.35 + 0.6 * scanLayer.strength);
+					ctx.lineWidth = 1 + scanLayer.strength * 1.5;
+					ctx.stroke();
+				}
 				if (isSpecial && !isCandidate) {
 					ctx.beginPath();
 					ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
@@ -2633,6 +3263,15 @@ export class SemanticHologramView extends ItemView {
 				: (isCandidate
 					? CANDIDATE_COLOR
 					: (isSpecial ? baseColor : this.withAlpha(nodeColor, alpha)));
+			const scanLayer2d = this.scanLayerAt(i);
+			if (scanLayer2d) {
+				const hue = SCAN_LAYER_COLORS[scanLayer2d.key] ?? SCAN_LAYER_COLORS.activation!;
+				ctx.beginPath();
+				ctx.arc(sx, sy, r + 5, 0, Math.PI * 2);
+				ctx.strokeStyle = this.withAlpha(hue, 0.35 + 0.6 * scanLayer2d.strength);
+				ctx.lineWidth = 1 + scanLayer2d.strength * 1.5;
+				ctx.stroke();
+			}
 			if (isSpecial && !isCandidate) {
 				ctx.beginPath();
 				ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
@@ -5860,11 +6499,25 @@ private selectHovered(): void {
 		};
 	}
 
-	async dumpGraphState(): Promise<string> {
+	async dumpGraphState(nonce?: string): Promise<string> {
 		console.log('[SH] DUMPING GRAPH STATE, target:', this.target);
-		const dir = this.plugin.manifest.dir ?? '.obsidian/plugins/semantic-hologram';
-		const path = `${dir}/graph-state.json`;
+		// Anchored through pluginDir(), not a hand-written '.obsidian/plugins/...'
+		// string: the config folder name is user-configurable, so a guessed
+		// fallback silently writes somewhere that is not this plugin.
+		const path = join(this.plugin.pluginDir(), 'graph-state.json');
 		const state = {
+			// Echoed back so a reader can tell this dump from the previous one.
+			// Without it, a stale file looks exactly like a fresh one — which is
+			// how a 29-hour-old snapshot once got treated as live evidence.
+			nonce: nonce ?? null,
+			dumpedAt: Date.now(),
+			// The camera read-out angles, so the documented hand-check
+			//   azimuth   = atan2(m0, -m2)
+			//   elevation = atan2(m7, -(m6*cos(theta) + m8*sin(theta)))
+			// can actually be performed against a dump. Without these two, a
+			// rotM alone cannot confirm whether the read-out is current code.
+			azimuth: this.currentAzimuth,
+			elevation: this.currentElevation,
 			settled: this.settled,
 			layoutFrames: this.layoutFrames,
 			scale: this.scale,
@@ -5880,7 +6533,13 @@ private selectHovered(): void {
 				dpr: window.devicePixelRatio,
 			},
 			mode: this.plugin.settings.hologramMode,
-			rotM: (this.rotM ?? []).map(v => Math.round(v * 1000) / 1000),
+			// NOT rounded. A dump exists to be checked: det and orthonormality are
+			// exactness claims, and rounding each entry to 3 dp puts ~1e-3 of
+			// error into det (measured 0.99968 for a basis that was in fact
+			// 1 - 1e-16), which reads as drift that does not exist. Node
+			// coordinates below stay rounded, since they are for layout reading
+			// and their precision carries no such claim.
+			rotM: (this.rotM ?? []).slice(),
 			totalSpin: Math.round((this.totalSpin ?? 0) * 1000) / 1000,
 			nodeCount: this.nodes?.length ?? 0,
 			linkCount: this.links?.length ?? 0,
@@ -5890,7 +6549,7 @@ private selectHovered(): void {
 			worldR: Math.round((this.worldR?.() ?? 0) * 10) / 10,
 			settleEnergy: PHYS.settleEnergy,
 			forceSettleFrames: PHYS.forceSettleFrames,
-			nodes: this.nodes.slice(0, 200).map((n) => ({
+			nodes: this.nodes.slice(0, DUMP_ENTITY_LIMIT).map((n) => ({
 				path: n.path,
 				x: Math.round(n.x * 10) / 10,
 				y: Math.round(n.y * 10) / 10,
@@ -5901,15 +6560,25 @@ private selectHovered(): void {
 				radius: Math.round(n.radius * 10) / 10,
 				pinned: n.pinned,
 			})),
-			links: this.links.slice(0, 200).map((l) => ({
+			links: this.links.slice(0, DUMP_ENTITY_LIMIT).map((l) => ({
 				a: l.a,
 				b: l.b,
 				dir: l.dir,
 				relations: l.relations,
 				restLen: Math.round(l.restLen * 10) / 10,
 			})),
+			// A bounded dump that reports only what it wrote tells the flattering
+			// half of the truth. State the bound and the shortfall explicitly so a
+			// reader can tell a truncated capture from a genuinely small graph.
+			truncation: {
+				limit: DUMP_ENTITY_LIMIT,
+				nodesWritten: Math.min(this.nodes.length, DUMP_ENTITY_LIMIT),
+				linksWritten: Math.min(this.links.length, DUMP_ENTITY_LIMIT),
+				nodesTruncated: Math.max(0, this.nodes.length - DUMP_ENTITY_LIMIT),
+				linksTruncated: Math.max(0, this.links.length - DUMP_ENTITY_LIMIT),
+			},
 		};
-		await this.app.vault.adapter.write(path, JSON.stringify(state, null, 2));
+		writeFileSync(path, JSON.stringify(state, null, 2));
 		return path;
 	}
 }

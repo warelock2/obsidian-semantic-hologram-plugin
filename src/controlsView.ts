@@ -3,6 +3,7 @@ import type SemanticHologramPlugin from './main';
 import { SemanticHologramView, VIEW_TYPE_HOLOGRAM, buildNodePreviewModel } from './view';
 import type { SearchIndexEntry } from './view';
 import { parseSearchQuery, matchEntry } from './searchLogic';
+import { subscribeLegendRefresh } from './legendBus';
 import type { ScanLayerSettings } from './settings';
 
 export const VIEW_TYPE_HOLOGRAM_CONTROLS = 'semantic-hologram-controls';
@@ -121,12 +122,13 @@ export class SemanticHologramControlsView extends ItemView {
 		// checkbox. Without this, opening this panel while the graph was still
 		// loading left zeros and a "scan degenerate" warning on screen with no
 		// way to clear them short of toggling something.
-		const resubscribe = () => {
-			const scanView = this.getView();
-			if (scanView) this.register(() => scanView.onGraphChanged(() => this.refreshScanLegend()));
-		};
-		resubscribe();
-		this.registerEvent(this.app.workspace.on('layout-change', resubscribe));
+		//
+		// Subscribed on the shared bus rather than on the graph view directly:
+		// this panel is often loaded before any graph view exists, and reaching
+		// through to the view at load time found nothing. That version looked
+		// correct in testing only because an unrelated layout-change re-render
+		// happened to rescue it.
+		this.register(subscribeLegendRefresh(() => this.refreshScanLegend()));
 
 		// Add a listener to re-render when camera changes
 		// Also re-render periodically or when the view indicates it's changed? 

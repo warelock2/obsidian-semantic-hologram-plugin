@@ -9,6 +9,7 @@ import type { HologramTool, ProjectionMode, RelTypeEntry } from './settings';
 import type { SemanticHologramSettings } from './settings';
 import type { RelationEdge, RelationScan } from './relations';
 import { findRelationsSection, formatStrength, inScopePath, scanRelations } from './relations';
+import { notifyLegendRefresh } from './legendBus';
 import { addRelation, removeRelation } from './reviewCommon';
 import { computeNodeStats, isEvidenceType, readNodeMetas, scanGravitas } from './gravitas';
 import { ReviewConnectionsModal } from './review';
@@ -955,32 +956,14 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	/**
-	 * Notified whenever the graph finishes (re)building.
+	 * Announce that the graph finished (re)building.
 	 *
-	 * The controls panel shows scan counts derived from this graph, and it used
-	 * to read them once at render time. Opening the panel while the graph was
-	 * still loading therefore left it showing zeros and the "scan degenerate"
-	 * warning — permanently, since the only thing that re-read the counts was a
-	 * checkbox the user had to touch. It has no way to poll for this cheaply, so
-	 * the graph announces it instead.
+	 * Broadcasts on the shared bus rather than to subscribers held here, so a
+	 * panel that loaded before this view existed still hears it. See
+	 * legendBus.ts for why the direct-subscription version was removed.
 	 */
-	private graphChangedCallbacks: Array<() => void> = [];
-
-	onGraphChanged(cb: () => void): () => void {
-		this.graphChangedCallbacks.push(cb);
-		return () => {
-			this.graphChangedCallbacks = this.graphChangedCallbacks.filter((c) => c !== cb);
-		};
-	}
-
 	private notifyGraphChanged(): void {
-		for (const cb of [...this.graphChangedCallbacks]) {
-			try {
-				cb();
-			} catch (err) {
-				console.error('[SH] graph-changed callback failed:', err);
-			}
-		}
+		notifyLegendRefresh();
 	}
 
 	/**

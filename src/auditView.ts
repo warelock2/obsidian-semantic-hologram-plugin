@@ -14,7 +14,7 @@ export class AuditConnectionsView extends ItemView {
     }
 
     getDisplayText(): string {
-        return 'Audit Connections';
+        return 'Audit connections';
     }
 
     getIcon(): string {
@@ -45,7 +45,7 @@ export class AuditConnectionsView extends ItemView {
                 
                 new Setting(div).addButton((b) =>
                     b
-                        .setButtonText('Fix All')
+                        .setButtonText('Fix all')
                         .setCta()
                         .onClick(async () => {
                             for (const res of results) {

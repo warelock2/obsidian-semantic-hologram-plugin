@@ -1,6 +1,6 @@
 import { App, Modal, Notice, Setting, TFile, TFolder } from 'obsidian';
 import type SemanticHologramPlugin from './main';
-import { HOLOGRAM_FOLDER } from './settings';
+import { HOLOGRAM_FOLDER, defaultNodeType } from './settings';
 import { ensureHologramContent } from './importNote';
 
 export class IncomingImportModal extends Modal {
@@ -17,7 +17,7 @@ export class IncomingImportModal extends Modal {
 	async onOpen(): Promise<void> {
 		const { contentEl } = this;
 		contentEl.empty();
-		contentEl.createEl('h2', { text: 'Import Incoming Zettelkasten Notes' });
+		contentEl.createEl('h2', { text: 'Import incoming zettelkasten notes' });
 
 		const incomingPath = this.plugin.settings.incomingFolderPath || 'Incoming';
 		const folder = this.plugin.app.vault.getAbstractFileByPath(incomingPath);
@@ -48,11 +48,6 @@ export class IncomingImportModal extends Modal {
 		contentEl.createEl('p', { text: `Select files from "${incomingPath}" to import as thought nodes:` });
 
 		const listDiv = contentEl.createDiv({ cls: 'sh-incoming-list' });
-		listDiv.style.maxHeight = '200px';
-		listDiv.style.overflowY = 'auto';
-		listDiv.style.border = '1px solid var(--background-modifier-border)';
-		listDiv.style.padding = '8px';
-		listDiv.style.marginBottom = '16px';
 
 		for (const file of mdFiles) {
 			const setting = new Setting(listDiv)
@@ -66,34 +61,34 @@ export class IncomingImportModal extends Modal {
 						}
 					})
 				);
-			setting.controlEl.style.justifyContent = 'flex-end';
+			setting.controlEl.addClass('sh-incoming-setting-control');
 		}
 
 		new Setting(contentEl)
-			.setName('Destination Hologram')
+			.setName('Destination hologram')
 			.setDesc('Choose whether to route these thought notes into the central "thoughts" whiteboard or a new named hologram.')
 			.addDropdown((dropdown) =>
 				dropdown
-					.addOption('thoughts', 'Central "thoughts" Hologram')
-					.addOption('new', 'New Named Hologram...')
+					.addOption('thoughts', 'Central "thoughts" hologram')
+					.addOption('new', 'New named hologram...')
 					.setValue(this.targetChoice)
 					.onChange((value: string) => {
 						this.targetChoice = value as 'thoughts' | 'new';
 					})
 			);
 
-		const nameSetting = new Setting(contentEl)
-			.setName('New Hologram Name')
-			.setDesc('Required if "New Named Hologram" is selected.')
+		new Setting(contentEl)
+			.setName('New hologram name')
+			.setDesc('Required if "new named hologram" is selected.')
 			.addText((text) =>
-				text.setPlaceholder('e.g., Epistemology').onChange((value) => {
+				text.setPlaceholder('E.g., epistemology').onChange((value) => {
 					this.newHologramName = value;
 				})
 			);
 
 		new Setting(contentEl).addButton((btn) =>
 			btn
-				.setButtonText('Import & Normalize')
+				.setButtonText('Import & normalize')
 				.setCta()
 				.onClick(async () => {
 					await this.executeImport();
@@ -127,7 +122,7 @@ export class IncomingImportModal extends Modal {
 			let content = await vault.read(source);
 
 			// Normalize as thought node
-			content = ensureHologramContent(content, 'thought', source, this.plugin, hologramTag);
+			content = ensureHologramContent(content, defaultNodeType(this.plugin.settings.nodeTypes), source, this.plugin, hologramTag);
 
 			// Ensure node-type is thought
 			if (!content.includes('node-type:')) {

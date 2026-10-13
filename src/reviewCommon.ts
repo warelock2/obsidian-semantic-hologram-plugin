@@ -3,6 +3,7 @@ import type SemanticHologramPlugin from './main';
 import type { RelationEdge } from './relations';
 import { scanRelations, formatStrength } from './relations';
 import { extractFrontmatter, parseNoteFrontmatter, findIncomingSection, findRelationsSection, setGroupsInContent } from './relations';
+import { defaultNodeType } from './settings';
 
 export type GroupState = 'candidate' | 'member' | 'deleted';
 
@@ -40,7 +41,7 @@ export function noteTypeOf(plugin: SemanticHologramPlugin, file: TFile): string 
 	const cache = plugin.app.metadataCache.getFileCache(file);
 	const fm: Record<string, unknown> | undefined = cache?.frontmatter;
 	const raw = fm?.['node-type'] ?? fm?.['note-type'];
-	return typeof raw === 'string' && raw.trim() ? raw : 'concept';
+	return typeof raw === 'string' && raw.trim() ? raw : defaultNodeType(plugin.settings.nodeTypes);
 }
 
 /** Sortable bucket key for a type pair, e.g. `concept|pattern` (alphabetical). */
@@ -65,6 +66,7 @@ export async function collectReviewData(plugin: SemanticHologramPlugin): Promise
 		.filter((f) => plugin.isInScope(f.path))
 		.sort((a, b) => a.path.localeCompare(b.path));
 
+	const dflt = defaultNodeType(plugin.settings.nodeTypes);
 	const nodeTypes = new Map<string, string>();
 	for (const f of files) {
 		nodeTypes.set(f.path, noteTypeOf(plugin, f));
@@ -96,8 +98,8 @@ export async function collectReviewData(plugin: SemanticHologramPlugin): Promise
 			pairs.push({
 				source: a,
 				target: b,
-				sourceType: nodeTypes.get(a.path) ?? 'concept',
-				targetType: nodeTypes.get(b.path) ?? 'concept',
+				sourceType: nodeTypes.get(a.path) ?? dflt,
+				targetType: nodeTypes.get(b.path) ?? dflt,
 				edges: pairEdges.get(key) ?? [],
 			});
 		}
@@ -118,10 +120,11 @@ async function collectGroups(
 	files: TFile[],
 	nodeTypes: Map<string, string>,
 ): Promise<GroupBucket[]> {
+	const dflt = defaultNodeType(plugin.settings.nodeTypes);
 	// name -> group file (by basename, folder-qualified ignored)
 	const groupByName = new Map<string, TFile>();
 	for (const f of files) {
-		if ((nodeTypes.get(f.path) ?? 'concept') !== 'percept') {
+		if ((nodeTypes.get(f.path) ?? dflt) !== 'percept') {
 			groupByName.set(f.basename, f);
 		}
 	}
@@ -151,7 +154,7 @@ async function collectGroups(
 
 	const buckets: GroupBucket[] = [];
 	for (const [name, group] of groupByName) {
-		const groupType = nodeTypes.get(group.path) ?? 'concept';
+		const groupType = nodeTypes.get(group.path) ?? dflt;
 		const members: GroupSubject[] = [];
 		const deleted: GroupSubject[] = [];
 		const candidates: GroupSubject[] = [];
@@ -159,7 +162,7 @@ async function collectGroups(
 			if (f.path === group.path) {
 				continue;
 			}
-			const type = nodeTypes.get(f.path) ?? 'concept';
+			const type = nodeTypes.get(f.path) ?? dflt;
 			if (memberships.get(f.path)?.has(name)) {
 				members.push({ node: f, noteType: type, state: 'member' });
 			} else if (exclusions.get(f.path)?.has(name)) {

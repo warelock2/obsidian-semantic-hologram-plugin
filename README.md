@@ -320,7 +320,7 @@ any time for the in-app help overlay. The full control set:
 | `f` | Toggle faces (3D) |
 | `Shift+F` | Fit graph to view |
 | `r` | Cycle auto-rotation: off → clockwise → counter-clockwise |
-| `Shift+R` | Reset (fit to view, rotation to 0) |
+| `Shift+R` | Reset view to initial state |
 | `Ctrl+=` | Fit graph to view |
 | `Ctrl+Shift+=` | Magnify (dolly in 3D) |
 | `Ctrl+-` | Demagnify (dolly in 3D) |

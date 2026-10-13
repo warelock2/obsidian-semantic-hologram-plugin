@@ -12,10 +12,26 @@ import * as crypto from "crypto";
 const VAULT_ROOT = process.cwd();
 const HOLOGRAM_DIR = path.join(VAULT_ROOT, "hologram");
 const DATA_JSON_PATH = path.join(VAULT_ROOT, "data.json");
-const GRAPH_STATE_PATH = path.join(VAULT_ROOT, "graph-state.json");
 
 /** How long to wait for the plugin to answer a scan command. */
 const SCAN_TIMEOUT_MS = 20000;
+
+/**
+ * A GIF status file older than this cannot describe a recording in progress.
+ * The recorder writes at least once per captured frame, so a few minutes of
+ * silence means it stopped — the file outliving the run is the stale case.
+ */
+const GIF_STATUS_STALE_MS = 3 * 60 * 1000;
+
+function describeAge(ms: number): string {
+	const s = Math.round(ms / 1000);
+	if (s < 60) return `${s}s`;
+	const m = Math.round(s / 60);
+	if (m < 60) return `${m}m`;
+	const h = Math.round(m / 60);
+	if (h < 48) return `${h}h ${m % 60}m`;
+	return `${Math.round(h / 24)}d`;
+}
 
 function getSettings() {
 	if (!fs.existsSync(DATA_JSON_PATH)) {
@@ -89,12 +105,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 			},
 			{
 				name: "create_hologram",
-				description: "Create a new hologram markdown file.",
+				description:
+					"Create a new hologram markdown file. Refuses to overwrite an existing file unless 'overwrite' is true.",
 				inputSchema: {
 					type: "object",
 					properties: {
 						filename: { type: "string" },
 						content: { type: "string" },
+						overwrite: { type: "boolean", description: "Replace the file if it already exists." },
 					},
 					required: ["filename", "content"],
 				},
@@ -131,14 +149,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 						noteType: { type: "string" },
 					},
 					required: ["noteType"],
-				},
-			},
-			{
-				name: "dump_graph_state",
-				description: "Dump the LIVE plugin graph state (camera, layout, nodes, links) and return it. Asks the running plugin to produce a fresh dump, so this is current state, not whatever the last debug command left on disk.",
-				inputSchema: {
-					type: "object",
-					properties: {},
 				},
 			},
 {
@@ -185,53 +195,6 @@ const COMMAND_PATH = path.join(VAULT_ROOT, ".hologram-command.json");
 const SCAN_RESULT_PATH = path.join(VAULT_ROOT, ".hologram-scan.json");
 
 /**
- * Ask the plugin to dump its graph state *now* and return that dump.
- *
- * This used to be a bare `readFileSync`. The dump file is written by the
- * `dump-graph-state` debug command, so reading it returned whatever the last
- * manual invocation left there — with no way to tell it apart from current
- * state. It was once 29 hours stale and still showed a reflection matrix
- * (det = -1) while the live camera read det = +1, which sent a reader hunting
- * a bug in the negated up-row that did not exist.
- *
- * So: stamp a nonce, ask the plugin to re-dump with it, and accept the file
- * only when that nonce comes back. Any other content is a previous dump.
- */
-async function requestGraphStateDump(): Promise<string> {
-    const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-
-    fs.writeFileSync(COMMAND_PATH, JSON.stringify({ action: "dump_graph_state", nonce, timestamp: Date.now() }));
-
-    const deadline = Date.now() + SCAN_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 150));
-        let current: string;
-        try {
-            current = fs.readFileSync(GRAPH_STATE_PATH, "utf8");
-        } catch {
-            continue;
-        }
-        let parsed: Record<string, unknown>;
-        try {
-            parsed = JSON.parse(current) as Record<string, unknown>;
-        } catch {
-            continue; // half-written; try again
-        }
-        if (parsed.nonce !== nonce) continue; // a previous dump, or not ours yet
-
-        if (typeof parsed.error === "string") {
-            return JSON.stringify({ tool: "dump_graph_state", error: parsed.error }, null, 2);
-        }
-        return current;
-    }
-    return JSON.stringify(
-        { tool: "dump_graph_state", error: "plugin did not produce a dump in time; is the graph view open?" },
-        null,
-        2,
-    );
-}
-
-/**
  * Ask the plugin to run a scan and read what it produced.
  *
  * This server is a separate OS process with no handle on the Obsidian view, so
@@ -266,7 +229,7 @@ async function requestScan(name: string, args: Record<string, unknown>): Promise
 
     const deadline = Date.now() + SCAN_TIMEOUT_MS;
     while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 150));
+        await new Promise((r) => window.setTimeout(r, 150));
         let current: string;
         try {
             current = fs.readFileSync(SCAN_RESULT_PATH, "utf8");
@@ -369,8 +332,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 		if (!fs.existsSync(statusFile)) {
 			return { content: [{ type: "text", text: "No status found. Recording might not have started." }] };
 		}
-		const status = fs.readFileSync(statusFile, "utf8");
-		return { content: [{ type: "text", text: status }] };
+		const raw = fs.readFileSync(statusFile, "utf8");
+		// A finished recording leaves its status file behind, so the file
+		// existing says nothing about whether a recording is running *now*.
+		// Report the age explicitly rather than letting a stale file be read as
+		// current — the same failure mode the graph dump had.
+		const ageMs = Date.now() - fs.statSync(statusFile).mtimeMs;
+		const stale = ageMs > GIF_STATUS_STALE_MS;
+		try {
+			JSON.parse(raw);
+		} catch {
+			return { content: [{ type: "text", text: `${raw}\n\n(unparsable status file, ${describeAge(ageMs)} old)` }] };
+		}
+		return {
+			content: [
+				{
+					type: "text",
+					text: `${raw}\n\nstatus file is ${describeAge(ageMs)} old — ${stale ? "STALE, treat as not running" : "recent"}`,
+				},
+			],
+			isError: false,
+		};
 	}
 
 	if (name === "list_holograms") {
@@ -395,6 +377,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const content = typedArgs.content;
         if (!filename || !content) throw new Error("Missing 'filename' or 'content' argument.");
         const filePath = path.join(HOLOGRAM_DIR, filename);
+        // `create_hologram` used to write straight through, so a typo'd or
+        // repeated filename silently destroyed an existing note. Creation must
+        // refuse to clobber; `overwrite: true` is the deliberate opt-in.
+        const overwrite = (args as Record<string, unknown> | null | undefined)?.overwrite === true;
+        if (name === "create_hologram" && fs.existsSync(filePath) && !overwrite) {
+            throw new Error(
+                `File already exists: ${filename}. Use update_hologram to change it, ` +
+                    `or pass overwrite: true to replace it deliberately.`,
+            );
+        }
         fs.writeFileSync(filePath, content, "utf8");
         return { content: [{ type: "text", text: `File ${filename} ${name === "create_hologram" ? "created" : "updated"} successfully.` }] };
     }
@@ -416,10 +408,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }
-
-	if (name === "dump_graph_state") {
-		return { content: [{ type: "text", text: await requestGraphStateDump() }] };
-	}
 
     if (name === "run_diffraction_scan" || name === "find_bridges" || name === "find_unlinked_pairs" || name === "explain_connection") {
         if (name === "explain_connection" && (!typedArgs.filename || !typedArgs.target)) {

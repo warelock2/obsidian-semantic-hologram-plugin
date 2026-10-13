@@ -1,7 +1,7 @@
 import { App, ButtonComponent, FuzzySuggestModal, Modal, Notice, Setting, TFolder, TFile } from 'obsidian';
 import type { RelationEdge } from './relations';
 import { formatStrength } from './relations';
-import { HOLOGRAM_FOLDER } from './settings';
+import { HOLOGRAM_FOLDER, defaultNodeType } from './settings';
 import { ensureHologramContent, rewriteLinks, HologramTagModal } from './importNote';
 import { auditHologramNodes, HologramAuditModal } from './audit';
 import { syncIncomingRelationships } from './incoming';
@@ -53,7 +53,7 @@ export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFi
 		}
 		
 		content = rewriteLinks(plugin, content);
-		content = ensureHologramContent(content, 'thought', source, plugin, hologramTag);
+		content = ensureHologramContent(content, defaultNodeType(plugin.settings.nodeTypes), source, plugin, hologramTag);
 		try {
 			if (existingFile instanceof TFile) {
 				await vault.modify(existingFile, content);
@@ -88,7 +88,7 @@ export class FolderPickModal extends FuzzySuggestModal<TFolder> {
 		private plugin: SemanticHologramPlugin,
 	) {
 		super(app);
-		this.setPlaceholder('Pick the folder containing ZK notes to import');
+		this.setPlaceholder('Pick the folder containing zk notes to import');
 		this.setInstructions([
 			{ command: '↑↓', purpose: 'to navigate' },
 			{ command: '↵', purpose: 'to choose this folder' },
@@ -235,11 +235,6 @@ export class ReviewConnectionsModal extends Modal {
 
 	async onOpen(): Promise<void> {
 		this.contentEl.addClass('sh-review-modal');
-		this.contentEl.style.display = 'flex';
-		this.contentEl.style.flexDirection = 'column';
-		this.contentEl.style.height = '80vh';
-		this.contentEl.style.boxSizing = 'border-box';
-		this.contentEl.style.overflow = 'hidden';
 		await this.reload();
 	}
 
@@ -270,8 +265,6 @@ export class ReviewConnectionsModal extends Modal {
 		mkTab('Holograms', 'holograms');
 
 		const scroll = contentEl.createDiv({ cls: 'sh-review-scroll' });
-		scroll.style.flex = '1';
-		scroll.style.overflowY = 'auto';
 
 		if (!this.data) {
 			return;
@@ -390,12 +383,11 @@ export class ReviewConnectionsModal extends Modal {
 		const left = dirForward ? p.source : p.target;
 		const right = dirForward ? p.target : p.source;
 
-		const leftName = names.createSpan({
+		names.createSpan({
 			cls: 'sh-review-name',
 			text: left.basename,
 			attr: { title: left.basename },
 		});
-		leftName.style.justifySelf = 'center';
 
 		const dirBtn = names.createEl('button', {
 			text: dirForward ? '→' : '←',
@@ -407,12 +399,11 @@ export class ReviewConnectionsModal extends Modal {
 			this.render();
 		});
 
-		const rightName = names.createSpan({
+		names.createSpan({
 			cls: 'sh-review-name',
 			text: right.basename,
 			attr: { title: right.basename },
 		});
-		rightName.style.justifySelf = 'center';
 
 		const addBtn = header.createEl('button', { text: '+', cls: 'sh-review-btn sh-review-add-rel' });
 		addBtn.setAttribute('title', 'Add relationship');
@@ -431,17 +422,12 @@ export class ReviewConnectionsModal extends Modal {
 
 		const forward = e.source === p.source.path && e.target === p.target.path;
 
-		const typeSpan = relRow.createSpan({
+		relRow.createSpan({
 			cls: 'sh-review-rel-type',
 			text: `${e.relId} (${formatStrength(e.strength)})`,
 		});
-		typeSpan.style.flex = '1';
-		typeSpan.style.textAlign = 'left';
 
 		const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
-		controls.style.marginLeft = 'auto';
-		controls.style.display = 'flex';
-		controls.style.gap = '4px';
 
 		const toggle = controls.createEl('button', {
 			text: forward ? '→' : '←',
@@ -488,11 +474,12 @@ export class ReviewConnectionsModal extends Modal {
 		const relTypes = enabled.length > 0 ? enabled : this.plugin.settings.relTypes;
 
 		const dropdown = relRow.createEl('select');
-		dropdown.style.marginRight = '8px';
+		dropdown.addClass('sh-margin-right-8');
 		for (const t of relTypes) dropdown.createEl('option', { value: t.id, text: t.id });
 
 		const strengthInput = relRow.createEl('input', {
 			type: 'number',
+			cls: 'sh-w-60',
 			attr: {
 				min: '0.01',
 				max: '1',
@@ -501,12 +488,8 @@ export class ReviewConnectionsModal extends Modal {
 				title: 'Strength',
 			},
 		});
-		strengthInput.style.width = '60px';
 
-		const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
-		controls.style.marginLeft = 'auto';
-		controls.style.display = 'flex';
-		controls.style.gap = '4px';
+		const controls = relRow.createDiv({ cls: 'sh-review-rel-controls sh-margin-left-auto sh-flex-center sh-flex-gap-4' });
 
 		const saveBtn = controls.createEl('button', { text: '✓', cls: 'sh-review-btn sh-review-save-btn' });
 		saveBtn.addEventListener('click', () => {
@@ -617,12 +600,12 @@ export class ReviewConnectionsModal extends Modal {
 		});
 		const container = section.createDiv({ cls: 'sh-review-subject-list' });
 		if (collapsed) {
-			container.style.display = 'none';
+			container.addClass('is-collapsed');
 		}
 		toggleBtn.addEventListener('click', () => {
-			const show = container.style.display === 'none';
-			container.style.display = show ? '' : 'none';
-			toggleBtn.setText(`${show ? '▾' : '▸'} ${label} (${list.length})`);
+			const isHidden = container.hasClass('is-collapsed');
+			container.toggleClass('is-collapsed', !isHidden);
+			toggleBtn.setText(`${!isHidden ? '▸' : '▾'} ${label} (${list.length})`);
 		});
 
 		if (list.length === 0) {
@@ -634,10 +617,7 @@ export class ReviewConnectionsModal extends Modal {
 			subRow.createSpan({ cls: 'sh-review-subject-name', text: s.node.basename, attr: { title: s.node.path } });
 			subRow.createSpan({ cls: 'sh-review-subject-type', text: s.noteType });
 
-			const controls = subRow.createDiv({ cls: 'sh-review-rel-controls' });
-			controls.style.marginLeft = 'auto';
-			controls.style.display = 'flex';
-			controls.style.gap = '4px';
+			const controls = subRow.createDiv({ cls: 'sh-review-rel-controls sh-margin-left-auto sh-flex-center sh-flex-gap-4' });
 
 			const mkStateBtn = (label: string, state: GroupState, title?: string) => {
 				const b = controls.createEl('button', { text: label, cls: 'sh-review-btn sh-review-subject-state' });
@@ -699,8 +679,7 @@ export class ReviewConnectionsModal extends Modal {
 			for (const file of files) {
 				const row = subList.createDiv({ cls: 'sh-review-subject-row' });
 				row.createSpan({ cls: 'sh-review-subject-name', text: file.basename, attr: { title: file.path } });
-				const controls = row.createDiv({ cls: 'sh-review-rel-controls' });
-				controls.style.marginLeft = 'auto';
+				const controls = row.createDiv({ cls: 'sh-review-rel-controls sh-margin-left-auto' });
 				const removeBtn = controls.createEl('button', { text: '✕', cls: 'sh-review-btn sh-review-rel-del' });
 				removeBtn.setAttribute('title', 'Remove hologram tag');
 				removeBtn.addEventListener('click', () => {

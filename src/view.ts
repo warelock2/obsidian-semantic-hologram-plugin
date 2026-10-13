@@ -20,8 +20,8 @@ import type { ScanLayerSettings } from './settings';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
 
-const GIF_MAX_FRAMES = 240;
-const GIF_SAMPLE_MS = 150;
+const GIF_MAX_FRAMES = 720;
+const GIF_SAMPLE_MS = 0;
 const GIF_MAX_WIDTH = 640;
 const GIF_MAX_PIXELS = 200_000;
 
@@ -106,6 +106,7 @@ interface CameraSnapshot {
 	viewY: number;
 	camZ: number;
 	totalSpin: number;
+	primePitch: number;
 	userAdjustedView: boolean;
 	autoFitCooldown: number;
 }
@@ -311,6 +312,15 @@ export class SemanticHologramView extends ItemView {
 	private faces: number[][] = [];
 	private loadingNotice: Notice | null = null;
 	private raf = 0;
+	private gifFrameCounter = 0;
+	private initialCameraState: { azimuth: number; elevation: number; distance: number } | null = null;
+	private initialFocalPoint: [number, number, number] | null = null;
+	// Demand-driven render loop: it only keeps requesting animation frames while
+	// there is work to do (physics running, autorotation, an active gesture, held
+	// keys, recording, or residual motion still bleeding off). `wake()` restarts
+	// it from any input handler, so an idle, settled view costs ~0% CPU.
+	private loopRunning = false;
+	private frameEnergy = 0;
 	private settled = false;
 	private settleCount = 0;
 	private layoutFrames = 0;
@@ -527,6 +537,7 @@ export class SemanticHologramView extends ItemView {
 	];
 	private rotateStartSpin = 0;
 	private totalSpin = 0;
+	private primePitch = 0;
 	private buildSeq = 0;
 	private rotCx = 0;
 	private rotCy = 0;
@@ -1379,6 +1390,7 @@ export class SemanticHologramView extends ItemView {
 		this.canvas.addEventListener('wheel', this.onWheel, { passive: false });
 		window.addEventListener('keydown', this.onKeyDown, true);
 		window.addEventListener('keyup', this.onKeyUp);
+		window.addEventListener('blur', this.onWindowBlur);
 
 		this.resizeObserver = new ResizeObserver(() => this.resize());
 		this.resizeObserver.observe(this.canvas);
@@ -1396,10 +1408,11 @@ export class SemanticHologramView extends ItemView {
 			this.app.metadataCache.on('resolved', () => this.buildGraph(true).then(() => this.notifyGraphChanged())),
 		);
 
-		this.loop();
+		this.wake();
 	}
 
 	onClose(): Promise<void> {
+		this.loopRunning = false;
 		cancelAnimationFrame(this.raf);
 		if (this.resizeObserver) {
 			this.resizeObserver.disconnect();
@@ -1415,6 +1428,7 @@ export class SemanticHologramView extends ItemView {
 		}
 		window.removeEventListener('keydown', this.onKeyDown, true);
 		window.removeEventListener('keyup', this.onKeyUp);
+		window.removeEventListener('blur', this.onWindowBlur);
 		this.contentEl.empty();
 		return Promise.resolve();
 	}
@@ -1460,7 +1474,6 @@ export class SemanticHologramView extends ItemView {
 			btn.addEventListener('click', () => fn());
 		};
 		makeBtn('Fit', () => this.fitToView());
-		makeBtn('Reset', () => this.resetView());
 		makeBtn('Center', () => this.centerSelectedOnOrigin());
 		makeBtn('Help', () => this.toggleHelp());
 		makeBtn('Auto-rotate', () => {
@@ -1566,6 +1579,7 @@ export class SemanticHologramView extends ItemView {
 		if (this.settled && !this.userAdjustedView) {
 			this.fitToView();
 		}
+		this.wake();
 	}
 
 	private async buildGraph(incremental = false): Promise<void> {
@@ -1864,6 +1878,9 @@ export class SemanticHologramView extends ItemView {
 		if (!incremental) {
 			this.selected.clear();
 		}
+		// A rebuild reloads content and may re-arm physics; make sure a parked
+		// loop wakes so the new graph is laid out and drawn.
+		this.wake();
 	}
 
 	/** Per-node search cart: label/path/type/relationship/content for the controls search box. */
@@ -1983,8 +2000,54 @@ export class SemanticHologramView extends ItemView {
 		if (this.isRecording) {
 			this.captureFrame();
 		}
-		this.raf = requestAnimationFrame(this.loop);
+		if (this.needsAnimationFrame()) {
+			this.raf = requestAnimationFrame(this.loop);
+		} else {
+			// Nothing left to animate: park the loop. Any input handler calls
+			// wake() to restart it, so the view stays fully interactive.
+			this.loopRunning = false;
+			this.raf = 0;
+		}
 	};
+
+	/**
+	 * Restart the render loop if it is parked. Safe to call from any handler and
+	 * cheap when the loop is already running.
+	 */
+	private wake(): void {
+		if (this.loopRunning) {
+			return;
+		}
+		this.loopRunning = true;
+		this.raf = requestAnimationFrame(this.loop);
+	}
+
+	/** Whether another animation frame is warranted (otherwise the loop parks). */
+	private needsAnimationFrame(): boolean {
+		return (
+			!this.settled ||
+			this.autoRotating !== 'off' ||
+			this.isRecording ||
+			this.pressedKeys.size > 0 ||
+			this.isInteracting() ||
+			this.frameEnergy > PHYS.settleEnergy
+		);
+	}
+
+	/** True while a pointer/touch gesture owns the canvas and needs live frames. */
+	private isInteracting(): boolean {
+		return (
+			this.pointerDown ||
+			this.rotating ||
+			this.panning ||
+			this.selecting ||
+			this.groupDragging ||
+			this.anchorDragging ||
+			this.pinnedIndex >= 0 ||
+			this.edgeDraggingSourceNode !== null ||
+			this.touchGesture !== 'none'
+		);
+	}
 
 	/**
 	 * Start recording whatever happens on screen.
@@ -2010,6 +2073,7 @@ export class SemanticHologramView extends ItemView {
 		this.recordingStopRequested = false;
 		this.recordingHitCap = false;
 		this.lastCaptureAt = 0;
+		this.gifFrameCounter = 0;
 		this.showToast('Recording — press Stop to finish');
 
 		if (!this.recordingProgressEl) {
@@ -2020,6 +2084,14 @@ export class SemanticHologramView extends ItemView {
 		this.updateProgressUI(0);
 
 		this.writeGifStatus({ status: 'recording', frames: 0, timestamp: Date.now() });
+	}
+
+	public isRecordingActive(): boolean {
+		return this.isRecording;
+	}
+
+	public stopRecording(): void {
+		this.recordingStopRequested = true;
 	}
 
 	/**
@@ -2084,25 +2156,14 @@ export class SemanticHologramView extends ItemView {
 	/**
 	 * Capture one frame of whatever is currently on the canvas.
 	 *
-	 * Two defects this replaces, both found by measuring a live recording:
+	 * Frame skipping: autorotation advances ~0.5 degrees per tick, so capturing
+	 * every 2nd frame yields one GIF frame per 1.0 degree step. At the 360-frame
+	 * cap, a full rotation produces a 360-frame GIF.
 	 *
-	 *  - The old gate was `recordingFrames.length % 2 === 0`. Length only ever
-	 *    increments on a push, so it went 0 -> push -> 1 and then `1 % 2` could
-	 *    never push again. It captured exactly ONE frame for the whole recording,
-	 *    which is why the output was a still image and why the progress bar sat at
-	 *    0% — 1 of 628 rounds to zero.
-	 *  - Stopping was tied to `totalSpin` reaching 2π, and totalSpin only advances
-	 *    in one auto-rotation mode. Recording therefore never ended on its own
-	 *    unless that mode was on, and nothing in the UI could stop it.
-	 *
-	 * There is no rotation and no spin condition here. The recording ends when the
-	 * user presses Stop, or when the frame cap is reached.
-	 *
-	 // Sampling is throttled to GIF_SAMPLE_MS. This is called from the render loop,
-	 * so unthrottled it captured at display refresh rate: the frame cap would have
-	// been reached in about four seconds, and a per-frame getImageData plus
-	// quantise pass over a quarter of a million pixels is far too expensive to
-	 * run inside the frame budget.
+	 * Stop conditions by mode:
+	 *  - full: stops when the frame cap is reached
+	 *  - time: stops when elapsed time reaches gifDuration
+	 *  - continuous: no automatic stop — runs until user clicks Stop
 	 */
 	private captureFrame(): void {
 		if (!this.canvas || !this.ctx) return;
@@ -2111,11 +2172,25 @@ export class SemanticHologramView extends ItemView {
 		if (now - this.lastCaptureAt < GIF_SAMPLE_MS) return;
 		this.lastCaptureAt = now;
 
-		if (this.recordingFrames.length >= GIF_MAX_FRAMES) {
-			this.recordingHitCap = true;
-			this.stopAndEncode();
-			return;
+		// Captures every animation frame (720 frames cover a full 360° rotation at 0.5° per step).
+		this.gifFrameCounter++;
+
+		const mode = this.plugin.settings.gifMode;
+
+		if (mode === 'time') {
+			const elapsed = (now - this.recordingStartedAt) / 1000;
+			if (elapsed >= this.plugin.settings.gifDuration) {
+				this.stopAndEncode();
+				return;
+			}
+		} else if (mode === 'full') {
+			if (this.recordingFrames.length >= GIF_MAX_FRAMES) {
+				this.recordingHitCap = true;
+				this.stopAndEncode();
+				return;
+			}
 		}
+		// 'continuous': no automatic stop — runs until user clicks Stop.
 
 		const { width: targetWidth, height: targetHeight } = this.captureSize();
 
@@ -2191,13 +2266,8 @@ export class SemanticHologramView extends ItemView {
 		const frames = this.recordingFrames;
 		this.recordingFrames = [];
 
-		// Playback speed follows what the user actually did. The recorder samples
-		// on a fixed timer, so the honest delay is the measured wall time per
-		// captured frame — otherwise a recording made while panning fast plays
-		// back at the same speed as one made while the graph was static.
-		const elapsedMs = Math.max(1, performance.now() - this.recordingStartedAt);
-		const perFrameMs = frames.length > 0 ? elapsedMs / frames.length : 100;
-		const delay = Math.max(20, Math.min(500, Math.round(perFrameMs)));
+		// Fixed 30 FPS delay (33ms per frame).
+		const delay = 33;
 
 		if (this.recordingProgressEl) {
 			this.recordingProgressEl.empty();
@@ -2335,7 +2405,7 @@ export class SemanticHologramView extends ItemView {
 					// angles θ and φ are derived from the resulting basis, never
 					// set directly here.
 					this.applyRotationDeltas(horiz * rotSpeed, -vert * rotSpeed);
-					this.totalSpin += horiz * rotSpeed;
+					this.totalSpin += (horiz * rotSpeed * Math.PI) / 180;
 				} else if (horiz !== 0) {
 					this.rotateAboutAxis([0, 1, 0], horiz * 0.01);
 				} else if (vert !== 0) {
@@ -2454,6 +2524,10 @@ export class SemanticHologramView extends ItemView {
 			energy += node.vx * node.vx + node.vy * node.vy + (is3D ? node.vz * node.vz : 0);
 		}
 
+		// Residual kinetic energy (per integrable node) is the sleep signal: below
+		// the settle threshold with a settled layout there is nothing left to draw.
+		this.frameEnergy = energy / Math.max(1, visibleCount);
+
 		if (this.autoRotating === 'ccw' && this.nodes.length > 0) {
 			if (this.is3D) {
 				this.applyRotationDeltas(-0.5, 0);
@@ -2468,6 +2542,9 @@ export class SemanticHologramView extends ItemView {
 				this.rotateAboutAxis([0, 1, 0], 0.005);
 			}
 			this.totalSpin += 0.005;
+		}
+		if (this.autoRotating !== 'off') {
+			this.syncControlsCamera();
 		}
 		if (!this.settled) {
 			this.layoutFrames++;
@@ -2495,10 +2572,18 @@ export class SemanticHologramView extends ItemView {
 							node.homeZ = node.z;
 						}
 					}
-					this.settled = true;
-					if (!this.userAdjustedView) {
-						this.fitToView();
-					}
+				this.settled = true;
+				if (!this.userAdjustedView) {
+					this.fitToView();
+				}
+				if (!this.initialCameraState) {
+					this.initialCameraState = {
+						azimuth: this.currentAzimuth,
+						elevation: this.currentElevation,
+						distance: this.cameraDistance,
+					};
+					this.initialFocalPoint = [...this.target];
+				}
 				}
 			} else {
 				this.settleCount = 0;
@@ -2603,6 +2688,17 @@ export class SemanticHologramView extends ItemView {
 
 		console.log(`[SH] fitToView (${hasSelection ? 'selection' : 'home'}): nodes=${targetNodes.length}/${this.nodes.length} canvas=${this.canvas?.clientWidth}x${this.canvas?.clientHeight} view=(${this.is3D ? this.target : `${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}`}) scale=${this.viewScale.toFixed(3)}`);
 		this.markViewAdjusted();
+	}
+
+	private resetView(): void {
+		if (this.initialCameraState) {
+			this.setCameraState({ ...this.initialCameraState });
+		}
+		if (this.initialFocalPoint) {
+			this.target = [...this.initialFocalPoint];
+		}
+		this.userAdjustedView = false;
+		this.wake();
 	}
 
 	/**
@@ -2710,10 +2806,7 @@ export class SemanticHologramView extends ItemView {
 			this.viewX = cx - w / (2 * this.viewScale);
 			this.viewY = cy - h / (2 * this.viewScale);
 		}
-	}
-
-	private resetView(): void {
-		this.fitToView();
+		this.wake();
 	}
 
 	public getFocalPoint(): { x: number; y: number; z: number } {
@@ -2743,6 +2836,7 @@ export class SemanticHologramView extends ItemView {
 	private markViewAdjusted(skipControls = false): void {
 		this.userAdjustedView = true;
 		this.autoFitCooldown = PHYS.fitCooldown;
+		this.wake();
 		if (!skipControls) {
 			this.refreshControlsPanel();
 		}
@@ -3872,6 +3966,7 @@ export class SemanticHologramView extends ItemView {
 		}
 
 		this.drawPrimeFrameGizmo();
+		this.drawLeftXAxisIndicator();
 
 		if (this.is3D) {
 			const cx = w / 2;
@@ -4016,6 +4111,42 @@ export class SemanticHologramView extends ItemView {
 
 			ctx.fillText(ax.label, cx + ex * (s + 9), cy + ey * (s + 9));
 		}
+		ctx.restore();
+	}
+
+	private drawLeftXAxisIndicator(): void {
+		const ctx = this.ctx;
+		const canvas = this.canvas;
+		if (!ctx || !canvas || !this.is3D) {
+			return;
+		}
+		const h = canvas.clientHeight ?? 600;
+		const cx = 60;
+		const cy = h / 2;
+		const rx = 7;
+		const ry = 20;
+		const color = this.nodeColor;
+
+		ctx.save();
+		ctx.strokeStyle = this.withAlpha(color, 0.85);
+		ctx.lineWidth = 1.5;
+		ctx.beginPath();
+		ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+		ctx.stroke();
+
+		const pitchRad = (this.primePitch * Math.PI) / 180;
+		const dotSx = cx + rx * Math.cos(pitchRad);
+		const dotSy = cy + ry * Math.sin(pitchRad);
+		const dotRadius = 4.5;
+
+		ctx.fillStyle = color;
+		ctx.beginPath();
+		ctx.arc(dotSx, dotSy, dotRadius, 0, Math.PI * 2);
+		ctx.fill();
+		ctx.strokeStyle = this.withAlpha(color, 0.8);
+		ctx.lineWidth = 1.5;
+		ctx.stroke();
+
 		ctx.restore();
 	}
 
@@ -4340,6 +4471,7 @@ export class SemanticHologramView extends ItemView {
 	/* ── Pointer event handlers ─────────────────────────────────── */
 
 	private onPointerDown = (e: PointerEvent): void => {
+		this.wake();
 		if (this.peekActive) {
 			return;
 		}
@@ -4457,6 +4589,7 @@ export class SemanticHologramView extends ItemView {
 	};
 
 	private onPointerMove = (e: PointerEvent): void => {
+		this.wake();
 		if (this.touch) {
 			this.touchMoveEvent(e);
 			return;
@@ -4602,6 +4735,7 @@ export class SemanticHologramView extends ItemView {
 	};
 
 	private onPointerUp = (e: PointerEvent): void => {
+		this.wake();
 		if (this.edgeDraggingSourceNode) {
 			const idx = this.hitTest(e);
 			if (idx >= 0 && this.nodes[idx] !== this.edgeDraggingSourceNode) {
@@ -5485,6 +5619,7 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	private onPointerLeave = (): void => {
+		this.wake();
 		this.hoverIndex = -1;
 		this.pointerInside = false;
 		if (this.cursorOverlay) {
@@ -5496,6 +5631,7 @@ export class SemanticHologramView extends ItemView {
 	};
 
 	private onKeyDown = (e: KeyboardEvent): void => {
+		this.wake();
 		if (e.code === 'ControlLeft' || e.code === 'ControlRight') {
 			this.ctrlPressed = true;
 			if (this.hoverIndex >= 0) {
@@ -5886,7 +6022,7 @@ private selectHovered(): void {
 			'<div class="sh-help-row"><span class="sh-help-key">f</span><span class="sh-help-desc">toggle faces (3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+f</span><span class="sh-help-desc">fit graph to view; while previewing a hologram: keep that view</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">r</span><span class="sh-help-desc">cycle rotation: off → clockwise → counter-clockwise</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">Shift+r</span><span class="sh-help-desc">reset (fit to view, rotation to 0)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Shift+r</span><span class="sh-help-desc">reset view to initial state</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+=</span><span class="sh-help-desc">fit graph to view</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+Shift+=</span><span class="sh-help-desc">magnify (dolly in 3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+-</span><span class="sh-help-desc">demagnify (dolly in 3D)</span></div>' +
@@ -5923,6 +6059,7 @@ private selectHovered(): void {
 	}
 
 	private onKeyUp = (e: KeyboardEvent): void => {
+		this.wake();
 		if (e.code === 'ControlLeft' || e.code === 'ControlRight') {
 			this.ctrlPressed = false;
 			if (!this.activePreviewCard?.matches(':hover')) {
@@ -5970,7 +6107,20 @@ private selectHovered(): void {
 		}
 	};
 
+	/**
+	 * A held key (or an in-flight gesture) whose keyup/pointerup fires while the
+	 * window is unfocused would otherwise stick, keeping the demand-driven loop
+	 * awake forever. Clear the transient input state and let the loop park.
+	 */
+	private onWindowBlur = (): void => {
+		this.pressedKeys.clear();
+		this.shiftDown = false;
+		this.ctrlPressed = false;
+		this.updateCursor();
+	};
+
 	private onWheel = (e: WheelEvent): void => {
+		this.wake();
 		e.preventDefault();
 		if (this.peekActive) {
 			return;
@@ -6169,6 +6319,7 @@ private selectHovered(): void {
 			viewY: this.viewY,
 			camZ: this.camZ,
 			totalSpin: this.totalSpin,
+			primePitch: this.primePitch,
 			userAdjustedView: this.userAdjustedView,
 			autoFitCooldown: this.autoFitCooldown,
 		};
@@ -6184,9 +6335,11 @@ private selectHovered(): void {
 		this.viewY = s.viewY;
 		this.camZ = s.camZ;
 		this.totalSpin = s.totalSpin;
+		this.primePitch = s.primePitch;
 		this.userAdjustedView = s.userAdjustedView;
 		this.autoFitCooldown = s.autoFitCooldown;
 		this.updateCameraMatrix();
+		this.wake();
 	}
 
 	public isHologramPeeking(): boolean {
@@ -6254,6 +6407,7 @@ private selectHovered(): void {
 			this.selectCandidates();
 		}
 		this.refreshControlsPanel();
+		this.wake();
 	}
 
 	/** Exit a peek but keep its camera (row click): discard the snapshot, drop candidates. */
@@ -6266,6 +6420,7 @@ private selectHovered(): void {
 		this.peekTags = [];
 		this.userAdjustedView = true;
 		this.candidateNodes.clear();
+		this.wake();
 	}
 
 	private selectCandidates(): void {
@@ -6281,6 +6436,7 @@ private selectHovered(): void {
 		}
 		this.candidateNodes.clear();
 		this.updateCursor();
+		this.wake();
 	}
 
 	/** Searchable per-node metadata for the controls search box. */
@@ -6302,8 +6458,29 @@ private selectHovered(): void {
 		}
 	}
 
+	/**
+	 * Push the current camera angles onto the controls panel's read-outs without
+	 * rebuilding the panel. Used for per-frame changes (autorotation) where a
+	 * full {@link refreshControlsPanel} re-render every frame would be wasteful.
+	 */
+	private syncControlsCamera(): void {
+		for (const leaf of this.app.workspace.getLeavesOfType('semantic-hologram-controls')) {
+			const view = leaf.view as any;
+			if (view.onCameraChange) view.onCameraChange();
+		}
+	}
+
 	requestRedraw(): void {
 		this.settled = false;
+		this.wake();
+	}
+
+	/**
+	 * Ask for one (or more) redraw frames without re-arming physics. Used when
+	 * settings change rendering (colors, labels, filter, etc.) but not layout.
+	 */
+	public requestRender(): void {
+		this.wake();
 	}
 
 	showLevelTooltip(show: boolean): void {
@@ -6366,6 +6543,7 @@ private selectHovered(): void {
 			return;
 		}
 		const rad = Math.PI / 180;
+		this.primePitch += dPitch;
 		if (dYaw !== 0) {
 			this.rotateAboutBodyAxis(1, dYaw * rad);
 		}
@@ -6373,6 +6551,7 @@ private selectHovered(): void {
 			this.rotateAboutBodyAxis(0, dPitch * rad);
 		}
 		this.updateCameraMatrix();
+		this.updateAnglesFromMatrix();
 		this.markViewAdjusted(true);
 	}
 

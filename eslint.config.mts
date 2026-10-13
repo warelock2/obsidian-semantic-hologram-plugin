@@ -9,6 +9,10 @@ export default defineConfig(
 		'esbuild.config.mjs',
 		'version-bump.mjs',
 		'versions.json',
+		'tests/',
+		// Imports ../src/skeleton.ts, which tsconfig does not include, so the
+		// typed project service cannot resolve it and errors on the import.
+		'scripts/gen-example-node.mjs',
 		'main.js',
 		'package.json',
 		'package-lock.json',

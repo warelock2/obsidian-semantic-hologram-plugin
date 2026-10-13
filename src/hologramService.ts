@@ -1,4 +1,4 @@
-import { TFile, Vault, MetadataCache } from 'obsidian';
+import { TFile } from 'obsidian';
 import type SemanticHologramPlugin from './main';
 import { extractFrontmatter, parseNoteFrontmatter, setHologramsInContent } from './relations';
 
@@ -14,11 +14,9 @@ export class HologramService {
 	async loadCache(): Promise<void> {
 		this.cache.clear();
 		const files = this.plugin.app.vault.getMarkdownFiles().filter((f) => this.plugin.isInScope(f.path));
-		console.log('[SH] Loading hologram cache for files:', files.map(f => f.path));
 		await Promise.all(
 			files.map(async (f) => {
 				const tags = await this.readTagsFromFile(f);
-				console.log('[SH] Tags for', f.path, ':', Array.from(tags));
 				this.cache.set(f.path, tags);
 			}),
 		);
@@ -29,7 +27,9 @@ export class HologramService {
 			const content = await this.plugin.app.vault.cachedRead(file);
 			const fm = parseNoteFrontmatter(extractFrontmatter(content));
 			// Support both 'hologram' and 'holograms' keys
-			const tags = fm.holograms ?? (fm as any).hologram ?? [];
+			const raw = fm as unknown as Record<string, unknown>;
+			const rawHolo = raw.hologram;
+			const tags: string[] = fm.holograms ?? (Array.isArray(rawHolo) ? (rawHolo as string[]) : (typeof rawHolo === 'string' ? [rawHolo] : []));
 			return new Set(Array.isArray(tags) ? tags : [tags]);
 		} catch {
 			return new Set();

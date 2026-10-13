@@ -1,6 +1,6 @@
 import { App, Modal, Notice, Setting, TFile } from 'obsidian';
-import { HOLOGRAM_FOLDER } from './settings';
-import { findMissingStrengths, formatStrength, inScopePath, normalizeRelationStrengths, scanRelations } from './relations';
+import { HOLOGRAM_FOLDER, defaultNodeType } from './settings';
+import { findIncomingSection, findMissingStrengths, findRelationsSection, formatStrength, inScopePath, normalizeRelationStrengths, scanRelations } from './relations';
 import type SemanticHologramPlugin from './main';
 import { ensureHologramContent } from './importNote';
 
@@ -14,7 +14,7 @@ export interface AuditResult {
  * missing strengths.
  */
 export function repairHologramNode(content: string, file: TFile, plugin: SemanticHologramPlugin): string {
-	const defaultType = plugin.settings.nodeTypes[0]?.id ?? 'concept';
+	const defaultType = defaultNodeType(plugin.settings.nodeTypes);
 	let fixed = ensureHologramContent(content, defaultType, file, plugin);
 	fixed = normalizeRelationStrengths(fixed, plugin.settings.defaultRelStrength);
 	return fixed;
@@ -53,10 +53,10 @@ export async function auditHologramNodes(plugin: SemanticHologramPlugin): Promis
 		}
 
 		// Check sections
-		if (!/(^|\n)#{1,6}\s+Relations(?:hips)?/i.test(content)) {
+		if (!findRelationsSection(content)) {
 			issues.push('Missing ## Relationships section');
 		}
-		if (incomingTargets.has(file.path) && !/(^|\n)#{1,6}\s+Incoming\s+Relations(?:hips)?/i.test(content)) {
+		if (incomingTargets.has(file.path) && !findIncomingSection(content)) {
 			issues.push('Missing ## Incoming relationships section');
 		}
 
@@ -85,7 +85,7 @@ export class HologramAuditModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.empty();
-		contentEl.createEl('h4', { text: 'Audit Hologram Nodes' });
+		contentEl.createEl('h4', { text: 'Audit hologram nodes' });
 
 		if (this.results.length === 0) {
 			contentEl.createEl('p', { text: 'All nodes are in compliance!' });
@@ -101,7 +101,7 @@ export class HologramAuditModal extends Modal {
 
 		new Setting(contentEl).addButton((b) =>
 			b
-				.setButtonText('Fix All')
+				.setButtonText('Fix all')
 				.setCta()
 				.onClick(async () => {
 					for (const res of this.results) {

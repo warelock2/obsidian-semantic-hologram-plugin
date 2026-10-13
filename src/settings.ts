@@ -17,6 +17,37 @@ export interface NodeTypeEntry {
 	level?: number;
 }
 
+/**
+ * The node type a note gets when nothing says otherwise.
+ *
+ * This was previously decided independently in fifteen places, by three
+ * different strategies, which disagreed:
+ *
+ *   - `nodeTypes[0]?.id ?? 'concept'` and `enabled[0]?.id ?? 'concept'`
+ *     (audit.ts, main.ts) actually resolved to `percept`, because `percept`
+ *     is first in the array. The `'concept'` fallback was unreachable — the
+ *     list is never empty. Since `percept` is Level 0, and three review sites
+ *     deliberately filter `percept` out, *any node created without a type was
+ *     silently excluded from the whole review pipeline*. That was an accident
+ *     of array order, not a decision.
+ *   - A literal `'thought'` in ensureHologramContent and both import paths.
+ *   - A literal `'concept'` in the frontmatter readers and the confidence
+ *     reader.
+ *
+ * `thought` is the intended default: three of those sites already asked for
+ * it explicitly. The resolution order is preferred-enabled, then any enabled
+ * type, then the constant, so a user who disables `thought` still gets a
+ * sensible answer instead of a hardcoded string.
+ */
+export const DEFAULT_NODE_TYPE_ID = 'thought';
+
+export function defaultNodeType(nodeTypes: readonly NodeTypeEntry[] | undefined): string {
+	const preferred = nodeTypes?.find((t) => t.enabled && t.id === DEFAULT_NODE_TYPE_ID);
+	if (preferred) return preferred.id;
+	const firstEnabled = nodeTypes?.find((t) => t.enabled);
+	return firstEnabled?.id ?? DEFAULT_NODE_TYPE_ID;
+}
+
 export interface RelTypeEntry {
 	id: string; // 'family/type'
 	color: string;
@@ -91,6 +122,8 @@ export interface SemanticHologramSettings {
 	separationDistance: number;
 	mergeMode: 'absorb' | 'emulsify';
 	splitMode: 'move' | 'copy';
+	gifMode: 'full' | 'time' | 'continuous';
+	gifDuration: number;
 }
 
 export const PALETTE = [
@@ -189,6 +222,8 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	separationDistance: 500,
 	mergeMode: 'emulsify',
 	splitMode: 'move',
+	gifMode: 'full',
+	gifDuration: 10,
 };
 
 export function validateHex(hex: string): boolean {

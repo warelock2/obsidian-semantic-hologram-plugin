@@ -2,10 +2,10 @@
 	"id": "semantic-hologram",
 	"name": "Semantic Hologram",
 	"version": "1.0.0",
-	"minAppVersion": "1.0.0",
+	"minAppVersion": "1.7.2",
 	"description": "Force-directed graph of your knowledge network: notes as spheres, links as lines, drag to explore.",
 	"author": "Warelock",
 	"authorUrl": "",
 	"fundingUrl": "",
-	"isDesktopOnly": false
+	"isDesktopOnly": true
 }

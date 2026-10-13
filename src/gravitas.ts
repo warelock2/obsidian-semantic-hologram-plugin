@@ -1,6 +1,7 @@
 import { MetadataCache, TFile, Vault } from 'obsidian';
 import type { GravitasEdge, MalformedRelation, RelationEdge } from './relations';
 import { parseGravitasSection, parseNoteFrontmatter, extractFrontmatter } from './relations';
+import { DEFAULT_NODE_TYPE_ID } from './settings';
 import type { SourceKindEntry } from './settings';
 
 /** Evidence notes lend gravitas; they are never graph nodes themselves. */
@@ -37,14 +38,15 @@ export function readNodeMetas(
 	files: TFile[],
 	metadataCache: MetadataCache,
 	defaultConfidence: number,
+	defaultType: string = DEFAULT_NODE_TYPE_ID,
 ): Map<string, NodeMeta> {
 	const metas = new Map<string, NodeMeta>();
 	for (const f of files) {
-		const fm = metadataCache.getFileCache(f)?.frontmatter ?? {};
+		const fm = (metadataCache.getFileCache(f)?.frontmatter ?? {}) as Record<string, unknown>;
 		const nodeType =
 			(typeof fm['node-type'] === 'string' ? fm['node-type'] : undefined) ??
 			(typeof fm['note-type'] === 'string' ? fm['note-type'] : undefined) ??
-			'concept';
+			defaultType;
 		const rawLocal = fm['local-confidence'] ?? fm['confidence'];
 		const local = typeof rawLocal === 'number' ? Math.min(1, Math.max(0, rawLocal)) : defaultConfidence;
 		const sourceKind = typeof fm['source-kind'] === 'string' ? fm['source-kind'] : null;
@@ -58,6 +60,7 @@ export async function readNodeMetasFresh(
 	files: TFile[],
 	vault: Vault,
 	defaultConfidence: number,
+	defaultType: string = DEFAULT_NODE_TYPE_ID,
 ): Promise<Map<string, NodeMeta>> {
 	const metas = new Map<string, NodeMeta>();
 	for (const f of files) {
@@ -70,7 +73,7 @@ export async function readNodeMetasFresh(
 		const fm = parseNoteFrontmatter(extractFrontmatter(content));
 		metas.set(f.path, {
 			path: f.path,
-			nodeType: fm.noteType ?? 'concept',
+			nodeType: fm.noteType ?? defaultType,
 			localConfidence: fm.localConfidence ?? defaultConfidence,
 			sourceKind: fm.sourceKind,
 		});
@@ -88,8 +91,9 @@ export async function scanGravitas(
 	vault: Vault,
 	metadataCache: MetadataCache,
 	inScope: (path: string) => boolean,
+	defaultType: string = DEFAULT_NODE_TYPE_ID,
 ): Promise<GravitasScan> {
-	const metas = readNodeMetas(files, metadataCache, 0.5);
+	const metas = readNodeMetas(files, metadataCache, 0.5, defaultType);
 	const edges: GravitasEdge[] = [];
 	const malformed: MalformedRelation[] = [];
 	const resolve = (name: string, sourcePath: string): string | null => {

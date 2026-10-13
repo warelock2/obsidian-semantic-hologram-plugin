@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Plugin, Setting, TFile, WorkspaceLeaf } from 'obsidian';
+import { App, Modal, Notice, Plugin, Setting, TFile, View, WorkspaceLeaf } from 'obsidian';
 import { readFileSync, watch, writeFileSync } from 'fs';
 import { join } from 'path';
 import {
@@ -10,6 +10,8 @@ import {
 	SemanticHologramSettings,
 	SemanticHologramSettingTab,
 } from './settings';
+import { defaultNodeType } from './settings';
+import { buildHologramSkeleton, todayIso } from './skeleton';
 import type { ScanLayerSettings } from './settings';
 import { SemanticHologramControlsView, VIEW_TYPE_HOLOGRAM_CONTROLS } from './controlsView';
 import { SemanticHologramView, VIEW_TYPE_HOLOGRAM } from './view';
@@ -159,23 +161,13 @@ export default class SemanticHologramPlugin extends Plugin {
 			(leaf: WorkspaceLeaf) => new AuditConnectionsView(leaf, this),
 		);
 
-		this.ribbonIcon = this.addRibbonIcon('waypoints', 'Semantic Hologram', () => {
+		this.ribbonIcon = this.addRibbonIcon('waypoints', 'Semantic hologram', () => {
 			void this.activateView();
-		});
-
-
-
-		this.addCommand({
-			id: 'refresh-incoming-relationships',
-			name: 'Refresh incoming relationships in notes',
-			callback: async () => {
-				await this.refreshIncomingRelationships();
-			},
 		});
 
 		this.addCommand({
 			id: 'refresh-gravitas-confidence',
-			name: 'Refresh gravitas and confidence sections in notes',
+			name: 'Refresh gravitas and confidence sections',
 			callback: async () => {
 				await this.refreshGravitasSections();
 			},
@@ -197,21 +189,20 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'start-hologram-recording',
-			name: 'Start Hologram GIF Recording',
+			name: 'Start hologram GIF recording',
 			callback: () => {
 				const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
 				if (view) {
-					console.log('[SH] Command triggered recording');
-					(view as any).startRecording();
+					void view.startRecording();
 				} else {
-					new Notice('Open Semantic Hologram view first.');
+					new Notice('Open semantic hologram view first.');
 				}
 			},
 		});
 
 		this.addCommand({
 			id: 'open-semantic-hologram',
-			name: 'Open Semantic Hologram graph',
+			name: 'Open semantic hologram graph',
 			callback: () => {
 				void this.activateView();
 			},
@@ -219,7 +210,7 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'zoom-in',
-			name: 'Magnify (dolly in 3D)',
+			name: 'Magnify (dolly in 3d)',
 			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: '=' }],
 			callback: () => {
 				const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
@@ -229,7 +220,7 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'zoom-out',
-			name: 'Demagnify (dolly in 3D)',
+			name: 'Demagnify (dolly in 3d)',
 			hotkeys: [{ modifiers: ['Mod'], key: '-' }],
 			callback: () => {
 				const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
@@ -239,7 +230,7 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'fit-to-view',
-			name: 'Fit To View',
+			name: 'Fit to view',
 			hotkeys: [{ modifiers: ['Mod'], key: '=' }],
 			callback: () => {
 				const view = this.app.workspace.getActiveViewOfType(SemanticHologramView);
@@ -250,6 +241,7 @@ export default class SemanticHologramPlugin extends Plugin {
 		this.addCommand({
 			id: 'create-hologram-node',
 			name: 'Create hologram node',
+			hotkeys: [{ modifiers: ['Shift'], key: 'N' }],
 			callback: () => {
 				new CreateNodeModal(this.app, this).open();
 			},
@@ -257,11 +249,11 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'import-note-into-hologram',
-			name: 'Import note into Holograms',
+			name: 'Import note into holograms',
 			callback: () => {
 				const modal = new ImportNoteModal(this.app, this);
 				if (modal.getItems().length === 0) {
-					new Notice('No notes to import — all markdown notes are already in the hologram scope.');
+					new Notice('No notes to import — all Markdown notes are already in the hologram scope.');
 					return;
 				}
 				modal.open();
@@ -318,23 +310,16 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'import-incoming-notes',
-			name: 'Import incoming Zettelkasten notes',
+			name: 'Import incoming zettelkasten notes',
 			callback: () => {
 				new IncomingImportModal(this.app, this).open();
 			},
 		});
 
-		this.addCommand({
-			id: 'dump-graph-state',
-			name: 'Dump graph state (debug)',
-			callback: () => {
-				void this.dumpGraphState();
-			},
-		});
 
 		this.addCommand({
 			id: 'open-hologram-controls',
-			name: 'Show Hologram controls',
+			name: 'Show hologram controls',
 			callback: () => {
 				void this.activateControlsView();
 			},
@@ -346,14 +331,14 @@ export default class SemanticHologramPlugin extends Plugin {
 			callback: () => {
 				const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM);
 				if (leaves.length > 0) {
-					const view = leaves[0]?.view as any;
-					if (view && typeof view.focusSearchInput === 'function') {
+					const view = leaves[0]?.view;
+					if (view instanceof SemanticHologramView) {
 						view.focusSearchInput();
 						return;
 					}
 				}
-				const searchInput = document.querySelector('.sh-search-input') as HTMLInputElement | null;
-				if (searchInput) {
+				const searchInput = document.querySelector('.sh-search-input');
+				if (searchInput instanceof HTMLInputElement || searchInput instanceof HTMLTextAreaElement) {
 					searchInput.focus();
 					searchInput.select();
 				}
@@ -523,9 +508,8 @@ export default class SemanticHologramPlugin extends Plugin {
 
 	async refreshIncomingRelationships(): Promise<void> {
 		const files = this.app.vault.getMarkdownFiles();
-		let result;
 		try {
-			result = await syncIncomingRelationships(
+			await syncIncomingRelationships(
 				files,
 				this.app.vault,
 				this.app.metadataCache,
@@ -537,30 +521,27 @@ export default class SemanticHologramPlugin extends Plugin {
 			new Notice(`Semantic Hologram: refresh failed: ${String(e)}`);
 			return;
 		}
-		// new Notice(`Updated incoming relationships in ${result.updated.length} hologram note(s).`);
-		console.log(`Updated incoming relationships in ${result.updated.length} hologram note(s).`);
 		await this.refreshGraphs();
 	}
 
 	async refreshGravitasSections(): Promise<void> {
 		const files = this.app.vault.getMarkdownFiles();
-		let result;
 		try {
-			result = await syncGravitasAndConfidence(
+			await syncGravitasAndConfidence(
 				files,
 				this.app.vault,
 				this.app.metadataCache,
 				this.settings.sourceKinds,
+				defaultNodeType(this.settings.nodeTypes),
 				this.settings.defaultConfidence,
 				this.settings.defaultRelStrength,
 				this.knownRelIds(),
-				(path) => this.isInScope(path),
+				(path: string) => this.isInScope(path),
 			);
 		} catch (e) {
 			new Notice(`Semantic Hologram: gravitas refresh failed: ${String(e)}`);
 			return;
 		}
-		console.log(`Updated gravitas/confidence sections in ${result.updated.length} hologram note(s).`);
 		await this.refreshGraphs();
 	}
 
@@ -599,7 +580,7 @@ export default class SemanticHologramPlugin extends Plugin {
 		const { workspace } = this.app;
 		const existing = workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS);
 		if (existing.length > 0) {
-			workspace.revealLeaf(existing[0]!);
+			await workspace.revealLeaf(existing[0]!);
 			return;
 		}
 		const leaf = workspace.getRightLeaf(false);
@@ -607,53 +588,40 @@ export default class SemanticHologramPlugin extends Plugin {
 			return;
 		}
 		await leaf.setViewState({ type: VIEW_TYPE_HOLOGRAM_CONTROLS, active: true });
-		workspace.revealLeaf(leaf);
+		await workspace.revealLeaf(leaf);
 	}
 
 	async activateReviewView(): Promise<void> {
 		const { workspace } = this.app;
 		const existing = workspace.getLeavesOfType(VIEW_TYPE_REVIEW_CONNECTIONS);
 		if (existing.length > 0) {
-			workspace.revealLeaf(existing[0]!);
+			await workspace.revealLeaf(existing[0]!);
 			return;
 		}
 		const leaf = workspace.getLeaf('tab');
 		await leaf.setViewState({ type: VIEW_TYPE_REVIEW_CONNECTIONS, active: true });
-		workspace.revealLeaf(leaf);
+		await workspace.revealLeaf(leaf);
 	}
 
 	async activateAuditView(): Promise<void> {
 		const { workspace } = this.app;
 		const existing = workspace.getLeavesOfType(VIEW_TYPE_AUDIT_CONNECTIONS);
 		if (existing.length > 0) {
-			workspace.revealLeaf(existing[0]!);
+			await workspace.revealLeaf(existing[0]!);
 			return;
 		}
 		const leaf = workspace.getLeaf('tab');
 		await leaf.setViewState({ type: VIEW_TYPE_AUDIT_CONNECTIONS, active: true });
-		workspace.revealLeaf(leaf);
+		await workspace.revealLeaf(leaf);
 	}
 
 	onunload() {
-		this.app.workspace.detachLeavesOfType(VIEW_TYPE_HOLOGRAM);
-		this.app.workspace.detachLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS);
+		
+		
 		if (this.ribbonIcon) {
 			this.ribbonIcon.remove();
 			this.ribbonIcon = null;
 		}
-	}
-
-	private async dumpGraphState(): Promise<void> {
-		const view = this.app.workspace
-			.getLeavesOfType(VIEW_TYPE_HOLOGRAM)
-			.map((leaf) => leaf.view)
-			.find((v): v is SemanticHologramView => v instanceof SemanticHologramView);
-		if (!view) {
-			new Notice('Semantic Hologram: open the graph view first.');
-			return;
-		}
-		const path = await view.dumpGraphState();
-		new Notice(`Graph state written to ${path}`);
 	}
 
 	async activateView() {
@@ -661,13 +629,14 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		// If there is an empty leaf (e.g. new tab), reuse it.
 		const emptyLeaves = workspace.getLeavesOfType('empty');
-		const targetLeaf = workspace.activeLeaf?.view.getViewType() === 'empty' 
-			? workspace.activeLeaf 
+		const activeView = workspace.getActiveViewOfType(View);
+		const targetLeaf = activeView?.getViewType() === 'empty' 
+			? activeView.leaf 
 			: (emptyLeaves.length > 0 ? emptyLeaves[0] : null);
 		
 		if (targetLeaf) {
 			await targetLeaf.setViewState({ type: VIEW_TYPE_HOLOGRAM, active: true });
-			workspace.revealLeaf(targetLeaf);
+			await workspace.revealLeaf(targetLeaf);
 			return;
 		}
 
@@ -679,7 +648,7 @@ export default class SemanticHologramPlugin extends Plugin {
 			(leaf) => leaf.view instanceof SemanticHologramView && leaf.getRoot() === workspace.rootSplit,
 		);
 		if (mainLeaf) {
-			workspace.revealLeaf(mainLeaf);
+			await workspace.revealLeaf(mainLeaf);
 			return;
 		}
 
@@ -697,19 +666,20 @@ export default class SemanticHologramPlugin extends Plugin {
 
 		if (leaf) {
 			await leaf.setViewState({ type: VIEW_TYPE_HOLOGRAM, active: true });
-			workspace.revealLeaf(leaf);
+			await workspace.revealLeaf(leaf);
 		}
 	}
 
 	async loadSettings() {
-		const saved = (await this.loadData()) as Partial<SemanticHologramSettings> | null;
+		const savedRaw = (await this.loadData()) as unknown;
+		const saved = savedRaw as Partial<SemanticHologramSettings> | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {});
-		if ((this.settings.hoverDepth ?? 0) === 0 && (saved as any)?.maxDepth) {
-			this.settings.hoverDepth = (saved as any).maxDepth;
-			this.settings.maxDepth = (saved as any).maxDepth;
+		const legacyMaxDepth = (savedRaw as { maxDepth?: number } | null)?.maxDepth;
+		if ((this.settings.hoverDepth ?? 0) === 0 && typeof legacyMaxDepth === 'number') {
+			this.settings.hoverDepth = legacyMaxDepth;
+			this.settings.maxDepth = legacyMaxDepth;
 		}
-		if ((this.settings.maxDepth as number) === undefined) this.settings.maxDepth = this.settings.hoverDepth;
-		if ((this.settings as any).depthBase === undefined) (this.settings as any).depthBase = 0.55;
+		if ((this.settings.maxDepth) === undefined) this.settings.maxDepth = this.settings.hoverDepth;
 		// scanLayers was added as a nested object; a settings blob written before it
 		// merges to undefined rather than picking up the default, so fill it in.
 		const stored = (saved as { scanLayers?: Partial<SemanticHologramSettings['scanLayers']> })?.scanLayers;
@@ -806,57 +776,27 @@ pluginDir(): string {
 			case 'run_scan':
 				await this.runScanCommand(command);
 				return;
-			case 'dump_graph_state':
-				await this.dumpGraphStateCommand(command.nonce);
-				return;
 			default:
 				return;
 		}
 	}
 
-	/**
-	 * Re-dump the graph state on demand.
-	 *
-	 * The file this writes used to be the *only* thing behind the MCP
-	 * `dump_graph_state` tool, which made that tool report whatever the last
-	 * manual debug command happened to leave behind — arbitrarily stale, and
-	 * indistinguishable from current. Asking for a dump now triggers one.
-	 */
-	private async dumpGraphStateCommand(nonce?: string): Promise<void> {
-		const view = this.app.workspace
-			.getLeavesOfType(VIEW_TYPE_HOLOGRAM)
-			.map((leaf) => leaf.view)
-			.find((v): v is SemanticHologramView => v instanceof SemanticHologramView);
-		if (!view) {
-			// Still write the file, so the requester's wait terminates with a
-			// readable reason instead of timing out on a missing file.
-			writeFileSync(
-				join(this.pluginDir(), 'graph-state.json'),
-				JSON.stringify({ error: 'Semantic Hologram graph view is not open', nonce: nonce ?? null }, null, 2),
-			);
-			return;
-		}
-		await view.dumpGraphState(nonce);
-	}
-
 	private async startGifRecording() {
 		const active = this.app.workspace.getActiveViewOfType(SemanticHologramView);
 		if (active) {
-			(active as unknown as { startRecording: () => void }).startRecording();
+			void active.startRecording();
 			return;
 		}
 		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM);
-		const existing = leaves[0]?.view as unknown as { startRecording?: () => void } | undefined;
-		if (existing && typeof existing.startRecording === 'function') {
-			existing.startRecording();
+		const existing = leaves[0]?.view;
+		if (existing instanceof SemanticHologramView) {
+			void existing.startRecording();
 			return;
 		}
 		await this.activateView();
-		const opened = this.app.workspace.getActiveViewOfType(SemanticHologramView) as unknown as
-			| { startRecording?: () => void }
-			| null;
-		if (opened && typeof opened.startRecording === 'function') {
-			opened.startRecording();
+		const opened = this.app.workspace.getActiveViewOfType(SemanticHologramView);
+		if (opened) {
+			void opened.startRecording();
 		}
 	}
 
@@ -948,19 +888,26 @@ pluginDir(): string {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramView) {
+				v.requestRender();
+			}
+		}
 	}
 }
 
 class CreateNodeModal extends Modal {
 	private plugin: SemanticHologramPlugin;
 	private name = '';
+	private body = '';
 	private noteType: string;
+	private hologram = '';
 
 	constructor(app: App, plugin: SemanticHologramPlugin) {
 		super(app);
 		this.plugin = plugin;
-		const enabled = plugin.settings.nodeTypes.filter((t) => t.enabled);
-		this.noteType = enabled[0]?.id ?? 'concept';
+		this.noteType = defaultNodeType(plugin.settings.nodeTypes);
 	}
 
 	onOpen(): void {
@@ -974,10 +921,23 @@ class CreateNodeModal extends Modal {
 			t.inputEl.placeholder = 'Concept name';
 			t.inputEl.addEventListener('keydown', (e) => {
 				if (e.key === 'Enter') {
-					void this.create();
+					void this.create(false);
 				}
 			});
 			t.onChange((v) => (this.name = v.trim()));
+		});
+
+		// `content` is the user-facing name, matching the codebase's existing
+		// `content:` vocabulary. Called "Note" before, which read as vague — the
+		// thing being typed is the node's prose, not the note itself.
+		new Setting(contentEl).setName('Content').addTextArea((t) => {
+			t.setPlaceholder('A sentence or two — the seed. You can leave it half-written.');
+			// An Obsidian Setting gives a textarea no height of its own, so it
+			// renders as a cramped single-line box. Set it explicitly, and let
+			// the control wrap rather than scroll internally.
+			t.inputEl.rows = 5;
+			t.inputEl.addClass('sh-textarea-full');
+			t.onChange((v) => (this.body = v));
 		});
 
 		new Setting(contentEl).setName('Note type').addDropdown((d) => {
@@ -989,6 +949,38 @@ class CreateNodeModal extends Modal {
 			d.setValue(this.noteType).onChange((v) => (this.noteType = v));
 		});
 
+		const existing = new Set<string>();
+		for (const f of this.app.vault.getMarkdownFiles()) {
+			const cache = this.app.metadataCache.getFileCache(f);
+			if (!cache) {
+				continue;
+			}
+			// Both spellings exist in the wild: `setHologramsInContent` writes the
+			// plural, older notes carry the singular. Same precedence as
+			// parseNoteFrontmatter.
+			const raw: unknown = cache.frontmatter?.['holograms'] ?? cache.frontmatter?.['hologram'];
+			for (const h of Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : []) {
+				if (typeof h === 'string' && h.trim()) {
+					existing.add(h.trim());
+				}
+			}
+		}
+		// Free text, not a dropdown: a dropdown would make naming a new
+		// hologram impossible without leaving the modal. Suggestions are offered
+		// for the ones already in use, and anything typed is accepted as-is.
+		new Setting(contentEl).setName('Hologram').setDesc('Optional topic. Pick an existing one or type a new name.').addText((t) => {
+			t.inputEl.placeholder = existing.size ? [...existing].sort()[0]! : 'e.g. Linux Kernel Internals';
+			t.inputEl.addClass('sh-hologram-input');
+			t.inputEl.setAttribute('list', 'sh-existing-holograms');
+			t.onChange((v) => (this.hologram = v.trim()));
+		});
+		if (existing.size) {
+			const datalist = this.contentEl.createEl('datalist', { attr: { id: 'sh-existing-holograms' } });
+			for (const h of [...existing].sort()) {
+				datalist.createEl('option', { value: h });
+			}
+		}
+
 		new Setting(contentEl)
 			.addButton((b) =>
 				b.setButtonText('Cancel').onClick(() => {
@@ -996,13 +988,18 @@ class CreateNodeModal extends Modal {
 				}),
 			)
 			.addButton((b) =>
+				b.setButtonText('Create another').onClick(() => {
+					void this.create(true);
+				}),
+			)
+			.addButton((b) =>
 				b.setButtonText('Create').setCta().onClick(() => {
-					void this.create();
+					void this.create(false);
 				}),
 			);
 	}
 
-	private async create(): Promise<void> {
+	private async create(keepOpen: boolean): Promise<void> {
 		if (!this.name) {
 			new Notice('Give the node a name.');
 			return;
@@ -1021,23 +1018,16 @@ class CreateNodeModal extends Modal {
 			if (!this.app.vault.getAbstractFileByPath(folder)) {
 				await this.app.vault.createFolder(folder);
 			}
-		} catch (e) {
+		} catch {
 			// Folder likely exists already; vault.create below reports otherwise.
 		}
-		const created = new Date().toISOString().slice(0, 10);
-		const content = `---
-hologram-node: true
-node-type: ${this.noteType}
-created: ${created}
----
-
-# ${this.name}
-
-## Relations
-
-## Incoming relationships
-
-`;
+		const content = buildHologramSkeleton({
+			title: this.name,
+			body: this.body,
+			noteType: this.noteType,
+			created: todayIso(),
+			hologram: this.hologram || undefined,
+		});
 		try {
 			await this.app.vault.create(path, content);
 		} catch (e) {
@@ -1049,6 +1039,17 @@ created: ${created}
 			void this.app.workspace.getLeaf('tab').openFile(f);
 		}
 		this.plugin.refreshGraphs().catch(() => undefined);
+		if (keepOpen) {
+			// Clear only the identity of the node; keeping the type and hologram
+			// makes a burst of related nodes cheap. The name is deliberately not
+			// re-focused — retyping over a selected title is the expected flow.
+			const createdName = this.name;
+			this.name = '';
+			this.body = '';
+			new Notice(`Created ${createdName}`);
+			this.onOpen();
+			return;
+		}
 		this.close();
 	}
 

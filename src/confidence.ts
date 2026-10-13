@@ -3,6 +3,7 @@ import type SemanticHologramPlugin from './main';
 import { scanRelations, extractFrontmatter, parseNoteFrontmatter, setGravitasRowsInContent, findGravitasSection } from './relations';
 import type { NodeStats } from './gravitas';
 import { computeNodeStats, isEvidenceType, readNodeMetasFresh, scanGravitas } from './gravitas';
+import { defaultNodeType } from './settings';
 
 /** Set (or add) the `local-confidence:` frontmatter field of a note body. */
 export function setConfidenceInContent(content: string, value: number): string {
@@ -17,7 +18,7 @@ export function setConfidenceInContent(content: string, value: number): string {
 	} else {
 		body = `${body.trimEnd()}\nlocal-confidence: ${v}`;
 	}
-	return `---\n${body}\n---${content.slice(m[0]!.length)}`;
+	return `---\n${body}\n---${content.slice(m[0].length)}`;
 }
 
 function formatNumber(v: number): string {
@@ -37,13 +38,19 @@ interface ConfidenceMap {
 	nodeType: string;
 }
 
-export async function readConfidences(app: App, files: TFile[]): Promise<ConfidenceMap[]> {
+export async function readConfidences(
+	app: App,
+	files: TFile[],
+	defaultType: string = defaultNodeType(undefined),
+): Promise<ConfidenceMap[]> {
 	return files.map((f) => {
 		const cache = app.metadataCache.getFileCache(f);
-		const fm = cache?.frontmatter ?? {};
-		const local = typeof fm['local-confidence'] === 'number' ? fm['local-confidence'] : fm['confidence'];
+		const fm = (cache?.frontmatter ?? {}) as Record<string, unknown>;
+		const localRaw = fm['local-confidence'] ?? fm['confidence'];
+		const local = typeof localRaw === 'number' ? localRaw : null;
 		const confidence = typeof local === 'number' ? Math.min(1, Math.max(0, local)) : null;
-		const nodeType = (typeof fm['node-type'] === 'string' ? fm['node-type'] : (typeof fm['note-type'] === 'string' ? fm['note-type'] : null)) ?? 'concept';
+		const rawNodeType = typeof fm['node-type'] === 'string' ? fm['node-type'] : (typeof fm['note-type'] === 'string' ? fm['note-type'] : null);
+		const nodeType = rawNodeType ?? defaultType;
 		return { path: f.path, value: confidence, nodeType };
 	});
 }
@@ -77,7 +84,7 @@ export async function computeTopicKnowledge(
 	}
 
 	const confidences = new Map<string, number>();
-	for (const c of await readConfidences(plugin.app, files)) {
+	for (const c of await readConfidences(plugin.app, files, defaultNodeType(plugin.settings.nodeTypes))) {
 		if (c.value !== null) {
 			confidences.set(c.path, c.value);
 		}
@@ -140,7 +147,12 @@ export class NodeConfidenceModal extends Modal {
 		for (const f of files) {
 			scope.add(f.path);
 		}
-		const metas = await readNodeMetasFresh(files, this.plugin.app.vault, this.plugin.settings.defaultConfidence);
+		const metas = await readNodeMetasFresh(
+			files,
+			this.plugin.app.vault,
+			this.plugin.settings.defaultConfidence,
+			defaultNodeType(this.plugin.settings.nodeTypes),
+		);
 		const scan = await scanRelations(
 			files,
 			this.plugin.app.vault,
@@ -154,6 +166,7 @@ export class NodeConfidenceModal extends Modal {
 			this.plugin.app.vault,
 			this.plugin.app.metadataCache,
 			(path) => this.plugin.isInScope(path),
+			defaultNodeType(this.plugin.settings.nodeTypes),
 		);
 		this.stats = computeNodeStats(metas, scan.edges, gscan.edges, this.plugin.settings.sourceKinds, this.plugin.settings.defaultConfidence);
 		const topic = await computeTopicKnowledge(this.plugin, files);
@@ -257,22 +270,19 @@ export class NodeConfidenceModal extends Modal {
 			const relsContainer = row.createDiv({ cls: 'sh-review-rels-container' });
 			const relRow = relsContainer.createDiv({ cls: 'sh-review-rel-row' });
 
-			const localLabel = relRow.createSpan({ cls: 'sh-review-rel-type', text: `Local: ${formatNumber(entry.local)}` });
-			localLabel.style.flex = '0 0 auto';
-			localLabel.style.color = 'var(--text-muted)';
+			const localLabel = relRow.createSpan({ cls: 'sh-review-rel-type sh-conf-local-label', text: `Local: ${formatNumber(entry.local)}` });
 
 			const slider = relRow.createEl('input', {
 				type: 'range',
+				cls: 'sh-conf-slider',
 				attr: { min: '0', max: '100', step: '1', value: String(Math.round(entry.local * 100)) },
 			});
-			slider.style.flex = '1';
 
 			const text = relRow.createEl('input', {
 				type: 'number',
 				cls: 'sh-conf-input',
 				attr: { min: '0', max: '1', step: '0.01', value: String(entry.local) },
 			});
-			text.style.width = '60px';
 
 			const sync = (v: number) => {
 				entry.local = Math.min(1, Math.max(0, v));
@@ -330,16 +340,15 @@ export class NodeConfidenceModal extends Modal {
 
 				const slider = relRow.createEl('input', {
 					type: 'range',
+					cls: 'sh-conf-slider',
 					attr: { min: '10', max: '100', step: '1', value: String(Math.round(gravRow.amount * 100)) },
 				});
-				slider.style.flex = '1';
 
 				const text = relRow.createEl('input', {
 					type: 'number',
 					cls: 'sh-conf-input',
 					attr: { min: '0.1', max: '1', step: '0.01', value: gravRow.amount.toFixed(2) },
 				});
-				text.style.width = '60px';
 
 				const sync = (v: number) => {
 					gravRow.amount = Math.min(1, Math.max(0.1, v));
@@ -371,7 +380,7 @@ export class NodeConfidenceModal extends Modal {
 				cls: 'sh-conf-input',
 				attr: { placeholder: 'Target note name…' },
 			});
-			addRow.createEl('button', { text: '+ Support', cls: 'sh-review-btn mod-cta' }).addEventListener('click', () => {
+			addRow.createEl('button', { text: '+ support', cls: 'sh-review-btn mod-cta' }).addEventListener('click', () => {
 				const targetName = addInput.value.trim();
 				if (!targetName) {
 					return;
@@ -381,7 +390,7 @@ export class NodeConfidenceModal extends Modal {
 			});
 
 			const controls = row.createDiv({ cls: 'sh-review-header' });
-			const save = controls.createEl('button', { text: '✓ Save source', cls: 'sh-review-btn sh-review-save-btn' });
+			const save = controls.createEl('button', { text: '✓ save source', cls: 'sh-review-btn sh-review-save-btn' });
 			save.addEventListener('click', () => {
 				void this.saveGravitas(entry);
 			});

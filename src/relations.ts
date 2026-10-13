@@ -1,6 +1,10 @@
 import { MetadataCache, TFile, Vault, parseYaml } from 'obsidian';
 import type { RelTypeEntry } from './settings';
 import { HOLOGRAM_FOLDER } from './settings';
+// Header delimiters are pure and live in ./headers so they can be unit-tested
+// without the type-only `obsidian` package. Re-exported below for the many
+// existing `./relations` importers.
+import { ANY_HEADER, CONFIDENCE_HEADER, GRAVITAS_HEADER, INCOMING_HEADER, RELATION_HEADER } from './headers';
 
 export interface RelationEdge {
 	source: string; // path of the source note
@@ -59,12 +63,7 @@ export interface NoteFrontmatter {
 	holograms?: string[];
 }
 
-export const RELATION_HEADER = /^#{1,6}\s+(Relations(?:hips)?|Relationship)\s*$/i;
-// Tolerate a trailing note on the heading (e.g. `## Incoming Relationships (read only)`)
-// so annotated headings are synced into instead of spawning a duplicate section.
-export const INCOMING_HEADER = /^#{1,6}\s+Incoming\s+Relations(?:hips)?\s*(?:\([^)]*\))?\s*$/i;
-export const GRAVITAS_HEADER = /^#{1,6}\s+Gravitas\s*$/i;
-export const CONFIDENCE_HEADER = /^#{1,6}\s+Confidence\s*$/i;
+export { ANY_HEADER, CONFIDENCE_HEADER, GRAVITAS_HEADER, INCOMING_HEADER, PROVENANCE_HEADER, RELATION_HEADER, sectionHeader } from './headers';
 
 // - logic/supports [[Target]] {R}? (0.5)
 // - related [[Target]] (0.5)
@@ -116,7 +115,7 @@ export function parseNoteFrontmatter(frontmatter: string | null): NoteFrontmatte
 		out.sourceKind = typeof fm['source-kind'] === 'string' ? fm['source-kind'] : null;
 		out.created = fm['created'] ? (typeof fm['created'] === 'object' ? JSON.stringify(fm['created']) : String(fm['created'])) : null;
 		if (Array.isArray(fm['groups'])) {
-			out.groups = fm['groups'].flatMap((g: any): string[] => {
+			out.groups = fm['groups'].flatMap((g: unknown): string[] => {
 				if (typeof g === 'string') {
 					return [g];
 				}
@@ -129,7 +128,7 @@ export function parseNoteFrontmatter(frontmatter: string | null): NoteFrontmatte
 			});
 		}
 		if (Array.isArray(fm['groups-excluded'])) {
-			out.groupsExcluded = fm['groups-excluded'].flatMap((g: any): string[] => {
+			out.groupsExcluded = fm['groups-excluded'].flatMap((g: unknown): string[] => {
 				if (typeof g === 'string') {
 					return [g];
 				}
@@ -165,12 +164,12 @@ export function extractFrontmatter(content: string): string | null {
 	return m && m[1] !== undefined ? m[1] : null;
 }
 
-/** Find the line range of the `## Relations` (or Relationships) section. */
-export function findRelationsSection(content: string): { startLine: number; endLine: number } | null {
+/** Shared bounds scan: the first matching header at column 0, up to the next header. */
+function findSection(content: string, header: RegExp): { startLine: number; endLine: number } | null {
 	const lines = content.split(/\r?\n/);
 	let start = -1;
 	for (let i = 0; i < lines.length; i++) {
-		if (RELATION_HEADER.test(lines[i]!.trim())) {
+		if (header.test(lines[i]!)) {
 			start = i;
 			break;
 		}
@@ -180,7 +179,7 @@ export function findRelationsSection(content: string): { startLine: number; endL
 	}
 	let end = lines.length;
 	for (let i = start + 1; i < lines.length; i++) {
-		if (/^#{1,6}\s+/.test(lines[i]!.trim())) {
+		if (ANY_HEADER.test(lines[i]!)) {
 			end = i;
 			break;
 		}
@@ -188,27 +187,14 @@ export function findRelationsSection(content: string): { startLine: number; endL
 	return { startLine: start, endLine: end };
 }
 
+/** Find the line range of the `## Relations` (or Relationships) section. */
+export function findRelationsSection(content: string): { startLine: number; endLine: number } | null {
+	return findSection(content, RELATION_HEADER);
+}
+
 /** Find the line range of the `## Gravitas` section, if any. */
 export function findGravitasSection(content: string): { startLine: number; endLine: number } | null {
-	const lines = content.split(/\r?\n/);
-	let start = -1;
-	for (let i = 0; i < lines.length; i++) {
-		if (GRAVITAS_HEADER.test(lines[i]!.trim())) {
-			start = i;
-			break;
-		}
-	}
-	if (start < 0) {
-		return null;
-	}
-	let end = lines.length;
-	for (let i = start + 1; i < lines.length; i++) {
-		if (/^#{1,6}\s+/.test(lines[i]!.trim())) {
-			end = i;
-			break;
-		}
-	}
-	return { startLine: start, endLine: end };
+	return findSection(content, GRAVITAS_HEADER);
 }
 
 /** Author-led line in an evidence note: `- lends-gravitas-to [[Target]] (0.8)`. */
@@ -286,25 +272,7 @@ export function setGravitasRowsInContent(content: string, rows: Array<{ targetNa
 
 /** Find the line range of the `## Confidence` mirror section, if any. */
 export function findConfidenceSection(content: string): { startLine: number; endLine: number } | null {
-	const lines = content.split(/\r?\n/);
-	let start = -1;
-	for (let i = 0; i < lines.length; i++) {
-		if (CONFIDENCE_HEADER.test(lines[i]!.trim())) {
-			start = i;
-			break;
-		}
-	}
-	if (start < 0) {
-		return null;
-	}
-	let end = lines.length;
-	for (let i = start + 1; i < lines.length; i++) {
-		if (/^#{1,6}\s+/.test(lines[i]!.trim())) {
-			end = i;
-			break;
-		}
-	}
-	return { startLine: start, endLine: end };
+	return findSection(content, CONFIDENCE_HEADER);
 }
 
 /** Replace the read-only `## Confidence` mirror section (local / inherited / total). */
@@ -327,25 +295,7 @@ export function setConfidenceFieldsInContent(content: string, local: number, inh
 
 /** Find the line range of the `## Incoming relationships` section, if any. */
 export function findIncomingSection(content: string): { startLine: number; endLine: number } | null {
-	const lines = content.split(/\r?\n/);
-	let start = -1;
-	for (let i = 0; i < lines.length; i++) {
-		if (INCOMING_HEADER.test(lines[i]!.trim())) {
-			start = i;
-			break;
-		}
-	}
-	if (start < 0) {
-		return null;
-	}
-	let end = lines.length;
-	for (let i = start + 1; i < lines.length; i++) {
-		if (/^#{1,6}\s+/.test(lines[i]!.trim())) {
-			end = i;
-			break;
-		}
-	}
-	return { startLine: start, endLine: end };
+	return findSection(content, INCOMING_HEADER);
 }
 
 /**
@@ -560,7 +510,7 @@ export function setGroupsInContent(content: string, groups: string[], groupsExcl
 	let body = m[1]!;
 	body = replaceListKey(body, 'groups', g);
 	body = replaceListKey(body, 'groups-excluded', e);
-	return `---\n${body}\n---${content.slice(m[0]!.length)}`;
+	return `---\n${body}\n---${content.slice(m[0].length)}`;
 }
 
 /**
@@ -577,7 +527,7 @@ export function setHologramsInContent(content: string, holograms: string[]): str
 	}
 	let body = m[1]!;
 	body = replaceListKey(body, 'holograms', h);
-	return `---\n${body}\n---${content.slice(m[0]!.length)}`;
+	return `---\n${body}\n---${content.slice(m[0].length)}`;
 }
 
 /** YAML block-list lines for the given strings (indented under a key). */

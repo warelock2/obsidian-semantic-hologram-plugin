@@ -1,10 +1,18 @@
 import { App, FuzzySuggestModal, Modal, Notice, Setting, TFile, Vault } from 'obsidian';
-import { HOLOGRAM_FOLDER } from './settings';
+import { DEFAULT_NODE_TYPE_ID, HOLOGRAM_FOLDER, defaultNodeType } from './settings';
+import { normalizeFrontmatterOrder, RELATIONS_HEADER } from './skeleton';
+import { RELATION_HEADER, findRelationsSection } from './relations';
 import { auditHologramNodes, HologramAuditModal } from './audit';
 import type SemanticHologramPlugin from './main';
 
 /** Ensure a note declares `hologram-node: true`, preserving existing frontmatter. */
-export function ensureHologramContent(content: string, defaultNoteType = 'thought', source: TFile, plugin: SemanticHologramPlugin, hologramTag?: string): string {
+export function ensureHologramContent(
+	content: string,
+	defaultNoteType = DEFAULT_NODE_TYPE_ID,
+	source: TFile,
+	plugin: SemanticHologramPlugin,
+	hologramTag?: string,
+): string {
 	const created = new Date().toISOString().slice(0, 10);
 	// 1. Ensure frontmatter
 	let res = content;
@@ -16,12 +24,35 @@ export function ensureHologramContent(content: string, defaultNoteType = 'though
 			body = `hologram-node: true\n${body}`;
 			modified = true;
 		}
-		if (hologramTag && !/^hologram:/im.test(body)) {
-			body = `${body}\nhologram: [${hologramTag}]`;
-			modified = true;
-		} else if (hologramTag && /^hologram:/im.test(body)) {
-			body = body.replace(/^hologram:\s*\[(.*)\]/im, `hologram: [$1, ${hologramTag}]`);
-			modified = true;
+		// Both spellings exist in the wild: `setHologramsInContent` writes the
+		// plural `holograms:` as a block list, while this function used to emit
+		// the singular `hologram:` as a flow list. Probing only `/^hologram:/`
+		// did NOT match `holograms:` (the `s` precedes the colon), so a note
+		// whose holograms had already been set got a second key appended, and
+		// `parseNoteFrontmatter` reads plural-first — silently discarding the
+		// tag that had just been added.
+		if (hologramTag) {
+			const key = /^holograms?:/im.exec(body);
+			if (!key) {
+				body = `${body}\nholograms: [${hologramTag}]`;
+				modified = true;
+			} else if (/^holograms?:\s*\[/im.test(body)) {
+				body = body.replace(/^(holograms?):\s*\[(.*)\]/im, `$1: [$2, ${hologramTag}]`);
+				modified = true;
+			} else {
+				// Existing block list: append an item rather than add a rival key.
+				const lines = body.split('\n');
+				const at = lines.findIndex((l) => /^holograms?:/i.test(l));
+				if (at >= 0) {
+					let last = at;
+					for (let i = at + 1; i < lines.length && /^\s+-\s/.test(lines[i]!); i++) {
+						last = i;
+					}
+					lines.splice(last + 1, 0, `  - "${hologramTag.replace(/"/g, '\\"')}"`);
+					body = lines.join('\n');
+					modified = true;
+				}
+			}
 		}
 		if (!/^node-type:/im.test(body) && !/^note-type:/im.test(body)) {
 			body = `${body}\nnode-type: ${defaultNoteType}`;
@@ -32,15 +63,17 @@ export function ensureHologramContent(content: string, defaultNoteType = 'though
 			modified = true;
 		}
 		if (modified) {
-			res = `---\n${body.trim()}\n---${res.slice(m[0].length)}`;
+			res = `---\n${normalizeFrontmatterOrder(body.trim())}\n---${res.slice(m[0].length)}`;
 		}
 	} else {
-		res = `---\nhologram-node: true\nnode-type: ${defaultNoteType}\ncreated: ${created}\n${hologramTag ? `hologram: [${hologramTag}]` : ''}\n---\n\n${res}`;
+		res = `---\nhologram-node: true\nnode-type: ${defaultNoteType}\ncreated: ${created}\n${hologramTag ? `holograms: [${hologramTag}]` : ''}\n---\n\n${res}`;
 	}
 
 	// 2. Ensure sections
-	if (!/(^|\n)#{1,6}\s+Relations(?:hips)?/i.test(res)) {
-		res = res.trimEnd() + '\n\n## Relationships\n\n';
+	if (!findRelationsSection(res)) {
+		// Appended last so it bounds only itself: a relations header above the
+		// prose would swallow the prose as malformed relation lines.
+		res = res.trimEnd() + `\n\n${RELATIONS_HEADER}\n`;
 	}
 	// Removed hard-coded incoming relationships header insertion, as it is now dynamically rendered.
 
@@ -52,7 +85,7 @@ const REL_LINE_SEARCH = /-\s+([a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]
 
 export function injectWikilinksAsRelations(content: string, source: TFile, plugin: SemanticHologramPlugin): string {
 	// 1. Parse existing Relations section
-	const relHeaderMatch = content.match(/(^|\n)(#{1,6}\s+Relations(?:hips)?\s*\r?\n)/i);
+	const relHeaderMatch = content.match(new RegExp(`(^[\\t]*${RELATION_HEADER.source}[\\t]*\\r?$)`, 'im'));
 	if (!relHeaderMatch || relHeaderMatch.index === undefined) {
 		return content;
 	}
@@ -179,7 +212,7 @@ export class HologramTagModal extends Modal {
 
 	onOpen() {
 		const { contentEl } = this;
-		contentEl.createEl('h2', { text: 'Enter Hologram Tag' });
+		contentEl.createEl('h2', { text: 'Enter hologram tag' });
 		const setting = new Setting(contentEl);
 		let tag = '';
 		setting.setName('Tag').addText((text) =>
@@ -208,9 +241,9 @@ export class HologramTagModal extends Modal {
 export function rewriteLinks(plugin: SemanticHologramPlugin, content: string): string {
     const vaultBasenames = new Set(plugin.app.vault.getMarkdownFiles().map(f => f.basename));
 
-	return content.replace(/\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?\]\]/g, (match, target, section, display) => {
+	return content.replace(/\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?\]\]/g, (match: string, target: string, section?: string, display?: string) => {
 		const trimmedTarget = target.trim();
-        const basename = trimmedTarget.split('/').pop()!;
+        const basename = trimmedTarget.split('/').pop() ?? '';
 
         if (trimmedTarget.startsWith(HOLOGRAM_FOLDER + '/')) {
             return match;
@@ -260,7 +293,13 @@ export async function importNoteIntoHolograms(plugin: SemanticHologramPlugin, so
 	}
 
 	finalContent = rewriteLinks(plugin, finalContent);
-	finalContent = ensureHologramContent(finalContent, 'thought', source, plugin, hologramTag);
+	finalContent = ensureHologramContent(
+		finalContent,
+		defaultNodeType(plugin.settings.nodeTypes),
+		source,
+		plugin,
+		hologramTag,
+	);
 	
 	try {
 		let f: TFile;

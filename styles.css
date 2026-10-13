@@ -104,13 +104,21 @@
 	height: 16px;
 }
 
+/* 33 rows of bindings will not fit an unscrollable box: the bottom became
+   unreachable in a short viewport. `pointer-events: none` (which this replaced)
+   was the reason the wheel still dollied the camera with help open — the
+   pointer passed through to the canvas underneath. Now that the popup is a real
+   hit target, view.ts stops wheel/pointer propagation on it.
+
+   Two columns via `column-width` rather than a hard `columns: 2`, so a narrow
+   sidebar (this canvas measures 298px) degrades to one column on its own. */
 .sh-help-popup {
 	position: absolute;
 	left: 50%;
 	top: 50%;
 	transform: translate(-50%, -50%);
 	z-index: 20;
-	pointer-events: none;
+	pointer-events: auto;
 	background: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
@@ -119,13 +127,31 @@
 	font-size: 12px;
 	color: var(--text-normal);
 	min-width: 240px;
-	max-width: 340px;
+	max-width: 560px;
+	max-height: min(70vh, 620px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	columns: 2;
+	column-width: 300px;
+	column-gap: 28px;
 }
 
 .sh-help-title {
 	font-weight: 600;
-	margin-bottom: 8px;
+	margin-bottom: 4px;
 	letter-spacing: 0.03em;
+	/* Headings and the hint must span the full width; otherwise the title sits
+	   atop column one and the second column starts below the fold. */
+	column-span: all;
+}
+
+.sh-help-hint {
+	font-size: 11px;
+	opacity: 0.7;
+	margin-bottom: 6px;
+	padding-bottom: 6px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	column-span: all;
 }
 
 .sh-help-row {
@@ -133,6 +159,8 @@
 	justify-content: space-between;
 	gap: 16px;
 	margin: 3px 0;
+	/* A row straddling a column break reads as two unrelated entries. */
+	break-inside: avoid;
 }
 
 .sh-help-key {
@@ -151,6 +179,7 @@
 	padding-top: 6px;
 	font-weight: 600;
 	opacity: 0.9;
+	column-span: all;
 }
 
 .sh-view.sh-screenshot-flash {
@@ -701,11 +730,18 @@
 }
 
 /* Fixes for review view/modal flex layout */
-.sh-review-view,
-.sh-review-modal {
+.sh-review-view {
     display: flex;
     flex-direction: column;
     height: 100%;
+}
+
+.sh-review-modal {
+    display: flex;
+    flex-direction: column;
+    height: 80vh;
+    box-sizing: border-box;
+    overflow: hidden;
 }
 
 .sh-review-scroll {
@@ -1460,3 +1496,77 @@
 	color: var(--text-error, #e06c75);
 	font-weight: 500;
 }
+
+.sh-conf-local-label {
+	flex: 0 0 auto;
+	color: var(--text-muted);
+}
+
+.sh-conf-slider {
+	flex: 1;
+}
+
+.sh-incoming-list {
+	max-height: 200px;
+	overflow-y: auto;
+	border: 1px solid var(--background-modifier-border);
+	padding: 8px;
+	margin-bottom: 16px;
+}
+
+.sh-incoming-setting-control {
+	justify-content: flex-end;
+}
+
+.sh-textarea-full {
+	width: 100%;
+	resize: vertical;
+}
+
+.sh-review-rel-controls {
+	margin-left: auto;
+	display: flex;
+	gap: 4px;
+	align-items: center;
+}
+
+.sh-review-select-rel {
+	margin-right: 8px;
+}
+
+.sh-review-subject-list.is-collapsed {
+	display: none;
+}
+
+.sh-review-input-strength {
+	width: 60px;
+}
+
+.sh-flex-column { display: flex; flex-direction: column; }
+.sh-flex-center { display: flex; align-items: center; }
+.sh-flex-gap-4 { gap: 4px; }
+.sh-flex-gap-8 { gap: 8px; }
+.sh-h-100 { height: 100%; }
+.sh-overflow-y-auto { overflow-y: auto; }
+.sh-margin-left-auto { margin-left: auto; }
+.sh-margin-right-8 { margin-right: 8px; }
+.sh-flex-1 { flex: 1; }
+.sh-text-left { text-align: left; }
+.sh-justify-self-center { justify-self: center; }
+.sh-w-60 { width: 60px; }
+
+.sh-review-view-container { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; overflow: hidden; }
+.sh-review-scroll-container { flex: 1; overflow-y: auto; }
+
+.is-hidden { display: none !important; }
+.is-recording { display: block !important; visibility: visible !important; }
+.sh-cursor-none { cursor: none !important; }
+.sh-cursor-default { cursor: default !important; }
+.sh-preview-card-fixed { position: fixed; z-index: 1000; max-height: 400px; overflow-y: auto; user-select: text; pointer-events: auto; }
+.sh-preview-content-custom { white-space: pre-wrap; font-size: 12px; line-height: 1.5; margin-top: 8px; }
+.sh-edge-tooltip-card { position: absolute; z-index: 1000; }
+.sh-edge-tooltip-header { font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid var(--background-modifier-border); padding-bottom: 4px; word-break: break-word; }
+.sh-edge-tooltip-empty { padding: 4px; }
+.sh-edge-rel-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 4px 0; padding: 3px 6px; border-radius: 4px; background: var(--background-secondary); }
+.sh-edge-rel-text { flex: 1 1 auto; min-width: 0; font-size: 0.9em; line-height: 1.35; word-break: break-word; overflow-wrap: anywhere; }
+.sh-delete-rel { flex: 0 0 auto; margin-left: auto; cursor: pointer; background: transparent; border: none; font-weight: bold; font-size: 14px; line-height: 1; padding: 2px 5px; border-radius: 3px; opacity: 0.6; }

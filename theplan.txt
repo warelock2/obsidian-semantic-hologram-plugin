@@ -1,0 +1,16 @@
+Project Plan — Obsidian Semantic Hologram Plugin
+
+1. Current State & Quality Assurance
+   - Maintain 100% clean compilation via TypeScript and esbuild (`npm run build`).
+   - Keep lint checks passing with zero warnings or errors (`npm run lint --max-warnings=0`).
+   - Validate live behavior within Obsidian via the CDP harness and hot-reload mechanism.
+
+2. Architecture & Core Invariants
+   - Adhere strictly to the camera system specification (`docs/untethered-trackball-pinhole-camera-system.md`): all rotation anchored on focal point $T$, prime-frame rotation semantics, and dual orthographic/perspective projection modes.
+   - Maintain canonical note schema frontmatter (`node-type:`, ZKM metadata, source tracking).
+   - Keep vault artifacts (such as `hologram/`) gitignored and out of repository tracking.
+
+3. Future Roadmap & Potential Enhancements
+   - Expand semantic diffraction scan features and bridge detection.
+   - Refine node creation modals and custom metadata filtering.
+   - Introduce extended automated test coverage for view rendering and angle calculations.

@@ -37,7 +37,7 @@ export class ReviewConnectionsView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return 'Review Connections';
+		return 'Review connections';
 	}
 
 	getIcon(): string {
@@ -58,12 +58,7 @@ export class ReviewConnectionsView extends ItemView {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass('sh-review-view');
-
-		contentEl.style.display = 'flex';
-		contentEl.style.flexDirection = 'column';
-		contentEl.style.height = '100%';
-		contentEl.style.boxSizing = 'border-box';
-		contentEl.style.overflow = 'hidden';
+		contentEl.addClass('sh-review-view-container');
 
 		const header = contentEl.createDiv({ cls: 'sh-review-header-container' });
 		header.createEl('h4', { text: 'Review connections' });
@@ -81,9 +76,7 @@ export class ReviewConnectionsView extends ItemView {
 		mkTab('Groups', 'groups');
 		mkTab('Holograms', 'holograms');
 
-		const scroll = contentEl.createDiv({ cls: 'sh-review-scroll' });
-		scroll.style.flex = '1';
-		scroll.style.overflowY = 'auto';
+		const scroll = contentEl.createDiv({ cls: 'sh-review-scroll sh-review-scroll-container' });
 
 		if (!this.data) {
 			return;
@@ -206,12 +199,11 @@ export class ReviewConnectionsView extends ItemView {
 		const left = dirForward ? p.source : p.target;
 		const right = dirForward ? p.target : p.source;
 
-		const leftName = names.createSpan({
-			cls: 'sh-review-name',
+		names.createSpan({
+			cls: 'sh-review-name sh-justify-self-center',
 			text: left.basename,
 			attr: { title: left.basename },
 		});
-		leftName.style.justifySelf = 'center';
 
 		const dirBtn = names.createEl('button', {
 			text: dirForward ? '→' : '←',
@@ -223,12 +215,11 @@ export class ReviewConnectionsView extends ItemView {
 			this.render();
 		});
 
-		const rightName = names.createSpan({
-			cls: 'sh-review-name',
+		names.createSpan({
+			cls: 'sh-review-name sh-justify-self-center',
 			text: right.basename,
 			attr: { title: right.basename },
 		});
-		rightName.style.justifySelf = 'center';
 
 		const addBtn = header.createEl('button', { text: '+', cls: 'sh-review-btn sh-review-add-rel' });
 		addBtn.setAttribute('title', 'Add relationship');
@@ -247,17 +238,12 @@ export class ReviewConnectionsView extends ItemView {
 
 		const forward = e.source === p.source.path && e.target === p.target.path;
 
-		const typeSpan = relRow.createSpan({
-			cls: 'sh-review-rel-type',
+		relRow.createSpan({
+			cls: 'sh-review-rel-type sh-flex-1 sh-text-left',
 			text: `${e.relId} (${formatStrength(e.strength)})`,
 		});
-		typeSpan.style.flex = '1';
-		typeSpan.style.textAlign = 'left';
 
-		const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
-		controls.style.marginLeft = 'auto';
-		controls.style.display = 'flex';
-		controls.style.gap = '4px';
+		const controls = relRow.createDiv({ cls: 'sh-review-rel-controls sh-margin-left-auto sh-flex-center sh-flex-gap-4' });
 
 		const toggle = controls.createEl('button', {
 			text: forward ? '→' : '←',
@@ -304,11 +290,12 @@ export class ReviewConnectionsView extends ItemView {
 		const relTypes = enabled.length > 0 ? enabled : this.plugin.settings.relTypes;
 
 		const dropdown = relRow.createEl('select');
-		dropdown.style.marginRight = '8px';
+		dropdown.addClass('sh-margin-right-8');
 		for (const t of relTypes) dropdown.createEl('option', { value: t.id, text: t.id });
 
 		const strengthInput = relRow.createEl('input', {
 			type: 'number',
+			cls: 'sh-w-60',
 			attr: {
 				min: '0.01',
 				max: '1',
@@ -317,12 +304,8 @@ export class ReviewConnectionsView extends ItemView {
 				title: 'Strength',
 			},
 		});
-		strengthInput.style.width = '60px';
 
-		const controls = relRow.createDiv({ cls: 'sh-review-rel-controls' });
-		controls.style.marginLeft = 'auto';
-		controls.style.display = 'flex';
-		controls.style.gap = '4px';
+		const controls = relRow.createDiv({ cls: 'sh-review-rel-controls sh-margin-left-auto sh-flex-center sh-flex-gap-4' });
 
 		const saveBtn = controls.createEl('button', { text: '✓', cls: 'sh-review-btn sh-review-save-btn' });
 		saveBtn.addEventListener('click', () => {
@@ -422,12 +405,12 @@ export class ReviewConnectionsView extends ItemView {
 		});
 		const container = section.createDiv({ cls: 'sh-review-subject-list' });
 		if (collapsed) {
-			container.style.display = 'none';
+			container.addClass('is-collapsed');
 		}
 		toggleBtn.addEventListener('click', () => {
-			const show = container.style.display === 'none';
-			container.style.display = show ? '' : 'none';
-			toggleBtn.setText(`${show ? '▾' : '▸'} ${label} (${list.length})`);
+			const isHidden = container.hasClass('is-collapsed');
+			container.toggleClass('is-collapsed', !isHidden);
+			toggleBtn.setText(`${!isHidden ? '▸' : '▾'} ${label} (${list.length})`);
 		});
 
 		if (list.length === 0) {
@@ -439,10 +422,7 @@ export class ReviewConnectionsView extends ItemView {
 			subRow.createSpan({ cls: 'sh-review-subject-name', text: s.node.basename, attr: { title: s.node.path } });
 			subRow.createSpan({ cls: 'sh-review-subject-type', text: s.noteType });
 
-			const controls = subRow.createDiv({ cls: 'sh-review-rel-controls' });
-			controls.style.marginLeft = 'auto';
-			controls.style.display = 'flex';
-			controls.style.gap = '4px';
+			const controls = subRow.createDiv({ cls: 'sh-review-rel-controls sh-margin-left-auto sh-flex-center sh-flex-gap-4' });
 
 			const mkStateBtn = (label: string, state: GroupState, title?: string) => {
 				const b = controls.createEl('button', { text: label, cls: 'sh-review-btn sh-review-subject-state' });
@@ -504,8 +484,7 @@ export class ReviewConnectionsView extends ItemView {
 			for (const file of files) {
 				const row = subList.createDiv({ cls: 'sh-review-subject-row' });
 				row.createSpan({ cls: 'sh-review-subject-name', text: file.basename, attr: { title: file.path } });
-				const controls = row.createDiv({ cls: 'sh-review-rel-controls' });
-				controls.style.marginLeft = 'auto';
+				const controls = row.createDiv({ cls: 'sh-review-rel-controls sh-margin-left-auto' });
 				const removeBtn = controls.createEl('button', { text: '✕', cls: 'sh-review-btn sh-review-rel-del' });
 				removeBtn.setAttribute('title', 'Remove hologram tag');
 				removeBtn.addEventListener('click', () => {

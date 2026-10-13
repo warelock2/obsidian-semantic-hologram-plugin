@@ -35,14 +35,15 @@ export async function syncGravitasAndConfidence(
 	vault: Vault,
 	metadataCache: MetadataCache,
 	sourceKinds: SourceKindEntry[],
+	defaultType: string,
 	defaultConfidence: number,
 	defaultRelStrength: number,
 	knownRelIds: Set<string>,
 	inScope: (path: string) => boolean,
 ): Promise<GravitasSyncResult> {
-	const metas = await readNodeMetasFresh(files, vault, defaultConfidence);
+	const metas = await readNodeMetasFresh(files, vault, defaultConfidence, defaultType);
 	const scan = await scanRelations(files, vault, metadataCache, knownRelIds, defaultRelStrength, inScope);
-	const gscan = await scanGravitas(files, vault, metadataCache, inScope);
+	const gscan = await scanGravitas(files, vault, metadataCache, inScope, defaultType);
 	const stats = computeNodeStats(metas, scan.edges, gscan.edges, sourceKinds, defaultConfidence);
 
 	const backersByTarget = new Map<string, GravitasBacker[]>();
@@ -52,7 +53,7 @@ export async function syncGravitasAndConfidence(
 		arr.push({
 			sourcePath: e.source,
 			sourceName: e.source.split('/').pop()?.replace(/\.md$/i, '') ?? e.source,
-			nodeType: meta?.nodeType ?? 'source',
+			nodeType: meta?.nodeType ?? defaultType,
 			sourceKind: meta?.sourceKind ?? null,
 			amount: e.amount,
 		});

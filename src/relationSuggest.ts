@@ -12,12 +12,13 @@ import { RangeSetBuilder, Extension, Prec } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType, keymap } from '@codemirror/view';
 import type SemanticHologramPlugin from './main';
 import type { RelTypeEntry } from './settings';
-import { RELATION_HEADER, inScopePath } from './relations';
+import { inScopePath } from './relations';
+import { ANY_HEADER, RELATION_HEADER } from './headers';
 
 function isRelationsSectionAt(lines: string[], line: number): boolean {
 	for (let i = line; i >= 0; i--) {
 		const text = lines[i] ?? '';
-		if (/^#{1,6}\s+/.test(text)) {
+		if (ANY_HEADER.test(text)) {
 			return RELATION_HEADER.test(text);
 		}
 	}
@@ -52,7 +53,7 @@ class GhostWidget extends WidgetType {
 	}
 
 	toDOM(): HTMLElement {
-		const span = document.createElement('span');
+		const span = createSpan();
 		span.className = 'sh-ghost';
 		span.textContent = ` ${this.completion}`;
 		return span;

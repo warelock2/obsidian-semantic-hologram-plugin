@@ -15,6 +15,8 @@ export class SemanticHologramControlsView extends ItemView {
 	private peekTimer: number | null = null;
 	private peekedTag: string | null = null;
 	private panelClickHandler: ((e: MouseEvent) => void) | null = null;
+	private cameraInputs: HTMLInputElement[] = [];
+	private focalInputs: HTMLInputElement[] = [];
 
 	private get mergeModeLabel(): 'absorb' | 'emulsify' {
 		return this.plugin.settings.mergeMode ?? 'emulsify';
@@ -111,7 +113,7 @@ export class SemanticHologramControlsView extends ItemView {
 		// Re-render when the derived state this panel shows changes. `delete` and
 		// `rename` used to be absent, so a trashed or renamed note left its tag
 		// listed in the Hologram Manager until an unrelated modify landed.
-		const rerenderSoon = () => setTimeout(() => this.render(), 100);
+		const rerenderSoon = () => window.setTimeout(() => this.render(), 100);
 		this.registerEvent(this.app.vault.on('modify', rerenderSoon));
 		this.registerEvent(this.app.vault.on('create', rerenderSoon));
 		this.registerEvent(this.app.vault.on('delete', rerenderSoon));
@@ -143,6 +145,20 @@ export class SemanticHologramControlsView extends ItemView {
 	onClose(): Promise<void> {
 		this.contentEl.empty();
 		return Promise.resolve();
+	}
+
+	public onCameraChange(): void {
+		const view = this.getView();
+		if (!view) return;
+
+		const state = view.getCameraState();
+		if (this.cameraInputs[0]) this.cameraInputs[0].value = state.azimuth.toFixed(1);
+		if (this.cameraInputs[1]) this.cameraInputs[1].value = state.elevation.toFixed(1);
+
+		const focal = view.getFocalPoint();
+		if (this.focalInputs[0]) this.focalInputs[0].value = focal.x.toFixed(1);
+		if (this.focalInputs[1]) this.focalInputs[1].value = focal.y.toFixed(1);
+		if (this.focalInputs[2]) this.focalInputs[2].value = focal.z.toFixed(1);
 	}
 
 	/**
@@ -240,16 +256,18 @@ export class SemanticHologramControlsView extends ItemView {
 		contentEl.empty();
 		document.querySelectorAll('.sh-node-preview-card').forEach(el => el.remove());
 
+		this.cameraInputs = [];
+		this.focalInputs = [];
+
 		const view = this.getView();
 		const state = view ? view.getCameraState() : { elevation: 0, azimuth: 0, distance: 1000 };
-		const focal = view ? view.getFocalPoint() : { x: 0, y: 0, z: 0 };
 
 		const header = contentEl.createDiv({ cls: 'sh-controls-header' });
 		header.createEl('h4', { text: 'Semantic Hologram' });
 
 		// Camera Controls
 		const cameraControls = contentEl.createDiv({ cls: 'sh-camera-controls' });
-		cameraControls.createEl('div', { text: 'Camera', cls: 'sh-settings-label' });
+		cameraControls.createDiv({ text: 'Camera', cls: 'sh-settings-label' });
 		const cameraRow = cameraControls.createDiv({ cls: 'sh-controls-row' });
 		cameraRow.style.display = 'grid';
 		cameraRow.style.gridTemplateColumns = 'auto 1fr 1fr 1fr';
@@ -258,13 +276,14 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const addInput = (label: string, value: number, onUpdate: (v: number) => void) => {
 			if (label) {
-				cameraRow.createEl('span', { text: label, cls: 'sh-controls-label', attr: { style: 'font-size: 10px;' } });
+				cameraRow.createSpan({ text: label, cls: 'sh-controls-label', attr: { style: 'font-size: 10px;' } });
 			}
 			const input = cameraRow.createEl('input', {
 				type: 'number',
 				attr: { value: value.toFixed(1), step: '1', style: 'width: 100%;' }
-			}) as HTMLInputElement;
+			});
 			input.addEventListener('change', () => onUpdate(parseFloat(input.value)));
+			this.cameraInputs.push(input);
 			return input;
 		};
 
@@ -276,46 +295,30 @@ export class SemanticHologramControlsView extends ItemView {
 		cameraRow.createDiv(); // Spacer
 
 		// Focal point controls
-		cameraControls.createEl('div', { text: 'Focal point', cls: 'sh-settings-label', attr: { style: 'margin-top: 10px;' } });
+		cameraControls.createDiv({ text: 'Focal point', cls: 'sh-settings-label', attr: { style: 'margin-top: 10px;' } });
 		const focalRow = cameraControls.createDiv({ cls: 'sh-controls-row' });
 		focalRow.style.display = 'grid';
 		focalRow.style.gridTemplateColumns = 'auto 1fr 1fr 1fr';
 		focalRow.style.gap = '5px';
 		focalRow.style.alignItems = 'center';
 
-		const inputs: HTMLInputElement[] = [];
 		const addFocalInput = (label: string, value: number, onUpdate: (v: number) => void) => {
 			if (label) {
-				focalRow.createEl('span', { text: label, cls: 'sh-controls-label', attr: { style: 'font-size: 10px;' } });
+				focalRow.createSpan({ text: label, cls: 'sh-controls-label', attr: { style: 'font-size: 10px;' } });
 			}
 			const input = focalRow.createEl('input', {
 				type: 'number',
 				attr: { value: value.toFixed(1), step: '1', style: 'width: 100%;' }
-			}) as HTMLInputElement;
+			});
 			input.addEventListener('change', () => onUpdate(parseFloat(input.value)));
-			inputs.push(input);
+			this.focalInputs.push(input);
 			return input;
 		};
 
 		const initialFocal = view ? view.getFocalPoint() : { x: 0, y: 0, z: 0 };
 		addFocalInput('Focal', initialFocal.x, v => { if (view) { view.setFocalPoint(v, view.getFocalPoint().y); view.requestRedraw(); } });
 		addFocalInput('', initialFocal.y, v => { if (view) { view.setFocalPoint(view.getFocalPoint().x, v); view.requestRedraw(); } });
-		addFocalInput('', initialFocal.z, v => { if (view) { view.setFocalPoint(view.getFocalPoint().x, view.getFocalPoint().y, v); view.requestRedraw(); } }); 
-
-		// Expose update function to view for live updates
-		if (view) {
-			(view as any).onCameraChange = () => {
-				const currentFocal = view.getFocalPoint();
-				if (inputs[0]) inputs[0].value = currentFocal.x.toFixed(1);
-				if (inputs[1]) inputs[1].value = currentFocal.y.toFixed(1);
-				if (inputs[2]) inputs[2].value = currentFocal.z.toFixed(1);
-				
-				const currentState = view.getCameraState();
-				const cameraInputs = cameraRow.querySelectorAll('input');
-				if (cameraInputs[0]) cameraInputs[0].value = currentState.azimuth.toFixed(1);
-				if (cameraInputs[1]) cameraInputs[1].value = currentState.elevation.toFixed(1);
-			};
-		}
+		addFocalInput('', initialFocal.z, v => { if (view) { view.setFocalPoint(view.getFocalPoint().x, view.getFocalPoint().y, v); view.requestRedraw(); } });
 
 
 
@@ -356,7 +359,7 @@ export class SemanticHologramControlsView extends ItemView {
 
 		// Edge Creation Settings
 		const edgeSettings = contentEl.createDiv({ cls: 'sh-controls-edge-settings' });
-		edgeSettings.createEl('div', { text: 'Default Edge Settings (Alt+Drag):', cls: 'sh-settings-label' });
+		edgeSettings.createDiv({ text: 'Default Edge Settings (Alt+Drag):', cls: 'sh-settings-label' });
 		
 		const relTypeSelect = edgeSettings.createEl('select', { cls: 'sh-rel-type-select' });
 		this.plugin.settings.relTypes.forEach(t => {
@@ -421,7 +424,7 @@ export class SemanticHologramControlsView extends ItemView {
 		resultsContainer.style.display = 'none';
 
 		if (this.searchQuery) {
-			setTimeout(() => searchInput.dispatchEvent(new Event('input')), 0);
+			window.setTimeout(() => searchInput.dispatchEvent(new Event('input')), 0);
 		}
 
 		let selectedResultIndex = -1;
@@ -494,14 +497,14 @@ export class SemanticHologramControlsView extends ItemView {
 				activePreview = null;
 			}
 			if (previewTimer) {
-				clearTimeout(previewTimer);
+				window.clearTimeout(previewTimer);
 				previewTimer = null;
 			}
 		};
 
 		const showPreview = (itemEl: HTMLElement, entry: SearchIndexEntry) => {
 			if (previewTimer) {
-				clearTimeout(previewTimer);
+				window.clearTimeout(previewTimer);
 				previewTimer = null;
 			}
 			if (activePreview && activePreview.getAttribute('data-path') === entry.path) {
@@ -520,7 +523,7 @@ export class SemanticHologramControlsView extends ItemView {
 			activePreview.style.zIndex = '1000';
 			
 			activePreview.addEventListener('mouseenter', () => {
-				if (previewTimer) clearTimeout(previewTimer);
+				if (previewTimer) window.clearTimeout(previewTimer);
 			});
 			activePreview.addEventListener('mouseleave', (e) => {
                 const related = e.relatedTarget as HTMLElement | null;
@@ -774,7 +777,7 @@ export class SemanticHologramControlsView extends ItemView {
 
 
 		const modeRow = contentEl.createDiv({ cls: 'sh-controls-row' });
-		modeRow.createEl('span', { text: 'Mode', cls: 'sh-controls-label' });
+		modeRow.createSpan({ text: 'Mode', cls: 'sh-controls-label' });
 		const toggle = modeRow.createEl('button', {
 			cls: mode === '3d' ? 'mod-cta sh-mode-toggle' : 'sh-mode-toggle',
 			text: mode === '3d' ? '3D' : '2D',
@@ -787,8 +790,8 @@ export class SemanticHologramControlsView extends ItemView {
 		});
 
 		const centerRow = contentEl.createDiv({ cls: 'sh-controls-row' });
-		centerRow.createEl('span', { text: 'Show indicators', cls: 'sh-controls-label' });
-		const centerCheckbox = centerRow.createEl('input', { type: 'checkbox' }) as HTMLInputElement;
+		centerRow.createSpan({ text: 'Show indicators', cls: 'sh-controls-label' });
+		const centerCheckbox = centerRow.createEl('input', { type: 'checkbox' });
 		centerCheckbox.checked = this.plugin.settings.showRotationCenter;
 		centerCheckbox.addEventListener('change', () => {
 			void this.plugin.setShowRotationCenter(centerCheckbox.checked);
@@ -816,7 +819,7 @@ export class SemanticHologramControlsView extends ItemView {
 		// Injection source as a dropdown: the graph already knows every node, so
 		// there is no reason to ask anyone to type a name we could have listed.
 		const sourceRow = contentEl.createDiv({ cls: 'sh-controls-row' });
-		sourceRow.createEl('span', { text: 'Injection source', cls: 'sh-controls-label' });
+		sourceRow.createSpan({ text: 'Injection source', cls: 'sh-controls-label' });
 		const sourceSelect = sourceRow.createEl('select', { cls: 'sh-controls-select' });
 		sourceSelect.createEl('option', { value: '', text: 'none (structural pass)' });
 		for (const node of scanView ? scanView.scanGraph().nodes : []) {
@@ -844,7 +847,7 @@ export class SemanticHologramControlsView extends ItemView {
 			nameCell.createSpan({ text: label });
 			nameCell.createEl('small', { text: hint });
 			const onCell = row.createEl('td', { cls: 'sh-scan-layer-on' });
-			const box = onCell.createEl('input', { type: 'checkbox' }) as HTMLInputElement;
+			const box = onCell.createEl('input', { type: 'checkbox' });
 			box.checked = scanSettings[key];
 			row.dataset.needsSource = String(needsSource);
 			box.addEventListener('change', () => {
@@ -861,11 +864,11 @@ export class SemanticHologramControlsView extends ItemView {
 		this.refreshScanLegend();
 
 		const depthRow = contentEl.createDiv({ cls: 'sh-controls-row' });
-		depthRow.createEl('span', { text: `Hover depth: ${this.plugin.settings.hoverDepth}`, cls: 'sh-controls-label' });
+		depthRow.createSpan({ text: `Hover depth: ${this.plugin.settings.hoverDepth}`, cls: 'sh-controls-label' });
 		const depthSlider = depthRow.createEl('input', {
 			type: 'range',
 			attr: { min: '0', max: '6', step: '1', value: String(this.plugin.settings.hoverDepth) },
-		}) as HTMLInputElement;
+		});
 		depthSlider.addEventListener('input', () => {
 			const v = parseInt(depthSlider.value, 10);
 			this.plugin.settings.hoverDepth = v;
@@ -878,12 +881,12 @@ export class SemanticHologramControlsView extends ItemView {
 		// Level Highlight Slider
 		const levelRow = contentEl.createDiv({ cls: 'sh-controls-row' });
 		const levelNames = ['Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'];
-		levelRow.createEl('span', { text: `Level: ${levelNames[this.plugin.settings.levelHighlight]}`, cls: 'sh-controls-label' });
+		levelRow.createSpan({ text: `Level: ${levelNames[this.plugin.settings.levelHighlight]}`, cls: 'sh-controls-label' });
 		const levelSlider = levelRow.createEl('input', {
 			cls: 'sh-level-slider',
 			type: 'range',
 			attr: { min: '0', max: '5', step: '1', value: String(this.plugin.settings.levelHighlight), dir: 'rtl' },
-		}) as HTMLInputElement;
+		});
 		levelSlider.addEventListener('input', () => {
 			const v = parseInt(levelSlider.value, 10);
 			void this.plugin.setLevelHighlight(v);
@@ -893,11 +896,11 @@ export class SemanticHologramControlsView extends ItemView {
 
 		// Opacity/Translucence Slider
 		const opacityRow = contentEl.createDiv({ cls: 'sh-controls-row' });
-		opacityRow.createEl('span', { text: `Level Opacity: ${Math.round(this.plugin.settings.levelHighlightOpacity * 100)}%`, cls: 'sh-controls-label' });
+		opacityRow.createSpan({ text: `Level Opacity: ${Math.round(this.plugin.settings.levelHighlightOpacity * 100)}%`, cls: 'sh-controls-label' });
 		const opacitySlider = opacityRow.createEl('input', {
 			type: 'range',
 			attr: { min: '10', max: '90', step: '5', value: String(this.plugin.settings.levelHighlightOpacity * 100) },
-		}) as HTMLInputElement;
+		});
 		opacitySlider.addEventListener('input', () => {
 			const v = parseInt(opacitySlider.value, 10) / 100;
 			this.plugin.settings.levelHighlightOpacity = v;
@@ -910,11 +913,11 @@ export class SemanticHologramControlsView extends ItemView {
 		// Face Opacity Controls
 		const faceOpacityRow = contentEl.createDiv({ cls: 'sh-controls-row' });
 		
-		faceOpacityRow.createEl('span', { text: `Face Opacity: ${Math.round(this.plugin.settings.facesOpacity * 100)}%`, cls: 'sh-controls-label' });
+		faceOpacityRow.createSpan({ text: `Face Opacity: ${Math.round(this.plugin.settings.facesOpacity * 100)}%`, cls: 'sh-controls-label' });
 		const faceOpacitySlider = faceOpacityRow.createEl('input', {
 			type: 'range',
 			attr: { min: '0', max: '100', step: '5', value: String(this.plugin.settings.facesOpacity * 100) },
-		}) as HTMLInputElement;
+		});
 		faceOpacitySlider.addEventListener('input', () => {
 			const v = parseInt(faceOpacitySlider.value, 10) / 100;
 			this.plugin.settings.facesOpacity = v;
@@ -963,28 +966,46 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const gifBtn = actions.createEl('button', { text: 'Record GIF' });
 		gifBtn.addEventListener('click', () => {
-			const view = this.app.workspace
-				.getLeavesOfType(VIEW_TYPE_HOLOGRAM)
-				.map((l) => l.view)
-				.find((v): v is SemanticHologramView => v instanceof SemanticHologramView);
+			const view = this.getView();
 			if (view) {
-				view.startRecording();
+				if (view.isRecordingActive()) {
+					view.stopRecording();
+					gifBtn.setText('Record GIF');
+				} else {
+					void view.startRecording();
+					gifBtn.setText('Stop Recording');
+				}
 			}
 		});
 
-		const dumpBtn = actions.createEl('button', { text: 'Dump State' });
-		dumpBtn.addEventListener('click', () => {
-			const view = this.app.workspace
-				.getLeavesOfType(VIEW_TYPE_HOLOGRAM)
-				.map((l) => l.view)
-				.find((v): v is SemanticHologramView => v instanceof SemanticHologramView);
-			if (view) {
-				void view.dumpGraphState();
+		const gifMode = contentEl.createDiv({ cls: 'sh-controls-row' });
+		gifMode.createSpan({ text: 'GIF Mode:', cls: 'sh-controls-label' });
+		const gifSelect = gifMode.createEl('select', { cls: 'sh-controls-select' });
+		gifSelect.createEl('option', { value: 'full', text: 'Full Rotation' });
+		gifSelect.createEl('option', { value: 'time', text: 'Fixed Time' });
+		gifSelect.createEl('option', { value: 'continuous', text: 'Continuous' });
+		gifSelect.value = this.plugin.settings.gifMode ?? 'full';
+		gifSelect.addEventListener('change', () => {
+			this.plugin.settings.gifMode = gifSelect.value as 'time' | 'full' | 'continuous';
+			void this.plugin.saveSettings();
+		});
+
+		const gifDurationRow = contentEl.createDiv({ cls: 'sh-controls-row' });
+		gifDurationRow.createSpan({ text: 'Duration (s):', cls: 'sh-controls-label' });
+		const gifDurationInput = gifDurationRow.createEl('input', {
+			type: 'number',
+			attr: { value: String(this.plugin.settings.gifDuration ?? 10), min: '1', max: '60', step: '1', style: 'width: 100%;' }
+		});
+		gifDurationInput.addEventListener('change', () => {
+			const v = parseFloat(gifDurationInput.value);
+			if (Number.isFinite(v) && v > 0) {
+				this.plugin.settings.gifDuration = v;
+				void this.plugin.saveSettings();
 			}
 		});
 
 		const footer = contentEl.createDiv({ cls: 'sh-controls-footer' });
-		footer.createEl('span', {
+		footer.createSpan({
 			text: `${mode.toUpperCase()} · ${this.plugin.app.vault.getMarkdownFiles().length} notes`,
 			cls: 'sh-controls-meta',
 		});

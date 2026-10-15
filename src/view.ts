@@ -3969,8 +3969,6 @@ export class SemanticHologramView extends ItemView {
 			ctx.restore();
 		}
 
-		this.drawLeftXAxisIndicator();
-
 		if (this.is3D) {
 			const cx = w / 2;
 			const cy = h / 2;

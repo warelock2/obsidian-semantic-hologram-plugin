@@ -4128,8 +4128,7 @@ export class SemanticHologramView extends ItemView {
 		const cy = h / 2;
 		const rx = 7;
 		const ry = 20;
-		// Use fixed color to avoid brightness variation when showRotationCenter changes
-		const color = 'rgba(124, 111, 246, 1)';
+		const color = this.nodeColor;
 
 		ctx.save();
 		ctx.strokeStyle = this.withAlpha(color, 0.85);

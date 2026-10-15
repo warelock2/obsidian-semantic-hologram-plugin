@@ -3880,6 +3880,10 @@ export class SemanticHologramView extends ItemView {
 			ctx.restore();
 		}
 
+		// Always draw the prime frame gizmo (x'/y'/z' axes at canvas centre).
+		// This is independent of the "Show indicators" setting.
+		this.drawPrimeFrameGizmo();
+
 		if (!this.plugin.settings.showRotationCenter) {
 			return;
 		}
@@ -3965,7 +3969,6 @@ export class SemanticHologramView extends ItemView {
 			ctx.restore();
 		}
 
-		this.drawPrimeFrameGizmo();
 		this.drawLeftXAxisIndicator();
 
 		if (this.is3D) {

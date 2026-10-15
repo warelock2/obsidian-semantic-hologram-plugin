@@ -3880,12 +3880,14 @@ export class SemanticHologramView extends ItemView {
 			ctx.restore();
 		}
 
-		if (this.is3D) {
-			this.drawPrimeFrameGizmo();
+		this.drawLeftXAxisIndicator();
 
+		if (this.is3D) {
 			if (!this.plugin.settings.showRotationCenter) {
 				return;
 			}
+
+			this.drawPrimeFrameGizmo();
 
 			const origin = this.rotatePoint(0, 0, 0, this.target[0], this.target[1], this.target[2]);
 			const originScale = this.projectionScale(origin.z);

@@ -3880,15 +3880,13 @@ export class SemanticHologramView extends ItemView {
 			ctx.restore();
 		}
 
-		// Always draw the prime frame gizmo (x'/y'/z' axes at canvas centre).
-		// This is independent of the "Show indicators" setting.
-		this.drawPrimeFrameGizmo();
-
-		if (!this.plugin.settings.showRotationCenter) {
-			return;
-		}
-
 		if (this.is3D) {
+			this.drawPrimeFrameGizmo();
+
+			if (!this.plugin.settings.showRotationCenter) {
+				return;
+			}
+
 			const origin = this.rotatePoint(0, 0, 0, this.target[0], this.target[1], this.target[2]);
 			const originScale = this.projectionScale(origin.z);
 			const ix = this.toScreenX(origin.x, origin.z);

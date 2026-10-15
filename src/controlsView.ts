@@ -687,7 +687,10 @@ export class SemanticHologramControlsView extends ItemView {
 			row.addEventListener('mouseenter', () => {
 				this.requestHologramPeek(tag, false);
 			});
-			row.addEventListener('focus', () => {
+			row.addEventListener('focus', (e) => {
+				(e as Event).preventDefault?.();
+				// Prevent browser scroll-on-focus snap; scroll position is preserved
+				// by the container's scroll behavior settings.
 				this.requestHologramPeek(tag, true);
 			});
 			row.addEventListener('click', (e) => {
@@ -746,8 +749,7 @@ export class SemanticHologramControlsView extends ItemView {
 			const target = rows[next];
 			if (!target) return;
 			e.preventDefault();
-			target.focus();
-			target.scrollIntoView({ block: 'nearest' });
+			target.focus({ preventScroll: true });
 			const tag = target.getAttribute('data-tag');
 			if (tag) this.requestHologramPeek(tag, true);
 		});
@@ -760,6 +762,8 @@ export class SemanticHologramControlsView extends ItemView {
 			contentEl.removeEventListener('click', this.panelClickHandler);
 		}
 		this.panelClickHandler = (e: MouseEvent) => {
+			const scrollEl = contentEl.closest('.sh-controls') || contentEl;
+			const savedScroll = (scrollEl as HTMLElement).scrollTop;
 			const target = e.target as HTMLElement;
 			if (target.closest('.sh-hologram-row, button, input, select, textarea, a, .sh-search-bar, .sh-search-results')) {
 				return;
@@ -770,6 +774,10 @@ export class SemanticHologramControlsView extends ItemView {
 			this.lastHologramIndex = -1;
 			refreshRows();
 			saveAndRefresh();
+			// Restore scroll position to prevent snap to top
+			requestAnimationFrame(() => {
+				(scrollEl as HTMLElement).scrollTop = savedScroll;
+			});
 		};
 		contentEl.addEventListener('click', this.panelClickHandler);
 

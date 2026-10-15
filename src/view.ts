@@ -5007,16 +5007,11 @@ export class SemanticHologramView extends ItemView {
 	 * matches what `endAnchorDrag` already does for anchor drags.
 	 */
 	private endGroupDrag(): void {
-		for (const i of this.groupOrigins.keys()) {
-			const n = this.nodes[i];
-			if (!n) {
-				continue;
-			}
-			n.homeX = n.x;
-			n.homeY = n.y;
-			n.homeZ = n.z;
-			n.homeSet = true;
-		}
+		// Note: we do NOT overwrite homeX/homeY/homeZ here.
+		// The home spring will pull nodes back to their initial positions
+		// (set during graph build), so deselecting after a group drag will
+		// make the selected nodes snap back, while the rest of the hologram
+		// nodes stay in place — matching the pre-13882b2 behavior.
 		this.groupDragging = false;
 		this.groupOrigins.clear();
 		this.groupStartCentroid = null;

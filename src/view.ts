@@ -5171,14 +5171,13 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	/**
-	 * Rebuild the hologram anchor groups from the current tag graph. Tags on the
-	 * same node are unioned (an emulsified bridge carries two tags, so its two
-	 * holograms share one anchor); every resulting component becomes one anchor.
-	 * Nodes with no hologram tag belong to no anchor.
+	 * Rebuild the hologram anchor groups from directory membership.
+	 * Each directory under hologram/ is a hologram; nodes in the same directory
+	 * belong to the same anchor. Nodes in nested directories belong to multiple
+	 * anchors (one per directory level).
 	 */
 	private rebuildAnchors(): void {
-		const tagsOf = new Map<number, string[]>();
-		const allTags = new Set<string>();
+		const groups = new Map<string, { tags: Set<string>; nodeIndices: number[] }>();
 		for (let i = 0; i < this.nodes.length; i++) {
 			const node = this.nodes[i];
 			if (!node) {
@@ -5188,48 +5187,15 @@ export class SemanticHologramView extends ItemView {
 			if (tags.length === 0) {
 				continue;
 			}
-			tagsOf.set(i, tags);
-			for (const t of tags) {
-				allTags.add(t);
+			for (const tag of tags) {
+				let g = groups.get(tag);
+				if (!g) {
+					g = { tags: new Set(), nodeIndices: [] };
+					groups.set(tag, g);
+				}
+				g.tags.add(tag);
+				g.nodeIndices.push(i);
 			}
-		}
-
-		const parent = new Map<string, string>();
-		const find = (x: string): string => {
-			let r = parent.get(x) ?? x;
-			while (r !== (parent.get(r) ?? r)) {
-				r = parent.get(r) ?? r;
-			}
-			return r;
-		};
-		const union = (a: string, b: string): void => {
-			const ra = find(a);
-			const rb = find(b);
-			if (ra !== rb) {
-				parent.set(ra, rb);
-			}
-		};
-		for (const t of allTags) {
-			parent.set(t, t);
-		}
-		for (const tags of tagsOf.values()) {
-			for (let k = 1; k < tags.length; k++) {
-				union(tags[0]!, tags[k]!);
-			}
-		}
-
-		const groups = new Map<string, { tags: Set<string>; nodeIndices: number[] }>();
-		for (const [i, tags] of tagsOf) {
-			const root = find(tags[0]!);
-			let g = groups.get(root);
-			if (!g) {
-				g = { tags: new Set(), nodeIndices: [] };
-				groups.set(root, g);
-			}
-			for (const t of tags) {
-				g.tags.add(t);
-			}
-			g.nodeIndices.push(i);
 		}
 
 		this.anchorGroups = [...groups].map(([root, g]) => ({
@@ -5550,7 +5516,6 @@ export class SemanticHologramView extends ItemView {
 		if (!newTag) {
 			return;
 		}
-		const mode = this.plugin.settings.splitMode ?? 'move';
 		const files: TFile[] = [];
 		for (const i of this.selected) {
 			const n = this.nodes[i];
@@ -5562,23 +5527,26 @@ export class SemanticHologramView extends ItemView {
 				files.push(f);
 			}
 		}
-		for (const f of files) {
-			const cur = this.plugin.hologramService.getTags(f.path);
-			const next = mode === 'move' ? new Set([newTag]) : new Set(cur);
-			if (mode === 'copy') {
-				next.add(newTag);
+		// Directory-based: move files to new hologram directory
+		const vault = this.app.vault;
+		const destDir = `hologram/${newTag}`;
+		try {
+			if (!vault.getAbstractFileByPath(destDir)) {
+				await vault.createFolder(destDir);
 			}
-			await this.plugin.hologramService.setTags(f, next);
+		} catch {
+			// Already exists
+		}
+		for (const f of files) {
+			const dest = `${destDir}/${f.name}`;
+			await vault.rename(f, dest);
 		}
 		this.showToast(
-			mode === 'move'
-				? `Moved ${files.length} node${files.length === 1 ? '' : 's'} → "${newTag}"`
-				: `Copied ${files.length} node${files.length === 1 ? '' : 's'} → "${newTag}"`,
+			`Moved ${files.length} node${files.length === 1 ? '' : 's'} → "${newTag}"`,
 		);
 	}
 
 	private async applyMerge(targetTag: string): Promise<void> {
-		const mode = this.plugin.settings.mergeMode ?? 'emulsify';
 		const files: TFile[] = [];
 		for (const i of this.selected) {
 			const n = this.nodes[i];
@@ -5590,18 +5558,22 @@ export class SemanticHologramView extends ItemView {
 				files.push(f);
 			}
 		}
-		for (const f of files) {
-			const cur = this.plugin.hologramService.getTags(f.path);
-			const next = mode === 'absorb' ? new Set([targetTag]) : new Set(cur);
-			if (mode === 'emulsify') {
-				next.add(targetTag);
+		// Directory-based: move files to target hologram directory
+		const vault = this.app.vault;
+		const destDir = `hologram/${targetTag}`;
+		try {
+			if (!vault.getAbstractFileByPath(destDir)) {
+				await vault.createFolder(destDir);
 			}
-			await this.plugin.hologramService.setTags(f, next);
+		} catch {
+			// Already exists
+		}
+		for (const f of files) {
+			const dest = `${destDir}/${f.name}`;
+			await vault.rename(f, dest);
 		}
 		this.showToast(
-			mode === 'absorb'
-				? `Absorbed ${files.length} node${files.length === 1 ? '' : 's'} into "${targetTag}"`
-				: `Emulsified ${files.length} node${files.length === 1 ? '' : 's'} into "${targetTag}"`,
+			`Merged ${files.length} node${files.length === 1 ? '' : 's'} into "${targetTag}"`,
 		);
 	}
 
@@ -5740,16 +5712,10 @@ export class SemanticHologramView extends ItemView {
 			this.showToast(label);
 		} else if (key === 's' && e.shiftKey && !e.repeat) {
 			e.preventDefault();
-			this.plugin.settings.splitMode = this.plugin.settings.splitMode === 'move' ? 'copy' : 'move';
-			void this.plugin.saveSettings();
-			this.showToast(this.plugin.settings.splitMode === 'move' ? 'Split mode: Move' : 'Split mode: Copy');
-			this.refreshControlsPanel();
+			this.showToast('Split: drag nodes away from the graph to create a new hologram');
 		} else if (key === 'm' && e.shiftKey && !e.repeat) {
 			e.preventDefault();
-			this.plugin.settings.mergeMode = this.plugin.settings.mergeMode === 'absorb' ? 'emulsify' : 'absorb';
-			void this.plugin.saveSettings();
-			this.showToast(this.plugin.settings.mergeMode === 'absorb' ? 'Merge mode: Absorb' : 'Merge mode: Emulsify');
-			this.refreshControlsPanel();
+			this.showToast('Merge: drag nodes onto another hologram');
 		} else if (key === 's' && !e.repeat) {
 			this.selectMode = true;
 			this.selectDragOccurred = false;

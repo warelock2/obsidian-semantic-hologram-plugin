@@ -26,7 +26,6 @@ export const FM_KEY_ORDER = [
 	'node-type',
 	'source-kind',
 	'created',
-	'hologram',
 	'groups',
 	'groups-excluded',
 	'confidence',
@@ -73,9 +72,9 @@ export function buildSkeletonFrontmatter(opts: BuildSkeletonOptions): string {
 		fields.set('source-kind', opts.sourceKind);
 	}
 	fields.set('created', opts.created);
-	if (opts.hologram) {
-		fields.set('hologram', `[${opts.hologram}]`);
-	}
+	// No `hologram:` key. Directory location is the membership now, so writing
+	// the tag back would create a second, stale source of truth for exactly the
+	// thing the migration just removed.
 
 	const known = FM_KEY_ORDER.filter((k) => fields.has(k));
 	const extras = [...fields.keys()].filter((k) => !FM_KEY_ORDER.includes(k as never)).sort();

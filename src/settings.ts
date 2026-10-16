@@ -15,6 +15,27 @@ export interface NodeTypeEntry {
 	description?: string;
 	enabled: boolean;
 	level?: number;
+	locked?: boolean;
+}
+
+/**
+ * Node types that can never be deleted, renamed, disabled, or levelled.
+ *
+ * Keyed by id rather than by the persisted `locked` flag on purpose. A flag in
+ * `DEFAULT_SETTINGS` only reaches a *fresh* vault — `loadData()` returns this
+ * vault's already-saved `nodeTypes` verbatim and never merges defaults back in,
+ * so `locked: true` in the defaults would silently protect nothing on any
+ * existing install. Deriving it from the id makes the guarantee hold regardless
+ * of what is (or is not) on disk.
+ *
+ * Colour stays editable: it is presentation, not identity.
+ */
+export const PERMANENT_NODE_TYPE_IDS: readonly string[] = ['thought', 'source'];
+
+/** True when a node type's identity/level/on-off controls must be locked. */
+export function isPermanentNodeType(t: Pick<NodeTypeEntry, 'id' | 'locked'> | undefined): boolean {
+	if (!t) return false;
+	return t.locked === true || PERMANENT_NODE_TYPE_IDS.includes(t.id);
 }
 
 /**
@@ -120,8 +141,6 @@ export interface SemanticHologramSettings {
 	incomingFolderPath: string;
 
 	separationDistance: number;
-	mergeMode: 'absorb' | 'emulsify';
-	splitMode: 'move' | 'copy';
 	gifMode: 'full' | 'time' | 'continuous';
 	gifDuration: number;
 }
@@ -175,14 +194,14 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	facesColor: '#277DA1',
 	nodeTypes: [
 		{ id: 'percept', name: 'Percept', color: '#B5838D', description: 'A base-level observed percept or raw data point (Level 0).', enabled: true, level: 0 },
-		{ id: 'thought', name: 'Thought', color: '#B5838D', description: 'Unstructured zettelkasten thought or brainstorming note.', enabled: true, level: undefined },
+		{ id: 'thought', name: 'Thought', color: '#B5838D', description: 'Unstructured zettelkasten thought or brainstorming note.', enabled: true, level: undefined, locked: true },
 		{ id: 'concept', name: 'Concept', color: '#7C6FF6', description: 'A single foundational concept.', enabled: true, level: 1 },
 		{ id: 'idea', name: 'Idea', color: '#4D9DE0', description: 'An emerging idea or thought.', enabled: true, level: 2 },
 		{ id: 'pattern', name: 'Pattern', color: '#F4A261', description: 'A recognized recurring pattern.', enabled: true, level: 3 },
 		{ id: 'topic', name: 'Topic', color: '#43AA8B', description: 'A broader topical grouping.', enabled: true, level: 4 },
 		{ id: 'domain', name: 'Domain', color: '#E76F51', description: 'A subject domain or field of study.', enabled: true, level: 5 },
 		{ id: 'field', name: 'Field', color: '#90BE6D', description: 'A high-level academic or professional field.', enabled: true, level: 6 },
-		{ id: 'source', name: 'Source', color: '#8AC926', description: 'A source document: book, paper, video, interview, article.', enabled: true, level: 0 },
+		{ id: 'source', name: 'Source', color: '#8AC926', description: 'A source document: book, paper, video, interview, article.', enabled: true, level: 0, locked: true },
 		{ id: 'authority', name: 'Authority', color: '#E9C46A', description: 'A subject-matter expert (SME) lending authority as evidence (no level).', enabled: true, level: undefined },
 		{ id: 'data', name: 'Data', color: '#4D9DE0', description: 'Quantitative/qualitative measurement of objectively existing things (no level).', enabled: true, level: undefined },
 	],
@@ -220,8 +239,6 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	selectedHolograms: [],
 
 	separationDistance: 500,
-	mergeMode: 'emulsify',
-	splitMode: 'move',
 	gifMode: 'full',
 	gifDuration: 10,
 };
@@ -507,32 +524,6 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 			.setHeading();
 
 		new Setting(containerEl)
-			.setName('Merge mode')
-			.setDesc('Absorb: the dragged set\'s hologram tags are replaced with the target hologram\'s. Emulsify: only the dragged (bridging) nodes get the extra target tag, so the two holograms stay separable.')
-			.addDropdown((d) =>
-				d
-					.addOptions({ absorb: 'Absorb (replace tags)', emulsify: 'Emulsify (bridge nodes)' })
-					.setValue(this.plugin.settings.mergeMode)
-					.onChange(async (v) => {
-						this.plugin.settings.mergeMode = v as 'absorb' | 'emulsify';
-						await this.persist();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName('Split mode')
-			.setDesc('Move: the dragged set\'s old hologram tags are replaced by the new one. Copy: the new hologram tag is added while the old tags are kept.')
-			.addDropdown((d) =>
-				d
-					.addOptions({ move: 'Move (replace tags)', copy: 'Copy (keep tags)' })
-					.setValue(this.plugin.settings.splitMode)
-					.onChange(async (v) => {
-						this.plugin.settings.splitMode = v as 'move' | 'copy';
-						await this.persist();
-					}),
-			);
-
-		new Setting(containerEl)
 			.setName('Separation distance')
 			.setDesc('Centroid distance (world units) a dragged set must cross from the rest of the graph to trigger a split — and how close two hologram centroids must get to merge. 0 disables drag-separate/merge.')
 			.addSlider((s) =>
@@ -752,6 +743,10 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 			levelDiv.style.textAlign = 'center';
 			const levelInput = levelDiv.createEl('input', { type: 'number', value: nt.level !== undefined ? String(nt.level) : '', cls: 'sh-glossary-level-input' });
 			levelInput.style.width = '45px';
+			if (isPermanentNodeType(nt)) {
+				levelInput.disabled = true;
+				levelInput.style.opacity = '0.5';
+			}
 			levelInput.addEventListener('change', () => {
 				const val = levelInput.value;
 				nt.level = val !== '' ? parseInt(val) : undefined;
@@ -760,25 +755,33 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 
 			const move = row.createDiv({ cls: 'sh-glossary-move' });
 			const up = move.createEl('button', { text: '▲', cls: 'sh-glossary-up' });
-			up.addEventListener('click', () => {
+			up.addEventListener('click', (e) => {
+				e.preventDefault();
+				e.stopPropagation();
 				if (i > 0) {
 					[this.plugin.settings.nodeTypes[i], this.plugin.settings.nodeTypes[i - 1]] = [
 						this.plugin.settings.nodeTypes[i - 1]!,
 						this.plugin.settings.nodeTypes[i]!,
 					];
+					const scrollTop = this.containerEl.scrollTop;
 					void this.persist();
 					this.display();
+					this.containerEl.scrollTop = scrollTop;
 				}
 			});
 			const down = move.createEl('button', { text: '▼', cls: 'sh-glossary-down' });
-			down.addEventListener('click', () => {
+			down.addEventListener('click', (e) => {
+				e.preventDefault();
+				e.stopPropagation();
 				if (i < this.plugin.settings.nodeTypes.length - 1) {
 					[this.plugin.settings.nodeTypes[i], this.plugin.settings.nodeTypes[i + 1]] = [
 						this.plugin.settings.nodeTypes[i + 1]!,
 						this.plugin.settings.nodeTypes[i]!,
 					];
+					const scrollTop = this.containerEl.scrollTop;
 					void this.persist();
 					this.display();
+					this.containerEl.scrollTop = scrollTop;
 				}
 			});
 			const info = row.createDiv({ cls: 'sh-glossary-info' });
@@ -793,6 +796,9 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 				attr: { 'aria-label': 'Edit' },
 			});
 			edit.setText('✎');
+			if (isPermanentNodeType(nt)) {
+				edit.style.display = 'none';
+			}
 			edit.addEventListener('click', () => {
 				new EntryModal(
 					this.app,
@@ -836,21 +842,31 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 				cls: 'sh-glossary-toggle',
 				attr: { 'aria-label': nt.enabled ? 'Disable' : 'Enable' },
 			});
+			if (isPermanentNodeType(nt)) {
+				nt.enabled = true;
+				toggle.disabled = true;
+				toggle.style.opacity = '0.5';
+				toggle.style.cursor = 'not-allowed';
+			}
 			toggle.setText(nt.enabled ? 'On' : 'Off');
 			toggle.addClass(nt.enabled ? 'is-on' : 'is-off');
 			toggle.addEventListener('click', () => {
+				if (isPermanentNodeType(nt)) return;
 				nt.enabled = !nt.enabled;
 				toggle.setText(nt.enabled ? 'On' : 'Off');
 				toggle.toggleClass('is-on', nt.enabled);
 				toggle.toggleClass('is-off', !nt.enabled);
 				void this.persist();
 			});
-			
+
 			const del = controls.createEl('button', {
 				cls: 'sh-glossary-del',
 				attr: { 'aria-label': 'Delete' },
 			});
 			del.setText('✕');
+			if (isPermanentNodeType(nt)) {
+				del.style.display = 'none';
+			}
 			del.addEventListener('click', () => {
 				const availableNodes = this.plugin.settings.nodeTypes.map((t) => t.id);
 				new DeleteNodeTypeModal(this.app, nt.id, availableNodes, (action, replacement) => {

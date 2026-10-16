@@ -514,21 +514,11 @@ export function setGroupsInContent(content: string, groups: string[], groupsExcl
 }
 
 /**
- * Set the `holograms:` frontmatter list of a note body, preserving every other field.
- * Tags already present are deduplicated.
+ * Removed: `setHologramsInContent`. Hologram membership is now the file's
+ * directory under `hologram/`, and `HologramService` moves files to express it.
+ * A writer that stamps the tag back into frontmatter would resurrect a second
+ * source of truth that `stripHologramKey` exists to delete.
  */
-export function setHologramsInContent(content: string, holograms: string[]): string {
-	const clean = (arr: string[]): string[] =>
-		[...new Set(arr.map((g) => g.trim()).filter(Boolean))];
-	const h = stringifyList(clean(holograms));
-	const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-	if (!m) {
-		return `---\nholograms:\n${h}---\n\n${content}`;
-	}
-	let body = m[1]!;
-	body = replaceListKey(body, 'holograms', h);
-	return `---\n${body}\n---${content.slice(m[0].length)}`;
-}
 
 /** YAML block-list lines for the given strings (indented under a key). */
 function stringifyList(arr: string[]): string {

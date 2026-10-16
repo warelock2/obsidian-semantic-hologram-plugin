@@ -9,6 +9,7 @@ import {
 	ProjectionMode,
 	SemanticHologramSettings,
 	SemanticHologramSettingTab,
+	isPermanentNodeType,
 } from './settings';
 import { defaultNodeType } from './settings';
 import { buildHologramSkeleton, todayIso } from './skeleton';
@@ -28,6 +29,7 @@ import { NodeConfidenceModal } from './confidence';
 import { IncomingImportModal } from './incomingImportModal';
 
 import { HologramService } from './hologramService';
+import { migrateToDirectories } from './migrate';
 
 /** Vault file the MCP server writes to ask the plugin to run something. */
 const COMMAND_FILE = '.hologram-command.json';
@@ -322,6 +324,17 @@ export default class SemanticHologramPlugin extends Plugin {
 			name: 'Show hologram controls',
 			callback: () => {
 				void this.activateControlsView();
+			},
+		});
+
+		this.addCommand({
+			id: 'migrate-to-directories',
+			name: 'Migrate tag-based holograms to directories',
+			callback: async () => {
+				await migrateToDirectories(this.app);
+				await this.hologramService.loadCache();
+				this.scheduleRebuild();
+				this.scheduleCacheRefresh();
 			},
 		});
 
@@ -674,6 +687,15 @@ export default class SemanticHologramPlugin extends Plugin {
 		const savedRaw = (await this.loadData()) as unknown;
 		const saved = savedRaw as Partial<SemanticHologramSettings> | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {});
+		// `Object.assign` is shallow: a saved `nodeTypes` array replaces the default
+		// one wholesale, so anything derived from the defaults (e.g. `locked`) is
+		// absent on any vault that already had settings saved. Permanent types are
+		// therefore re-asserted here, keyed by id, rather than trusted from the blob.
+		for (const nt of this.settings.nodeTypes ?? []) {
+			if (isPermanentNodeType(nt) && !nt.enabled) {
+				nt.enabled = true;
+			}
+		}
 		const legacyMaxDepth = (savedRaw as { maxDepth?: number } | null)?.maxDepth;
 		if ((this.settings.hoverDepth ?? 0) === 0 && typeof legacyMaxDepth === 'number') {
 			this.settings.hoverDepth = legacyMaxDepth;
@@ -745,12 +767,58 @@ pluginDir(): string {
 			const watcher = watch(dir, (_event, filename) => {
 				if (filename === COMMAND_FILE) tryHandle();
 			});
+			this.registerEvent({
+				destroy: () => watcher.close(),
+			} as any);
 			this.register(() => watcher.close());
 		} catch {
 			// Watch unsupported here; the poll below still delivers.
 		}
 
 		this.registerInterval(window.setInterval(tryHandle, COMMAND_POLL_MS));
+
+		// Watch the vault for external filesystem changes (OS file browser, Nextcloud sync)
+		this.startVaultWatcher();
+	}
+
+	/**
+	 * Watch the vault directory for external changes.
+	 * Obsidian's vault events catch changes made within Obsidian, but not
+	 * changes made by external tools (OS file browser, sync clients).
+	 */
+	private startVaultWatcher(): void {
+		const vault = this.app.vault;
+		const adapter = vault.adapter;
+		if (!adapter) return;
+
+		try {
+			// DataAdapter doesn't expose getBasePath in the type, but it exists at runtime
+			const vaultPath = (adapter as any).getBasePath?.();
+			if (!vaultPath) return;
+
+			const holoPath = `${vaultPath}/${HOLOGRAM_FOLDER}`;
+
+			let timeout: ReturnType<typeof setTimeout> | null = null;
+			const debouncedRefresh = () => {
+				if (timeout) clearTimeout(timeout);
+				timeout = setTimeout(() => {
+					this.scheduleCacheRefresh();
+					this.scheduleRebuild();
+				}, 300);
+			};
+
+			// Watch the hologram directory for external changes
+			try {
+				const watcher = watch(holoPath, { recursive: true }, () => {
+					debouncedRefresh();
+				});
+				this.register(() => watcher.close());
+			} catch {
+				// Watch unsupported or directory doesn't exist yet
+			}
+		} catch {
+			// Adapter doesn't support basePath
+		}
 	}
 
 	/**
@@ -949,22 +1017,7 @@ class CreateNodeModal extends Modal {
 			d.setValue(this.noteType).onChange((v) => (this.noteType = v));
 		});
 
-		const existing = new Set<string>();
-		for (const f of this.app.vault.getMarkdownFiles()) {
-			const cache = this.app.metadataCache.getFileCache(f);
-			if (!cache) {
-				continue;
-			}
-			// Both spellings exist in the wild: `setHologramsInContent` writes the
-			// plural, older notes carry the singular. Same precedence as
-			// parseNoteFrontmatter.
-			const raw: unknown = cache.frontmatter?.['holograms'] ?? cache.frontmatter?.['hologram'];
-			for (const h of Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : []) {
-				if (typeof h === 'string' && h.trim()) {
-					existing.add(h.trim());
-				}
-			}
-		}
+		const existing = new Set<string>(this.plugin.hologramService.getAllTags());
 		// Free text, not a dropdown: a dropdown would make naming a new
 		// hologram impossible without leaving the modal. Suggestions are offered
 		// for the ones already in use, and anything typed is accepted as-is.
@@ -1008,14 +1061,18 @@ class CreateNodeModal extends Modal {
 			new Notice('Name contains invalid characters.');
 			return;
 		}
-		const folder = HOLOGRAM_FOLDER;
+		// A named hologram means a subdirectory: membership is the path, not a tag.
+		const folder = this.hologram ? `${HOLOGRAM_FOLDER}/${this.hologram}` : HOLOGRAM_FOLDER;
 		const path = `${folder}/${this.name}.md`;
 		if (this.app.vault.getAbstractFileByPath(path)) {
 			new Notice(`A note already exists at ${path}`);
 			return;
 		}
 		try {
-			if (!this.app.vault.getAbstractFileByPath(folder)) {
+			if (!this.app.vault.getAbstractFileByPath(HOLOGRAM_FOLDER)) {
+				await this.app.vault.createFolder(HOLOGRAM_FOLDER);
+			}
+			if (folder !== HOLOGRAM_FOLDER && !this.app.vault.getAbstractFileByPath(folder)) {
 				await this.app.vault.createFolder(folder);
 			}
 		} catch {
@@ -1026,7 +1083,6 @@ class CreateNodeModal extends Modal {
 			body: this.body,
 			noteType: this.noteType,
 			created: todayIso(),
-			hologram: this.hologram || undefined,
 		});
 		try {
 			await this.app.vault.create(path, content);

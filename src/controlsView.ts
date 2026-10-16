@@ -18,14 +18,6 @@ export class SemanticHologramControlsView extends ItemView {
 	private cameraInputs: HTMLInputElement[] = [];
 	private focalInputs: HTMLInputElement[] = [];
 
-	private get mergeModeLabel(): 'absorb' | 'emulsify' {
-		return this.plugin.settings.mergeMode ?? 'emulsify';
-	}
-
-	private get splitModeLabel(): 'move' | 'copy' {
-		return this.plugin.settings.splitMode ?? 'move';
-	}
-
 	public updateLevelSlider(): void {
 		const levelSlider = this.containerEl.querySelector('.sh-level-slider') as HTMLInputElement | null;
 		if (levelSlider) {
@@ -330,32 +322,6 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const helpHint = contentEl.createDiv({ cls: 'sh-controls-help-hint' });
 		helpHint.setText("Press 'h' for help");
-
-		const dragModeRow = contentEl.createDiv({ cls: 'sh-controls-modes' });
-
-		const mergeBtn = dragModeRow.createEl('button', {
-			cls: `sh-mode-btn is-merge ${this.mergeModeLabel}`,
-			attr: { title: 'Merge mode (Shift+M): how the dragged set merges onto another hologram' },
-		});
-		mergeBtn.createSpan({ cls: 'sh-mode-key', text: 'M' });
-		mergeBtn.createSpan({ cls: 'sh-mode-label', text: this.mergeModeLabel === 'absorb' ? 'Absorb' : 'Emulsify' });
-		mergeBtn.addEventListener('click', () => {
-			this.plugin.settings.mergeMode = this.plugin.settings.mergeMode === 'absorb' ? 'emulsify' : 'absorb';
-			void this.plugin.saveSettings();
-			this.render();
-		});
-
-		const splitBtn = dragModeRow.createEl('button', {
-			cls: `sh-mode-btn is-split ${this.splitModeLabel}`,
-			attr: { title: 'Split mode (Shift+S): what happens to the dragged set when it separates' },
-		});
-		splitBtn.createSpan({ cls: 'sh-mode-key', text: 'S' });
-		splitBtn.createSpan({ cls: 'sh-mode-label', text: this.splitModeLabel === 'move' ? 'Move' : 'Copy' });
-		splitBtn.addEventListener('click', () => {
-			this.plugin.settings.splitMode = this.plugin.settings.splitMode === 'move' ? 'copy' : 'move';
-			void this.plugin.saveSettings();
-			this.render();
-		});
 
 		// Edge Creation Settings
 		const edgeSettings = contentEl.createDiv({ cls: 'sh-controls-edge-settings' });

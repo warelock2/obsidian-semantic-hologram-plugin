@@ -5,6 +5,44 @@ import { RELATION_HEADER, findRelationsSection } from './relations';
 import { auditHologramNodes, HologramAuditModal } from './audit';
 import type SemanticHologramPlugin from './main';
 
+/**
+ * Remove any `holograms:` / `hologram:` frontmatter key, in either the flow form
+ * (`holograms: [a, b]`) or the block form (key line followed by indented `- item`
+ * lines). Returns the note body unchanged when no such key is present.
+ *
+ * Operates on a full note (with its `---` fences) or on a bare frontmatter body;
+ * the key is only stripped while inside the frontmatter block, so a `hologram:`
+ * line in ordinary prose is left alone.
+ */
+export function stripHologramKey(content: string): string {
+	const fence = content.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)/);
+	if (!fence) return content;
+	const body = stripHologramKeyFromBody(fence[2]!);
+	if (body === fence[2]) return content;
+	return `${fence[1]}${body}${fence[3]}${content.slice(fence[0].length)}`;
+}
+
+/** The body-only variant: strip the key from a frontmatter block's contents. */
+function stripHologramKeyFromBody(body: string): string {
+	if (!/^holograms?:/im.test(body)) return body;
+	const lines = body.split('\n');
+	const kept: string[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i]!;
+		if (!/^holograms?:/i.test(line.trim())) {
+			kept.push(line);
+			continue;
+		}
+		// Key line: drop it, then drop any indented list items that belong to it.
+		// A flow list lives entirely on the key line, so this only fires for the
+		// block form. Anything not indented is a sibling key and must survive.
+		while (i + 1 < lines.length && /^\s+-\s?/.test(lines[i + 1]!)) {
+			i++;
+		}
+	}
+	return kept.join('\n');
+}
+
 /** Ensure a note declares `hologram-node: true`, preserving existing frontmatter. */
 export function ensureHologramContent(
 	content: string,
@@ -24,35 +62,16 @@ export function ensureHologramContent(
 			body = `hologram-node: true\n${body}`;
 			modified = true;
 		}
-		// Both spellings exist in the wild: `setHologramsInContent` writes the
-		// plural `holograms:` as a block list, while this function used to emit
-		// the singular `hologram:` as a flow list. Probing only `/^hologram:/`
-		// did NOT match `holograms:` (the `s` precedes the colon), so a note
-		// whose holograms had already been set got a second key appended, and
-		// `parseNoteFrontmatter` reads plural-first — silently discarding the
-		// tag that had just been added.
-		if (hologramTag) {
-			const key = /^holograms?:/im.exec(body);
-			if (!key) {
-				body = `${body}\nholograms: [${hologramTag}]`;
-				modified = true;
-			} else if (/^holograms?:\s*\[/im.test(body)) {
-				body = body.replace(/^(holograms?):\s*\[(.*)\]/im, `$1: [$2, ${hologramTag}]`);
-				modified = true;
-			} else {
-				// Existing block list: append an item rather than add a rival key.
-				const lines = body.split('\n');
-				const at = lines.findIndex((l) => /^holograms?:/i.test(l));
-				if (at >= 0) {
-					let last = at;
-					for (let i = at + 1; i < lines.length && /^\s+-\s/.test(lines[i]!); i++) {
-						last = i;
-					}
-					lines.splice(last + 1, 0, `  - "${hologramTag.replace(/"/g, '\\"')}"`);
-					body = lines.join('\n');
-					modified = true;
-				}
-			}
+		// Directory location is the identity now, so the `holograms:` tag is not
+		// merely unused — it is actively harmful. A stale tag left in frontmatter
+		// would be re-read by `parseNoteFrontmatter` and resurrect the old
+		// multi-membership model the migration just dismantled. Strip it, whether
+		// it is a flow list (`holograms: [a, b]`) or a block list
+		// (`holograms:` followed by indented `- item` lines), and whether the key
+		// is spelled singular or plural.
+		if (/^holograms?:/im.test(body)) {
+			body = stripHologramKey(body);
+			modified = true;
 		}
 		if (!/^node-type:/im.test(body) && !/^note-type:/im.test(body)) {
 			body = `${body}\nnode-type: ${defaultNoteType}`;
@@ -66,8 +85,13 @@ export function ensureHologramContent(
 			res = `---\n${normalizeFrontmatterOrder(body.trim())}\n---${res.slice(m[0].length)}`;
 		}
 	} else {
-		res = `---\nhologram-node: true\nnode-type: ${defaultNoteType}\ncreated: ${created}\n${hologramTag ? `holograms: [${hologramTag}]` : ''}\n---\n\n${res}`;
+		res = `---\nhologram-node: true\nnode-type: ${defaultNoteType}\ncreated: ${created}\n---\n\n${res}`;
 	}
+
+	// A brand-new note body could still carry a `holograms:` key of its own, so
+	// strip after the frontmatter has been synthesised, not only on the branch
+	// that preserved existing frontmatter.
+	res = stripHologramKey(res);
 
 	// 2. Ensure sections
 	if (!findRelationsSection(res)) {
@@ -162,17 +186,12 @@ export function injectWikilinksAsRelations(content: string, source: TFile, plugi
 
 
 
-/** Find a free `Holograms/<basename>.md` path, appending ` 2`, ` 3`, … on collision. */
-export function nextAvailablePath(vault: Vault, baseName: string): string {
-	let name = baseName;
-	let i = 2;
-	let p = `${HOLOGRAM_FOLDER}/${name}.md`;
-	while (vault.getAbstractFileByPath(p)) {
-		name = `${baseName} ${i++}`;
-		p = `${HOLOGRAM_FOLDER}/${name}.md`;
-	}
-	return p;
-}
+/*
+ * Removed: `nextAvailablePath`. It built flat `hologram/<name>.md` paths, which
+ * is precisely the layout that no longer means anything — a note directly in
+ * `hologram/` has no hologram membership, so this helper would have silently
+ * produced orphan notes. Callers now compose `hologram/<hologram>/<name>.md`.
+ */
 
 export class ImportNoteModal extends FuzzySuggestModal<TFile> {
 	constructor(
@@ -212,10 +231,10 @@ export class HologramTagModal extends Modal {
 
 	onOpen() {
 		const { contentEl } = this;
-		contentEl.createEl('h2', { text: 'Enter hologram tag' });
+		contentEl.createEl('h2', { text: 'Enter hologram name' });
 		const setting = new Setting(contentEl);
 		let tag = '';
-		setting.setName('Tag').addText((text) =>
+		setting.setName('Hologram').addText((text) =>
 			text.onChange((value) => {
 				tag = value;
 			})
@@ -259,7 +278,7 @@ export function rewriteLinks(plugin: SemanticHologramPlugin, content: string): s
 	});
 }
 
-/** Copy a note into `Holograms/`, marking it as a hologram node, then rebuild the graph. */
+/** Copy a note into `holograms/<tag>/`, marking it as a hologram node, then rebuild the graph. */
 export async function importNoteIntoHolograms(plugin: SemanticHologramPlugin, source: TFile, hologramTag: string): Promise<TFile | null> {
 	const vault = plugin.app.vault;
 	if (plugin.isInScope(source.path)) {
@@ -273,7 +292,15 @@ export async function importNoteIntoHolograms(plugin: SemanticHologramPlugin, so
 	} catch {
 		// Folder already exists.
 	}
-	const destPath = `${HOLOGRAM_FOLDER}/${source.basename}.md`;
+	const destDir = `${HOLOGRAM_FOLDER}/${hologramTag}`;
+	try {
+		if (!vault.getAbstractFileByPath(destDir)) {
+			await vault.createFolder(destDir);
+		}
+	} catch {
+		// Already exists
+	}
+	const destPath = `${destDir}/${source.basename}.md`;
 	let newContent = '';
 	try {
 		newContent = await vault.read(source);

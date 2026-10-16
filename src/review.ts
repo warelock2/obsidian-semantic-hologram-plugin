@@ -21,12 +21,18 @@ export interface ReviewAddRequest {
 	reversed: boolean;
 }
 
-/** Copy notes into `Holograms/` with `hologram-node: true`, collision-safe names. */
+/** Copy notes into `hologram/<name>/` with `hologram-node: true`, collision-safe names. */
 export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFile[], hologramTag: string): Promise<TFile[]> {
 	const vault = plugin.app.vault;
+	// The directory *is* the membership now, so it has to exist before any file
+	// can land in it — `vault.create` will not create intermediate folders.
+	const destDir = hologramTag ? `${HOLOGRAM_FOLDER}/${hologramTag}` : HOLOGRAM_FOLDER;
 	try {
 		if (!vault.getAbstractFileByPath(HOLOGRAM_FOLDER)) {
 			await vault.createFolder(HOLOGRAM_FOLDER);
+		}
+		if (destDir !== HOLOGRAM_FOLDER && !vault.getAbstractFileByPath(destDir)) {
+			await vault.createFolder(destDir);
 		}
 	} catch {
 		// Folder already exists.
@@ -45,7 +51,7 @@ export async function bulkImportNotes(plugin: SemanticHologramPlugin, files: TFi
 			continue;
 		}
 		
-		const destPath = `${HOLOGRAM_FOLDER}/${source.basename}.md`;
+		const destPath = `${destDir}/${source.basename}.md`;
 		const existingFile = vault.getAbstractFileByPath(destPath);
 		if (existingFile instanceof TFile) {
 			const existingContent = await vault.read(existingFile);

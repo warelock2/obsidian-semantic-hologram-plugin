@@ -17,6 +17,8 @@ import type { GravitasScan } from './gravitas';
 import type { ScanGraph, ScanResult } from './diffraction';
 import { buildAdjacency, explainConnection, findNodeByRef, runScan } from './diffraction';
 import type { ScanLayerSettings } from './settings';
+import { HOLOGRAM_FOLDER } from './settings';
+import { moveDirInto, reportMoveResult, topLevelHologramDirs } from './hologramDirs';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
 
@@ -513,6 +515,15 @@ export class SemanticHologramView extends ItemView {
 	/** Screen px per world unit at the anchor's view depth (perspective); 0 = use viewScale. */
 	private anchorDragScale = 0;
 	private anchorDragOrigins = new Map<number, { x: number; y: number; z: number }>();
+	/** Index into activeAnchors() of the anchor currently under the drag, or -1. */
+	private anchorDropTarget = -1;
+	/** How far the pointer has travelled since the drag began, in px. */
+	private anchorDragTravel = 0;
+	/** Hologram folder being dragged, and the one it is hovering. */
+	private anchorDragSourceDir: string | null = null;
+	private anchorDragSourceAnchor = -1;
+	/** True when the drag has moved far enough to mean "reparent", not "reposition". */
+	private static readonly ANCHOR_REPARENT_PX = 24;
 	/** Union of every anchor group's member indices, for reveal-mode fading. */
 	private anchorMember = new Set<number>();
 	private hoverIndex = -1;
@@ -5306,6 +5317,10 @@ export class SemanticHologramView extends ItemView {
 		this.anchorDragging = true;
 		this.anchorDragStartX = e.clientX;
 		this.anchorDragStartY = e.clientY;
+		this.anchorDragTravel = 0;
+		this.anchorDropTarget = -1;
+		this.anchorDragSourceAnchor = gi;
+		this.anchorDragSourceDir = this.anchorDirectoryOf(g);
 		// Freeze the screen-parallel basis at drag start so the whole drag stays
 		// in one x'y' plane even if the user rotates mid-drag.
 		this.anchorDragBasis = [...this.rotM];
@@ -5336,6 +5351,14 @@ export class SemanticHologramView extends ItemView {
 		const vs = (this.is3D && this.anchorDragScale > 0 ? this.anchorDragScale : this.viewScale) || 1;
 		const dsx = (e.clientX - this.anchorDragStartX) / vs;
 		const dsy = (e.clientY - this.anchorDragStartY) / vs;
+		this.anchorDragTravel = Math.hypot(e.clientX - this.anchorDragStartX, e.clientY - this.anchorDragStartY);
+		// Only arm a drop target once the drag is clearly a drag, so a small
+		// reposition that happens to start over another anchor does not reparent
+		// anything by accident.
+		if (this.anchorDragTravel >= SemanticHologramView.ANCHOR_REPARENT_PX) {
+			const over = this.hitTestAnchor(e.clientX, e.clientY);
+			this.anchorDropTarget = over === this.anchorDragSourceAnchor ? -1 : over;
+		}
 		let dx = dsx;
 		let dy = dsy;
 		let dz = 0;
@@ -5361,22 +5384,83 @@ export class SemanticHologramView extends ItemView {
 
 	/** Release the anchor drag, un-pin the members, and commit their new homes. */
 	private endAnchorDrag(): void {
+		const dropTarget = this.anchorDropTarget;
+		const sourceDir = this.anchorDragSourceDir;
+		this.resetAnchorDrag();
 		for (const i of this.anchorDragOrigins.keys()) {
 			const n = this.nodes[i];
-			if (!n) {
-				continue;
-			}
+			if (!n) continue;
 			n.pinned = false;
 			n.homeX = n.x;
 			n.homeY = n.y;
 			n.homeZ = n.z;
 			n.homeSet = true;
 		}
+		// Nodes were only repositioned for the visual preview; the membership
+		// change is the folder move, which is what the graph is rebuilt from.
+		if (dropTarget >= 0 && sourceDir) {
+			const destDir = this.anchorDirectoryOf(this.activeAnchors()[dropTarget]!);
+			if (destDir) void this.reparentAnchor(sourceDir, destDir);
+		}
+	}
+
+	/** Clear anchor-drag state without touching node homes. */
+	private resetAnchorDrag(): void {
 		this.anchorDragging = false;
 		this.anchorDragOrigins.clear();
 		this.anchorDragBasis = null;
+		this.anchorDragTravel = 0;
+		this.anchorDropTarget = -1;
+		this.anchorDragSourceDir = null;
+		this.anchorDragSourceAnchor = -1;
 		this.pointerDown = false;
 		this.updateCursor();
+	}
+
+	/** Abort an in-flight anchor drag, restoring the members' original positions. */
+	private cancelAnchorDrag(): void {
+		for (const [i, orig] of this.anchorDragOrigins) {
+			const n = this.nodes[i];
+			if (!n) continue;
+			n.x = orig.x;
+			n.y = orig.y;
+			n.z = orig.z;
+			n.pinned = false;
+		}
+		this.resetAnchorDrag();
+	}
+
+	/**
+	 * The hologram folder an anchor represents.
+	 *
+	 * An anchor group is keyed by the folder name its members share, so this is
+	 * the reverse of `HologramService.readTagsFromPath`. Returns null for the
+	 * synthetic union anchor, which has no folder of its own and so must never be
+	 * a drag source or a drop target.
+	 */
+	private anchorDirectoryOf(g: AnchorGroup | undefined): string | null {
+		if (!g || g.id === '__union__') return null;
+		const name = g.id;
+		if (!name) return null;
+		// Prefer the real folder over the derived name: a union anchor's members
+		// can span folders, and an anchor whose folder was renamed mid-session
+		// should resolve to where the notes actually are.
+		const tops = topLevelHologramDirs(this.app.vault);
+		const match = tops.find((f) => f.name === name);
+		return match ? match.path : `${HOLOGRAM_FOLDER}/${name}`;
+	}
+
+	/** Move a hologram folder under another, then rebuild from the new tree. */
+	private async reparentAnchor(sourceDir: string, destDir: string): Promise<void> {
+		const res = await moveDirInto(this.app.vault, sourceDir, destDir);
+		reportMoveResult(res, 'Reparent');
+		if (res.moved.length) {
+			// The folder rename raises the vault event that re-derives the cache
+			// and rebuilds; force both here too so the drag result is visible
+			// immediately rather than a tick later.
+			await this.plugin.hologramService.loadCache();
+			await this.plugin.refreshGraphs();
+		}
 	}
 
 	private drawAnchors(): void {
@@ -5406,11 +5490,18 @@ export class SemanticHologramView extends ItemView {
 			const isUnion = it.g.id === '__union__';
 			const selected = this.selectedAnchor === it.i;
 			const hovered = this.hoveredAnchor === it.i;
-			const color = selected ? ANCHOR_SELECTED_COLOR : (isUnion ? ANCHOR_UNION_COLOR : ANCHOR_COLOR);
-			const rad = ANCHOR_RADIUS + (isUnion ? 4 : 0) + (hovered || selected ? 3 : 0);
+			// The folder this drag would land in: filled, so the user can see the
+			// membership change they are about to commit before letting go.
+			const dropTarget = this.anchorDragging && this.anchorDropTarget === it.i;
+			const color = dropTarget
+				? ANCHOR_SELECTED_COLOR
+				: selected
+					? ANCHOR_SELECTED_COLOR
+					: (isUnion ? ANCHOR_UNION_COLOR : ANCHOR_COLOR);
+			const rad = ANCHOR_RADIUS + (isUnion ? 4 : 0) + (hovered || selected ? 3 : 0) + (dropTarget ? 5 : 0);
 			ctx.beginPath();
 			ctx.arc(it.sx, it.sy, rad, 0, Math.PI * 2);
-			ctx.fillStyle = this.withAlpha(color, 0.18);
+			ctx.fillStyle = this.withAlpha(color, dropTarget ? 0.45 : 0.18);
 			ctx.fill();
 			ctx.lineWidth = isUnion ? 3 : 2;
 			ctx.strokeStyle = color;
@@ -5666,7 +5757,13 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		const key = e.key.toLowerCase();
-		if (e.key === 'PrintScreen' && !e.repeat) {
+		if (e.key === 'Escape' && this.anchorDragging && !e.repeat) {
+			// Esc aborts an in-flight reparent and puts the hologram back where it
+			// was. Leaving the nodes at the release point would persist a layout
+			// the user explicitly backed out of.
+			e.preventDefault();
+			this.cancelAnchorDrag();
+		} else if (e.key === 'PrintScreen' && !e.repeat) {
 			e.preventDefault();
 			void this.takeScreenshot();
 		} else if (key === '1' && !e.repeat) {

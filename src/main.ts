@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Plugin, Setting, TFile, View, WorkspaceLeaf } from 'obsidian';
+import { App, Modal, Notice, Plugin, Setting, TFile, TFolder, View, WorkspaceLeaf } from 'obsidian';
 import { readFileSync, watch, writeFileSync } from 'fs';
 import { join } from 'path';
 import {
@@ -30,6 +30,8 @@ import { IncomingImportModal } from './incomingImportModal';
 
 import { HologramService } from './hologramService';
 import { migrateToDirectories } from './migrate';
+import { unEmulsifyAll, reportMoveResult } from './hologramDirs';
+import { ExportNoteModal } from './exportNote';
 
 /** Vault file the MCP server writes to ask the plugin to run something. */
 const COMMAND_FILE = '.hologram-command.json';
@@ -128,6 +130,18 @@ export default class SemanticHologramPlugin extends Plugin {
 		);
 		this.registerEvent(
 			this.app.vault.on('rename', (file, oldPath) => {
+				if (file instanceof TFolder) {
+					// A folder move *is* a membership change: hologram/<a>/note.md
+					// belongs to `a`, and reparenting the folder is how a merge is
+					// expressed. Ignoring folder renames — as this handler used to —
+					// meant dragging an anchor onto another updated the filesystem
+					// and left the graph stale until something else forced a rebuild.
+					if (file.path.startsWith(`${HOLOGRAM_FOLDER}/`) || oldPath.startsWith(`${HOLOGRAM_FOLDER}/`)) {
+						this.scheduleCacheRefresh();
+						this.scheduleRebuild();
+					}
+					return;
+				}
 				if (!(file instanceof TFile)) {
 					return;
 				}
@@ -324,6 +338,27 @@ export default class SemanticHologramPlugin extends Plugin {
 			name: 'Show hologram controls',
 			callback: () => {
 				void this.activateControlsView();
+			},
+		});
+
+		this.addCommand({
+			id: 'un-emulsify-holograms',
+			name: 'Un-emulsify: lift nested hologram folders back to the top level',
+			callback: async () => {
+				const res = await unEmulsifyAll(this.app.vault);
+				reportMoveResult(res, 'Un-emulsify');
+				if (res.moved.length) {
+					await this.hologramService.loadCache();
+					await this.refreshGraphs();
+				}
+			},
+		});
+
+		this.addCommand({
+			id: 'export-note-from-hologram',
+			name: 'Export hologram node as a plain note',
+			callback: () => {
+				new ExportNoteModal(this.app, this).open();
 			},
 		});
 

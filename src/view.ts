@@ -1407,11 +1407,27 @@ export class SemanticHologramView extends ItemView {
 		this.resizeObserver.observe(this.canvas);
 		this.resize();
 
+		// A reopened view keeps its instance state, including `userAdjustedView`
+		// from the previous session's panning. Nothing here is a framing the user
+		// asked to preserve — they just opened the view — so clear it. Obsidian
+		// reuses the workspace leaf, so that flag otherwise survives close/reopen
+		// and stays latched true, which suppresses BOTH the settle-time fit (below)
+		// and the steady-state auto-fit. The graph then comes up stranded wherever
+		// the last session left the camera, and the only way to recover is a manual
+		// reset + fit. resetView() restores the home basis and the stored focal
+		// point, and clears the flag itself.
+		this.userAdjustedView = false;
+		this.resetView();
+
 		void this.buildGraph().then(() => {
-			// First open frames the graph. This lives at the call site rather than
-			// inside buildGraph so that an incremental rebuild — which happens on
-			// every save — cannot move the camera out from under the user.
-			this.fitToView();
+			// No inline fitToView() here. This call site fired it against *seed*
+			// positions — the layout had not run yet — so it framed the seed ring
+			// and the graph then expanded out of that frame. buildGraph() runs
+			// non-incrementally on open, which clears `settled`, so the settle
+			// detector re-arms and its own fitToView() (guarded by
+			// `!userAdjustedView`, now reachable) frames real positions once. The
+			// call still lives outside buildGraph so an incremental rebuild — which
+			// happens on every save — cannot move the camera out from under the user.
 			this.notifyGraphChanged();
 		});
 

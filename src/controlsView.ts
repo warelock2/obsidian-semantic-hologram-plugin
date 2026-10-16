@@ -142,15 +142,26 @@ export class SemanticHologramControlsView extends ItemView {
 	public onCameraChange(): void {
 		const view = this.getView();
 		if (!view) return;
+		const is3D = this.plugin.settings.hologramMode === '3d';
 
 		const state = view.getCameraState();
-		if (this.cameraInputs[0]) this.cameraInputs[0].value = state.azimuth.toFixed(1);
-		if (this.cameraInputs[1]) this.cameraInputs[1].value = state.elevation.toFixed(1);
+		if (this.cameraInputs[0]) {
+			this.cameraInputs[0].value = is3D ? state.azimuth.toFixed(1) : '';
+			this.cameraInputs[0].disabled = !is3D;
+		}
+		if (this.cameraInputs[1]) {
+			this.cameraInputs[1].value = is3D ? state.elevation.toFixed(1) : '';
+			this.cameraInputs[1].disabled = !is3D;
+		}
 
 		const focal = view.getFocalPoint();
 		if (this.focalInputs[0]) this.focalInputs[0].value = focal.x.toFixed(1);
 		if (this.focalInputs[1]) this.focalInputs[1].value = focal.y.toFixed(1);
-		if (this.focalInputs[2]) this.focalInputs[2].value = focal.z.toFixed(1);
+		// In 2D there is no z-component; clear and disable the z field.
+		if (this.focalInputs[2]) {
+			this.focalInputs[2].value = is3D ? focal.z.toFixed(1) : '';
+			this.focalInputs[2].disabled = !is3D;
+		}
 	}
 
 	/**
@@ -253,6 +264,7 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const view = this.getView();
 		const state = view ? view.getCameraState() : { elevation: 0, azimuth: 0, distance: 1000 };
+		const is3D = this.plugin.settings.hologramMode === '3d';
 
 		const header = contentEl.createDiv({ cls: 'sh-controls-header' });
 		header.createEl('h4', { text: 'Semantic Hologram' });
@@ -266,14 +278,16 @@ export class SemanticHologramControlsView extends ItemView {
 		cameraRow.style.gap = '5px';
 		cameraRow.style.alignItems = 'center';
 
-		const addInput = (label: string, value: number, onUpdate: (v: number) => void) => {
+		const addInput = (label: string, value: number, onUpdate: (v: number) => void, disabled = false) => {
 			if (label) {
-				cameraRow.createSpan({ text: label, cls: 'sh-controls-label', attr: { style: 'font-size: 10px;' } });
+				const span = cameraRow.createSpan({ text: label, cls: 'sh-controls-label', attr: { style: 'font-size: 10px;' } });
+				if (disabled) { span.style.opacity = '0.4'; }
 			}
 			const input = cameraRow.createEl('input', {
 				type: 'number',
 				attr: { value: value.toFixed(1), step: '1', style: 'width: 100%;' }
 			});
+			if (disabled) { input.disabled = true; input.style.opacity = '0.4'; }
 			input.addEventListener('change', () => onUpdate(parseFloat(input.value)));
 			this.cameraInputs.push(input);
 			return input;
@@ -282,8 +296,10 @@ export class SemanticHologramControlsView extends ItemView {
 		// θ′ is the yaw about the assembly's local up axis y′ and φ′ the pitch
 		// about its local right axis x′ — the body-relative angles the rotation
 		// controls modify. Home reads θ′ = 90, φ′ = 0 (docs sections 6.1, 6.3, 8).
-		addInput('θ (°)', state.azimuth, v => view?.setCameraState({ ...view.getCameraState(), azimuth: v }));
-		addInput('Φ (°)', state.elevation, v => view?.setCameraState({ ...view.getCameraState(), elevation: v }));
+		// These are 3D-only: a 2D canvas has no rotation, so the readout is
+		// greyed out and the inputs disabled rather than hidden outright.
+		addInput('θ (°)', state.azimuth, v => view?.setCameraState({ ...view.getCameraState(), azimuth: v }), !is3D);
+		addInput('Φ (°)', state.elevation, v => view?.setCameraState({ ...view.getCameraState(), elevation: v }), !is3D);
 		cameraRow.createDiv(); // Spacer
 
 		// Focal point controls
@@ -294,14 +310,16 @@ export class SemanticHologramControlsView extends ItemView {
 		focalRow.style.gap = '5px';
 		focalRow.style.alignItems = 'center';
 
-		const addFocalInput = (label: string, value: number, onUpdate: (v: number) => void) => {
+		const addFocalInput = (label: string, value: number, onUpdate: (v: number) => void, disabled = false) => {
 			if (label) {
-				focalRow.createSpan({ text: label, cls: 'sh-controls-label', attr: { style: 'font-size: 10px;' } });
+				const span = focalRow.createSpan({ text: label, cls: 'sh-controls-label', attr: { style: 'font-size: 10px;' } });
+				if (disabled) { span.style.opacity = '0.4'; }
 			}
 			const input = focalRow.createEl('input', {
 				type: 'number',
 				attr: { value: value.toFixed(1), step: '1', style: 'width: 100%;' }
 			});
+			if (disabled) { input.disabled = true; input.style.opacity = '0.4'; input.value = ''; }
 			input.addEventListener('change', () => onUpdate(parseFloat(input.value)));
 			this.focalInputs.push(input);
 			return input;
@@ -310,7 +328,8 @@ export class SemanticHologramControlsView extends ItemView {
 		const initialFocal = view ? view.getFocalPoint() : { x: 0, y: 0, z: 0 };
 		addFocalInput('Focal', initialFocal.x, v => { if (view) { view.setFocalPoint(v, view.getFocalPoint().y); view.requestRedraw(); } });
 		addFocalInput('', initialFocal.y, v => { if (view) { view.setFocalPoint(view.getFocalPoint().x, v); view.requestRedraw(); } });
-		addFocalInput('', initialFocal.z, v => { if (view) { view.setFocalPoint(view.getFocalPoint().x, view.getFocalPoint().y, v); view.requestRedraw(); } });
+		// z is 3D-only: greyed out, cleared and disabled in 2D.
+		addFocalInput('', initialFocal.z, v => { if (view) { view.setFocalPoint(view.getFocalPoint().x, view.getFocalPoint().y, v); view.requestRedraw(); } }, !is3D);
 
 
 
@@ -955,10 +974,21 @@ export class SemanticHologramControlsView extends ItemView {
 		const gifMode = contentEl.createDiv({ cls: 'sh-controls-row' });
 		gifMode.createSpan({ text: 'GIF Mode:', cls: 'sh-controls-label' });
 		const gifSelect = gifMode.createEl('select', { cls: 'sh-controls-select' });
-		gifSelect.createEl('option', { value: 'full', text: 'Full Rotation' });
 		gifSelect.createEl('option', { value: 'time', text: 'Fixed Time' });
 		gifSelect.createEl('option', { value: 'continuous', text: 'Continuous' });
-		gifSelect.value = this.plugin.settings.gifMode ?? 'full';
+		// 'Full Rotation' is 3D-only; gate it behind is3D.
+		const fullOption = gifSelect.createEl('option', { value: 'full', text: 'Full Rotation' });
+		fullOption.disabled = !is3D;
+		// In 2D 'full' is not a valid selection, so fall back to 'time' rather
+		// than leaving the disabled option looking selected.
+		const gifModeDefault = is3D
+			? (this.plugin.settings.gifMode ?? 'full')
+			: (this.plugin.settings.gifMode === 'full' || !this.plugin.settings.gifMode ? 'time' : this.plugin.settings.gifMode);
+		gifSelect.value = gifModeDefault;
+		if (!is3D && this.plugin.settings.gifMode === 'full') {
+			this.plugin.settings.gifMode = 'time';
+			void this.plugin.saveSettings();
+		}
 		gifSelect.addEventListener('change', () => {
 			this.plugin.settings.gifMode = gifSelect.value as 'time' | 'full' | 'continuous';
 			void this.plugin.saveSettings();

@@ -246,6 +246,18 @@ const ANCHOR_UNION_COLOR = '#60A5FA';
 const PERSP_NEAR = 1;
 const PERSP_STANDOFF_MIN = 50;
 
+// "Standard zoom" — the magnification reset restores. Expressed as `viewScale`
+// (screen pixels per world unit) rather than as a bare cameraDistance of 1000
+// so the meaning is explicit and mode-independent: 3D gets it via
+// viewScale = baseCameraDistance / R, 2D sets it directly. One world unit
+// rendering at one pixel. Sits well inside PHYS.zoomMin..zoomMax.
+const HOME_VIEW_SCALE = 1;
+
+// Fraction of the canvas reserved as a border by `fitToView`. Fit only ever
+// zooms OUT, so this margin keeps nodes off the very edge of the viewport
+// rather than flush against it.
+const FIT_MARGIN = 0.08;
+
 // Projection-mode glyphs, deliberately distinct from the 2D/3D badge. Both show
 // a projection plane (vertical bar, right), an object (small rect, left) and the
 // rays between them: perspective's rays diverge from a focal point (dot) to the
@@ -313,10 +325,29 @@ export class SemanticHologramView extends ItemView {
 	private searchIndex: Map<string, SearchIndexEntry> = new Map();
 	private faces: number[][] = [];
 	private loadingNotice: Notice | null = null;
+	/**
+	 * Stays up from "graph built" until the layout stops moving. Distinct from
+	 * `loadingNotice` because the two answer different questions: "Loading"
+	 * means there are no nodes yet; "Settling" means the nodes exist but
+	 * physics is still moving them, so a drifting view is expected, not a
+	 * failure. It also warns that grabbing the canvas during this window
+	 * would cancel the pending framing.
+	 */
+	private settlingNotice: Notice | null = null;
 	private raf = 0;
 	private gifFrameCounter = 0;
-	private initialCameraState: { azimuth: number; elevation: number; distance: number } | null = null;
-	private initialFocalPoint: [number, number, number] | null = null;
+	/**
+	 * Has this view instance framed itself yet? Recentre + reset + fit runs
+	 * exactly once per view, on the first settle.
+	 *
+	 * Deliberately a per-instance one-shot that is never cleared. An
+	 * incremental rebuild — every save, via metadataCache 'resolved' —
+	 * re-arms physics and therefore settles again, so a gate that reset here
+	 * would re-frame the camera on every keystroke-save. Because the
+	 * first-settle reframe runs unconditionally (no `userAdjustedView`
+	 * guard), this field is the ONLY thing preventing that.
+	 */
+	private hasFramedOnOpen = false;
 	// Demand-driven render loop: it only keeps requesting animation frames while
 	// there is work to do (physics running, autorotation, an active gesture, held
 	// keys, recording, or residual motion still bleeding off). `wake()` restarts
@@ -700,7 +731,7 @@ export class SemanticHologramView extends ItemView {
 		const w = this.canvas?.clientWidth ?? 1;
 		const h = this.canvas?.clientHeight ?? 1;
 		const camX = this.viewX + w / (2 * this.viewScale);
-		const camY = this.viewY + h / (2 * this.viewScale);
+		const camY = this.viewY - h / (2 * this.viewScale);
 		const camZ = 0;
 		const m = this.rotM;
 		return {
@@ -783,6 +814,10 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	setMode(mode: '2d' | '3d'): void {
+		// Preserve the focal point (world x,y) across the mode switch. The
+		// focal point is the independent variable; bookkeeping derives from it.
+		const focalBefore = this.getFocalPoint();
+
 		if (this.modeBanner) {
 			this.modeBanner.innerHTML = mode === '3d' ? ICON_MODE_3D : ICON_MODE_2D;
 			this.modeBanner.classList.toggle('is-3d', mode === '3d');
@@ -796,6 +831,18 @@ export class SemanticHologramView extends ItemView {
 		this.updateMagnifyTooltips();
 		this.updateToolDock();
 		this.updateCursor();
+
+		// After switching, derive bookkeeping from the preserved focal point.
+		// 2D: viewX/viewY derived from focal point (drop z). 3D: target stored directly.
+		if (mode === '2d') {
+			const w = this.canvas?.clientWidth ?? 800;
+			const h = this.canvas?.clientHeight ?? 600;
+			const scale = this.viewScale || 1;
+			this.viewX = focalBefore.x - w / (2 * scale);
+			this.viewY = focalBefore.y + h / (2 * scale);
+		} else {
+			this.target = [focalBefore.x, focalBefore.y, 0];
+		}
 	}
 
 	setTool(tool: HologramTool): void {
@@ -926,7 +973,7 @@ export class SemanticHologramView extends ItemView {
 		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.viewScale * factor));
 		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = focalX - halfW / this.viewScale;
-		this.viewY = focalY - halfH / this.viewScale;
+		this.viewY = focalY + halfH / this.viewScale;
 	}
 
 	/** Increase the magnification of the graph. In 3D this changes the standoff
@@ -1408,26 +1455,26 @@ export class SemanticHologramView extends ItemView {
 		this.resize();
 
 		// A reopened view keeps its instance state, including `userAdjustedView`
-		// from the previous session's panning. Nothing here is a framing the user
-		// asked to preserve — they just opened the view — so clear it. Obsidian
-		// reuses the workspace leaf, so that flag otherwise survives close/reopen
-		// and stays latched true, which suppresses BOTH the settle-time fit (below)
-		// and the steady-state auto-fit. The graph then comes up stranded wherever
-		// the last session left the camera, and the only way to recover is a manual
-		// reset + fit. resetView() restores the home basis and the stored focal
-		// point, and clears the flag itself.
+		// from the previous session's panning. Obsidian reuses the workspace
+		// leaf, so that flag otherwise survives close/reopen and stays latched
+		// true, which suppresses the in-settle auto-fit for the whole session —
+		// nodes then fly off-screen while settling with nothing pulling the
+		// camera back. Clear it: nothing here is a framing the user asked to
+		// preserve, they just opened the view.
+		//
+		// Framing itself does NOT happen here. It happens once, at first
+		// settle, once the layout has produced real positions — see the settle
+		// branch. Resetting before the build would frame seed positions, which
+		// is the bug this replaced.
 		this.userAdjustedView = false;
-		this.resetView();
 
 		void this.buildGraph().then(() => {
-			// No inline fitToView() here. This call site fired it against *seed*
-			// positions — the layout had not run yet — so it framed the seed ring
-			// and the graph then expanded out of that frame. buildGraph() runs
-			// non-incrementally on open, which clears `settled`, so the settle
-			// detector re-arms and its own fitToView() (guarded by
-			// `!userAdjustedView`, now reachable) frames real positions once. The
-			// call still lives outside buildGraph so an incremental rebuild — which
-			// happens on every save — cannot move the camera out from under the user.
+			// No fit here either, for the same reason: the layout has not run
+			// yet. buildGraph() runs non-incrementally on open, which clears
+			// `settled`, so the settle detector re-arms and frames once, from
+			// real geometry. Keeping the call out of buildGraph also means an
+			// incremental rebuild — which happens on every save — cannot move
+			// the camera out from under the user.
 			this.notifyGraphChanged();
 		});
 
@@ -1441,6 +1488,13 @@ export class SemanticHologramView extends ItemView {
 	onClose(): Promise<void> {
 		this.loopRunning = false;
 		cancelAnimationFrame(this.raf);
+		// A duration-0 Notice belongs to the app, not to this view. Without
+		// this, closing the tab mid-settle (or mid-load) leaves the toast on
+		// screen forever, pointing at a view that no longer exists.
+		this.settlingNotice?.hide();
+		this.settlingNotice = null;
+		this.loadingNotice?.hide();
+		this.loadingNotice = null;
 		if (this.resizeObserver) {
 			this.resizeObserver.disconnect();
 			this.resizeObserver = null;
@@ -1875,6 +1929,14 @@ export class SemanticHologramView extends ItemView {
 
 		this.loadingNotice?.hide();
 		this.loadingNotice = null;
+		// Fresh open only — the same gate the loading notice uses. An
+		// incremental rebuild also re-arms physics and settles again, and that
+		// happens on every save; showing "Graph is settling…" there would make
+		// routine autosaves look like something is wrong. Dismissed at first
+		// settle, or in onClose if the tab is closed first.
+		if (!incremental && !this.settlingNotice) {
+			this.settlingNotice = new Notice('Graph is settling…', 0);
+		}
 		// Captured before the swap: the shape of the previous graph is what tells
 		// us whether physics needs to re-arm below.
 		const prevNodeCount = this.nodes?.length ?? 0;
@@ -2455,7 +2517,7 @@ export class SemanticHologramView extends ItemView {
 					this.target[2] -= panZ;
 				} else {
 					this.viewX -= panX;
-					this.viewY += panY;
+					this.viewY -= panY;
 				}
 			}
 			this.markViewAdjusted();
@@ -2600,16 +2662,22 @@ export class SemanticHologramView extends ItemView {
 						}
 					}
 				this.settled = true;
-				if (!this.userAdjustedView) {
+				// Dismiss FIRST. The toast says the graph is still settling, and
+				// the camera is about to move — leaving it up would have the user
+				// watching a snap while the message claims it is still moving.
+				this.settlingNotice?.hide();
+				this.settlingNotice = null;
+				// One-shot per view instance, and deliberately unconditional — no
+				// `userAdjustedView` guard. A window that was just opened has no
+				// framing worth preserving: anything the user did during the
+				// settle was fiddling with a graph that was still moving, and
+				// nothing survives a close anyway. `hasFramedOnOpen` is what
+				// stops a later re-settle (every save) from repeating this.
+				if (!this.hasFramedOnOpen) {
+					this.hasFramedOnOpen = true;
+					this.recenterOnOrigin();
+					this.resetView();
 					this.fitToView();
-				}
-				if (!this.initialCameraState) {
-					this.initialCameraState = {
-						azimuth: this.currentAzimuth,
-						elevation: this.currentElevation,
-						distance: this.cameraDistance,
-					};
-					this.initialFocalPoint = [...this.target];
 				}
 				}
 			} else {
@@ -2661,7 +2729,18 @@ export class SemanticHologramView extends ItemView {
 			const h = this.canvas?.clientHeight ?? 600;
 			return h / 2 + y * this.projectionScale(z);
 		}
-		return (y - this.viewY) * this.viewScale;
+		// 2D carries the ONE reflection in the whole 2D model, and it lives here
+		// at the canvas boundary. The world area reference frame and the prime
+		// reference frame are both y-up; the canvas frame is y-down. So a point
+		// ABOVE the focal point must map to a SMALLER canvas y.
+		//
+		// `viewY` keeps its meaning — the world y at the canvas TOP edge — which
+		// is what makes this a pure sign change with no canvas-height term. Do
+		// NOT "simplify" this to a + sign: an unsigned version renders mirrored
+		// while node positions, hit-testing and the gizmos all stay
+		// self-consistent, so nothing looks obviously broken.
+		// See docs/2d-virtual-screen-frames.md §3.2.
+		return (this.viewY - y) * this.viewScale;
 	}
 
 	private toWorldX(sx: number, z = 0): number {
@@ -2677,163 +2756,306 @@ export class SemanticHologramView extends ItemView {
 			const h = this.canvas?.clientHeight ?? 600;
 			return (sy - h / 2) / this.projectionScale(z);
 		}
-		return sy / this.viewScale + this.viewY;
+		// Inverse of the 2D branch of toScreenY — same reflection, see above.
+		return this.viewY - sy / this.viewScale;
 	}
 
+	/**
+	 * Zoom out — and only zoom out — until every visible node is on screen.
+	 *
+	 * Never moves the focal point and never zooms in: if everything already
+	 * fits at the current magnification, this does nothing at all. Use it
+	 * alone to back off without losing your bearings, or after `resetView()`
+	 * to go home and still see the whole graph.
+	 *
+	 * Frames the VISIBLE nodes. A hologram filter that hides most of the
+	 * graph should not force a zoom that accounts for hidden content.
+	 *
+	 * A node selection deliberately does NOT change what is framed; framing
+	 * a subset was removed rather than left to branch here.
+	 */
 	private fitToView(): void {
 		const canvas = this.canvas;
 		if (!canvas || this.nodes.length === 0) {
 			return;
 		}
-		// Preserve the orientation only when the user has already moved the
-		// camera and is now explicitly reframing a selection. An automatic fit
-		// (during settle, or the home fit) always restores the home basis, so
-		// the initial view is never a stale identity matrix.
-		const preserveOrientation = this.userAdjustedView;
-		this.userAdjustedView = false;
-
-		// Selection-aware fit. When there is a node selection or a hologram
-		// filter, frame exactly that subset and — when the user is reframing —
-		// keep the current orientation, moving only the focal point onto the
-		// subset's centroid. With nothing selected we keep the long-standing
-		// home behaviour: reset to θ=90°, φ=0° and frame the whole graph.
-		const hologramFiltered = this.nodes.filter((node) => this.nodeMatchesSelectedHolograms(node));
-		let selectionNodes: GraphNode[];
-		if (this.selected.size > 0) {
-			selectionNodes = [...this.selected]
-				.map((i) => this.nodes[i])
-				.filter((n): n is GraphNode => !!n);
-		} else if (this.plugin.settings.selectedHolograms.length > 0 && hologramFiltered.length > 0) {
-			selectionNodes = hologramFiltered;
-		} else {
-			selectionNodes = [];
+		const visibleNodes = this.nodes.filter((node) => this.isNodeVisible(node));
+		if (visibleNodes.length === 0) {
+			return;
 		}
-		const hasSelection = selectionNodes.length > 0;
-		const targetNodes = hasSelection ? selectionNodes : this.nodes;
 
-		this.frameNodes(targetNodes, preserveOrientation, hasSelection);
-
-		console.log(`[SH] fitToView (${hasSelection ? 'selection' : 'home'}): nodes=${targetNodes.length}/${this.nodes.length} canvas=${this.canvas?.clientWidth}x${this.canvas?.clientHeight} view=(${this.is3D ? this.target : `${this.viewX.toFixed(1)},${this.viewY.toFixed(1)}`}) scale=${this.viewScale.toFixed(3)}`);
+		this.frameNodes(visibleNodes);
+		// Record the camera as deliberately framed so the in-settle auto-fit
+		// stops fighting it. On first settle this runs after resetView, so the
+		// flag legitimately ends up true: the window is framed and should now
+		// hold still.
 		this.markViewAdjusted();
 	}
 
+	/**
+	 * The panic button: put the camera at the canonical home pose.
+	 *
+	 * Focal point at the world origin, home basis (θ=90°, φ=0°), standard
+	 * zoom. This is a FIXED pose, not a replay of a stored snapshot. The old
+	 * implementation restored `initialCameraState` / `initialFocalPoint`,
+	 * captured once at the first settle of the view's life, which quietly
+	 * meant "reset" = "back to how it looked the very first time" rather
+	 * than "back to a known place" — and stopped framing correctly at all
+	 * once the graph outgrew that one snapshot.
+	 *
+	 * 2D keeps no `target` at all: it stores `viewX`/`viewY`, the world
+	 * coordinate landing on the canvas TOP-LEFT. So "origin at the centre"
+	 * has to be solved backwards from `toScreenX(x) = (x − viewX) · viewScale`.
+	 * The two modes produce the same picture; only the bookkeeping differs.
+	 */
 	private resetView(): void {
-		if (this.initialCameraState) {
-			this.setCameraState({ ...this.initialCameraState });
-		}
-		if (this.initialFocalPoint) {
-			this.target = [...this.initialFocalPoint];
-		}
+		const canvas = this.canvas;
+		const w = canvas?.clientWidth ?? 800;
+		const h = canvas?.clientHeight ?? 600;
+		this.baseCameraDistance = 1000;
+		this.viewScale = HOME_VIEW_SCALE;
+		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.userAdjustedView = false;
+		// Auto-rotate is a setting and is left alone, but the accumulated spin
+		// is zeroed so that if rotation is on it resumes from home rather than
+		// carrying on from wherever it had drifted to.
+		this.totalSpin = 0;
+		this.rotCx = 0;
+		this.rotCy = 0;
+		this.rotCz = 0;
+		this.camZ = 0;
+		if (this.is3D) {
+			this.target = [0, 0, 0];
+			// Rows are [Rv; -Uv; F]. The up row is negated ON PURPOSE: it keeps
+			// the canvas mapping an affine scale with no sign flip in
+			// toScreenY, and keeps det(R_rot) = +1. Un-negating it turns the
+			// basis into a reflection and the Gram-Schmidt cross product in
+			// updateCameraMatrix silently sign-flips F. Do not "fix" this.
+			this.rotM = [
+				1, 0, 0,
+				0, -1, 0,
+				0, 0, -1
+			];
+		} else {
+			// The 2D home basis differs from 3D's in the third row.
+			this.rotM = [
+				1, 0, 0,
+				0, -1, 0,
+				0, 0, 1
+			];
+			this.viewX = -w / (2 * this.viewScale);
+			this.viewY = h / (2 * this.viewScale);
+		}
+		this.updateAnglesFromMatrix();
 		this.wake();
 	}
 
 	/**
-	 * Frame `targetNodes` exactly, moving the focal point onto their centroid.
-	 * `preserveOrientation` keeps the current basis (only the focal point moves);
-	 * otherwise a selection resets to the home basis. `hasSelection` is false
-	 * only for the whole-graph home fit, which frames about the world origin.
-	 * Does not touch `userAdjustedView` or the controls panel; callers own that.
+	 * Translate the whole model so its centroid lands on the world origin.
+	 *
+	 * This is what makes reset's promise true. Without it, "focal point at
+	 * the origin" and "the notes are centred" are two different statements:
+	 * the force layout drifts well away from the origin in practice (a
+	 * settled 25-node graph measured a centroid around (−555, −465)), so
+	 * pinning the focal point to the origin frames a lot of empty canvas.
+	 *
+	 * Positions AND their home positions move by the same delta. The physics
+	 * loop runs a home spring pulling nodes back toward `homeX`, so shifting
+	 * only `x` would let it quietly undo the translation on the next frame.
+	 *
+	 * The centroid is over ALL nodes, not the visible subset, so toggling a
+	 * hologram filter cannot re-derive where the origin is. Nothing is
+	 * persisted — this is in-memory layout state, discarded on close.
 	 */
-	private frameNodes(targetNodes: GraphNode[], preserveOrientation: boolean, hasSelection: boolean): void {
-		const canvas = this.canvas;
-		if (!canvas || targetNodes.length === 0) {
+	private recenterOnOrigin(): void {
+		const nodes = this.nodes;
+		if (nodes.length === 0) {
 			return;
+		}
+		let cx = 0;
+		let cy = 0;
+		let cz = 0;
+		for (const n of nodes) {
+			cx += n.x;
+			cy += n.y;
+			if (this.is3D) {
+				cz += n.z;
+			}
+		}
+		cx /= nodes.length;
+		cy /= nodes.length;
+		cz /= nodes.length;
+		if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(cz)) {
+			return;
+		}
+		// In 2D the z axis is unused, so averaging and shifting it would
+		// inject noise into a coordinate that mode never reads.
+		const dz = this.is3D ? -cz : 0;
+		for (const n of nodes) {
+			n.x -= cx;
+			n.y -= cy;
+			n.z += dz;
+			n.homeX -= cx;
+			n.homeY -= cy;
+			n.homeZ += dz;
+		}
+	}
+
+	/**
+	 * Viewport half-extents usable by a fit, or null if the canvas is collapsed
+	 * or hidden (there is no meaningful viewport to fit into).
+	 */
+	private fitViewport(): { w: number; h: number; halfW: number; halfH: number } | null {
+		const canvas = this.canvas;
+		if (!canvas) {
+			return null;
 		}
 		const w = canvas.clientWidth;
 		const h = canvas.clientHeight;
+		const halfW = (w / 2) * (1 - 2 * FIT_MARGIN);
+		const halfH = (h / 2) * (1 - 2 * FIT_MARGIN);
+		if (!(halfW > 0) || !(halfH > 0)) {
+			return null;
+		}
+		return { w, h, halfW, halfH };
+	}
 
-		// Centroid of the nodes being framed (world space). For the home fit
-		// this is the graph's centroid, but the home path deliberately frames
-		// about the origin, so only the selection path uses it.
+	/**
+	 * The scale required to bring `targetNodes` fully on screen, measured from
+	 * the anchor (cx, cy, cz) — the point the projection is centred on.
+	 * Callers decide whether applying it means zooming in, out, or either.
+	 *
+	 * Orthographic has a single uniform scale for every node, so this is one
+	 * closed form. Perspective scales each node by `d/(z_i + R)`, which is
+	 * normally NOT one factor for the whole graph — near nodes shrink
+	 * differently from far ones for any given R. But `r_i`, the rotated
+	 * position relative to the anchor, does NOT depend on R, so the bound
+	 * inverts exactly:
+	 *
+	 *     (|r_i.x| + radius) * d / (z_i + R) <= halfW
+	 *  =>  R >= (|r_i.x| + radius) * d / halfW - z_i
+	 *
+	 * Max over nodes and both axes. The previous implementation ignored depth
+	 * entirely, which is why its own comment called the result "only
+	 * approximate for off-plane nodes under perspective".
+	 */
+	private measureFit(
+		targetNodes: GraphNode[],
+		cx: number,
+		cy: number,
+		cz: number,
+		halfW: number,
+		halfH: number,
+	): number {
+		if (this.is3D) {
+			const d = this.baseCameraDistance;
+			let requiredScale = PHYS.zoomMax; // ceiling: never magnify to fit
+			let requiredR = this.isPerspective ? PERSP_STANDOFF_MIN : 0;
+			for (const node of targetNodes) {
+				const r = this.rotatePoint(node.x, node.y, node.z, cx, cy, cz);
+				const padX = Math.max(1, Math.abs(r.x) + node.radius);
+				const padY = Math.max(1, Math.abs(r.y) + node.radius);
+				if (this.isPerspective) {
+					requiredR = Math.max(requiredR, (padX * d) / halfW - r.z, (padY * d) / halfH - r.z);
+				} else {
+					requiredScale = Math.min(requiredScale, halfW / padX, halfH / padY);
+				}
+			}
+			if (this.isPerspective) {
+				// R up means scale down, and viewScale = d / R.
+				requiredScale = Math.min(requiredScale, d / requiredR);
+			}
+			return Math.max(PHYS.zoomMin, Math.min(PHYS.zoomMax, requiredScale));
+		}
+		let maxAbsX = 0;
+		let maxAbsY = 0;
+		for (const node of targetNodes) {
+			maxAbsX = Math.max(maxAbsX, Math.abs(node.x - cx) + node.radius);
+			maxAbsY = Math.max(maxAbsY, Math.abs(node.y - cy) + node.radius);
+		}
+		const required = Math.min(halfW / Math.max(1, maxAbsX), halfH / Math.max(1, maxAbsY));
+		return Math.max(PHYS.zoomMin, Math.min(PHYS.zoomMax, required));
+	}
+
+	/** Commit a new `viewScale`, keeping the world point (cx, cy) at the canvas centre fixed. */
+	private applyViewScale(next: number, cx: number, cy: number, w: number, h: number): void {
+		this.viewScale = next;
+		if (!this.is3D) {
+			this.viewX = cx - w / (2 * this.viewScale);
+			this.viewY = cy + h / (2 * this.viewScale);
+		}
+		// Same floor `setStandoff` applies, so a fit cannot drive the standoff
+		// toward the degenerate zero that would make viewScale infinite.
+		this.cameraDistance = Math.max(
+			this.isPerspective ? PERSP_STANDOFF_MIN : PHYS.standoffMin,
+			this.baseCameraDistance / this.viewScale,
+		);
+		this.updateCameraMatrix();
+		this.wake();
+	}
+
+	/**
+	 * The measurement half of `fitToView`: zoom out, and ONLY zoom out, until
+	 * every node in `targetNodes` is on screen. `min(current, required)` is
+	 * what makes fit monotonic — a view that already shows everything is left
+	 * completely untouched, and fit can never magnify.
+	 *
+	 * Never moves the focal point and never touches the basis. The anchor is
+	 * the current focal point — T in 3D, the world point at the canvas centre
+	 * in 2D — captured before the scale changes, which is what lets the 2D path
+	 * rescale about the centre rather than about viewX (that would slide the
+	 * graph sideways).
+	 */
+	private frameNodes(targetNodes: GraphNode[]): void {
+		const vp = this.fitViewport();
+		if (!vp || targetNodes.length === 0) {
+			return;
+		}
+		const cx = this.is3D ? this.target[0] : this.viewX + vp.w / (2 * this.viewScale);
+		const cy = this.is3D ? this.target[1] : this.viewY - vp.h / (2 * this.viewScale);
+		const cz = this.is3D ? this.target[2] : 0;
+		const required = this.measureFit(targetNodes, cx, cy, cz, vp.halfW, vp.halfH);
+		const next = Math.min(this.viewScale, required);
+		if (!Number.isFinite(next) || next === this.viewScale) {
+			return;
+		}
+		this.applyViewScale(next, cx, cy, vp.w, vp.h);
+	}
+
+	/**
+	 * Centre on `targetNodes` and fit them, zooming IN as well as out.
+	 *
+	 * Used by the hologram peek overlay, which exists to show one subset close
+	 * up — a genuinely different job from `fitToView`. This is why subset
+	 * framing survives at all, even though ordinary selection framing was
+	 * dropped: peek is a mode with its own intent, not a fit variant.
+	 */
+	private frameSubset(targetNodes: GraphNode[]): void {
+		const vp = this.fitViewport();
+		if (!vp || targetNodes.length === 0) {
+			return;
+		}
 		let cx = 0;
 		let cy = 0;
 		let cz = 0;
 		for (const n of targetNodes) {
 			cx += n.x;
 			cy += n.y;
-			cz += n.z;
+			if (this.is3D) {
+				cz += n.z;
+			}
 		}
 		cx /= targetNodes.length;
 		cy /= targetNodes.length;
 		cz /= targetNodes.length;
-
-		// The home fit frames about the world origin, not the graph centroid.
-		if (!hasSelection) {
-			cx = 0;
-			cy = 0;
-			cz = 0;
+		const next = this.measureFit(targetNodes, cx, cy, cz, vp.halfW, vp.halfH);
+		if (!Number.isFinite(next)) {
+			return;
 		}
-
 		if (this.is3D) {
-			if (hasSelection && !preserveOrientation) {
-				this.target = [cx, cy, cz];
-				this.rotM = [
-					1,  0,  0,
-					0, -1,  0,
-					0,  0, -1
-				];
-				this.updateAnglesFromMatrix();
-			} else if (hasSelection) {
-				this.target = [cx, cy, cz];
-			} else {
-				this.target = [0, 0, 0];
-				this.rotM = [
-					1,  0,  0,
-					0, -1,  0,
-					0,  0, -1
-				];
-				this.cameraDistance = 1000;
-				this.updateAnglesFromMatrix();
-			}
-		} else {
-			if (!hasSelection) {
-				this.rotM = [
-					1,  0,  0,
-					0, -1,  0,
-					0,  0,  1
-				];
-				this.totalSpin = 0;
-				this.rotCx = 0;
-				this.rotCy = 0;
-				this.rotCz = 0;
-				this.camZ = 0;
-				this.updateAnglesFromMatrix();
-			}
+			this.target = [cx, cy, cz];
 		}
-
-		// Screen extents about the framing centroid. 3D projects through the
-		// current basis; depth is ignored, which frames the focal plane exactly
-		// (perspective and orthographic coincide there) but is only approximate
-		// for off-plane nodes under perspective. 2D is a flat translation.
-		let maxAbsX = 0;
-		let maxAbsY = 0;
-		for (const node of targetNodes) {
-			const r = this.is3D
-				? this.rotatePoint(node.x, node.y, node.z, cx, cy, cz)
-				: { x: node.x - cx, y: node.y - cy };
-			maxAbsX = Math.max(maxAbsX, Math.abs(r.x) + node.radius);
-			maxAbsY = Math.max(maxAbsY, Math.abs(r.y) + node.radius);
-		}
-		maxAbsX = Math.max(1, maxAbsX);
-		maxAbsY = Math.max(1, maxAbsY);
-
-		const m = 0.08;
-		this.viewScale = Math.min(
-			PHYS.zoomMax,
-			Math.max(
-				PHYS.zoomMin,
-				Math.min(((w / 2) * (1 - 2 * m)) / maxAbsX, ((h / 2) * (1 - 2 * m)) / maxAbsY),
-			),
-		);
-		this.baseCameraDistance = 1000;
-		this.cameraDistance = this.baseCameraDistance / this.viewScale;
-
-		if (!this.is3D) {
-			this.viewX = cx - w / (2 * this.viewScale);
-			this.viewY = cy - h / (2 * this.viewScale);
-		}
-		this.wake();
+		this.applyViewScale(next, cx, cy, vp.w, vp.h);
 	}
 
 	public getFocalPoint(): { x: number; y: number; z: number } {
@@ -3136,7 +3358,7 @@ export class SemanticHologramView extends ItemView {
 	this.ensureScan();
 
 		this.rotCx = this.viewX + w / (2 * this.viewScale);
-		this.rotCy = this.viewY + h / (2 * this.viewScale);
+		this.rotCy = this.viewY - h / (2 * this.viewScale);
 		this.rotCz = this.camZ;
 
 		// Calculate highlighted nodes if hovering
@@ -4019,47 +4241,95 @@ export class SemanticHologramView extends ItemView {
 		}
 
 		if (!this.is3D) {
-			const cx = w / 2;
-			const cy = h / 2;
-			const s = 24;
-			const BLUE = '#43AA8B';
-
-			ctx.save();
-			ctx.strokeStyle = BLUE;
-			ctx.fillStyle = BLUE;
-			ctx.lineWidth = 2;
-			ctx.lineCap = 'round';
-			ctx.lineJoin = 'round';
-			ctx.font = '10px var(--font-interface)';
-			ctx.textAlign = 'center';
-			ctx.textBaseline = 'middle';
-
-			const draw2DAxis = (ex: number, ey: number, label: string): void => {
-				const tx = cx + ex * s;
-				const ty = cy + ey * s;
-				ctx.beginPath();
-				ctx.moveTo(cx, cy);
-				ctx.lineTo(tx, ty);
-				ctx.stroke();
-
-				const head = 6;
-				const px = -ey;
-				const py = ex;
-
-				ctx.beginPath();
-				ctx.moveTo(tx, ty);
-				ctx.lineTo(tx - ex * head + px * head * 0.55, ty - ey * head + py * head * 0.55);
-				ctx.lineTo(tx - ex * head - px * head * 0.55, ty - ey * head - py * head * 0.55);
-				ctx.closePath();
-				ctx.fill();
-
-				ctx.fillText(label, cx + ex * (s + 9), cy + ey * (s + 9));
-			};
-
-			draw2DAxis(1, 0, 'x');
-			draw2DAxis(0, 1, 'y');
-			ctx.restore();
+			this.draw2DGizmos(w, h);
 		}
+	}
+
+	/**
+	 * The two 2D axis gizmos, drawn together because they share a renderer and a
+	 * visibility rule. Both are gated on `showRotationCenter` — the same
+	 * "Show indicators" control that gates the 3D prime-frame gizmo.
+	 *
+	 * 2D has three reference frames and therefore two frame gizmos, mirroring 3D's
+	 * world triad and prime-frame gizmo. The canvas frame is deliberately NOT
+	 * gizmoed: it is the viewport itself, and axes for it would be meaningless.
+	 * Colour encodes the frame, matching 3D: blue = world frame, red = prime.
+	 *
+	 * See docs/2d-virtual-screen-frames.md §6.
+	 */
+	private draw2DGizmos(w: number, h: number): void {
+		if (!this.ctx || !this.plugin.settings.showRotationCenter) {
+			return;
+		}
+		// Prime reference frame: its origin IS the focal point, i.e. the virtual
+		// screen's midpoint, so it is pinned to the canvas centre and does not move
+		// when you pan — the world moves under it.
+		this.draw2DAxisGizmo(w / 2, h / 2, 'rgba(255, 0, 0, 0.9)', ["x'", "y'"]);
+
+		// World area reference frame: its origin is the world area's (0,0), projected
+		// to screen. This one DOES slide as you pan and can leave the canvas
+		// entirely. When the focal point is on the world origin its prime coords are
+		// (0,0), so it lands exactly on top of the prime gizmo.
+		const ox = this.toScreenX(0);
+		const oy = this.toScreenY(0);
+		if (Number.isFinite(ox) && Number.isFinite(oy)) {
+			this.draw2DAxisGizmo(ox, oy, '#43AA8B', ['x', 'y']);
+		}
+	}
+
+	/**
+	 * One 2D axis gizmo: two arrows sharing a vertex at (cx, cy), labelled with
+	 * that frame's axis names — `x'`/`y'` for the prime frame, `x`/`y` for the world
+	 * frame. Getting the label right is what the frame naming buys: a prime-frame
+	 * gizmo labelled `x`/`y` was the original confusion, because it read as a
+	 * world-origin gizmo and it was not one.
+	 *
+	 * Arrow length is fixed pixels, not scaled with magnification, matching 3D.
+	 */
+	private draw2DAxisGizmo(cx: number, cy: number, color: string, labels: [string, string]): void {
+		const ctx = this.ctx;
+		if (!ctx) {
+			return;
+		}
+		const s = 24;
+		ctx.save();
+		ctx.strokeStyle = color;
+		ctx.fillStyle = color;
+		ctx.lineWidth = 2;
+		ctx.lineCap = 'round';
+		ctx.lineJoin = 'round';
+		ctx.font = '10px var(--font-interface)';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+
+		const arrow = (ex: number, ey: number, label: string): void => {
+			const tx = cx + ex * s;
+			const ty = cy + ey * s;
+			ctx.beginPath();
+			ctx.moveTo(cx, cy);
+			ctx.lineTo(tx, ty);
+			ctx.stroke();
+
+			const head = 6;
+			const px = -ey;
+			const py = ex;
+
+			ctx.beginPath();
+			ctx.moveTo(tx, ty);
+			ctx.lineTo(tx - ex * head + px * head * 0.55, ty - ey * head + py * head * 0.55);
+			ctx.lineTo(tx - ex * head - px * head * 0.55, ty - ey * head - py * head * 0.55);
+			ctx.closePath();
+			ctx.fill();
+
+			ctx.fillText(label, cx + ex * (s + 9), cy + ey * (s + 9));
+		};
+
+		// +x / +x' → right, which is canvas +x. +y / +y' → UP, which is NEGATIVE
+		// canvas y: the world area and prime frames are both y-up while the canvas
+		// frame is y-down. See docs/2d-virtual-screen-frames.md §2.4.
+		arrow(1, 0, labels[0]);
+		arrow(0, -1, labels[1]);
+		ctx.restore();
 	}
 
 	/**
@@ -4231,7 +4501,7 @@ export class SemanticHologramView extends ItemView {
 		this.viewScale = Math.min(PHYS.zoomMax, Math.max(PHYS.zoomMin, this.pinchStartScale * factor));
 		this.cameraDistance = this.baseCameraDistance / this.viewScale;
 		this.viewX = worldX - midX / this.viewScale;
-		this.viewY = worldY - midY / this.viewScale;
+		this.viewY = worldY + midY / this.viewScale;
 		this.markViewAdjusted();
 	}
 
@@ -4434,11 +4704,11 @@ export class SemanticHologramView extends ItemView {
 				// rotated. Drag moves the content with the cursor: dragging up
 				// raises viewY, so content rises.
 				this.viewX = this.panViewX - dScreenX;
-				this.viewY = this.panViewY - dScreenY;
+				this.viewY = this.panViewY + dScreenY;
 				const w = this.canvas?.clientWidth ?? 1;
 				const h = this.canvas?.clientHeight ?? 1;
 				this.rotCx = this.viewX + w / (2 * this.viewScale);
-				this.rotCy = this.viewY + h / (2 * this.viewScale);
+				this.rotCy = this.viewY - h / (2 * this.viewScale);
 			}
 			this.markViewAdjusted();
 			return;
@@ -4732,11 +5002,11 @@ export class SemanticHologramView extends ItemView {
 				// rotated. Drag moves the content with the cursor: dragging up
 				// raises viewY, so content rises.
 				this.viewX = this.panViewX - dScreenX;
-				this.viewY = this.panViewY - dScreenY;
+				this.viewY = this.panViewY + dScreenY;
 				const w = this.canvas?.clientWidth ?? 1;
 				const h = this.canvas?.clientHeight ?? 1;
 				this.rotCx = this.viewX + w / (2 * this.viewScale);
-				this.rotCy = this.viewY + h / (2 * this.viewScale);
+				this.rotCy = this.viewY - h / (2 * this.viewScale);
 			}
 			this.markViewAdjusted();
 			return;
@@ -5817,7 +6087,7 @@ export class SemanticHologramView extends ItemView {
 			this.showToast(this.plugin.settings.facesEnabled ? 'Faces on' : 'Faces off');
 		} else if (key === 'r' && e.shiftKey) {
 			this.resetView();
-		} else if (key === 'r' && !e.repeat) {
+		} else if (key === 'r' && !e.repeat && this.is3D) {
 			const nextMode: 'off' | 'cw' | 'ccw' =
 				this.autoRotating === 'off' ? 'cw' : this.autoRotating === 'cw' ? 'ccw' : 'off';
 			this.autoRotating = nextMode;
@@ -5836,7 +6106,7 @@ export class SemanticHologramView extends ItemView {
 		} else if (e.key.startsWith('Arrow')) {
 			e.preventDefault();
 			this.pressedKeys.add(e.key);
-		} else if (e.key === ' ' && !e.repeat && target?.tagName !== 'INPUT' && target?.tagName !== 'TEXTAREA') {
+		} else if (e.key === ' ' && !e.repeat && this.is3D && target?.tagName !== 'INPUT' && target?.tagName !== 'TEXTAREA') {
 			if (this.autoRotating !== 'off') {
 				e.preventDefault();
 				this.autoRotating = 'off';
@@ -5939,7 +6209,7 @@ private selectHovered(): void {
 			this.target = [tx, ty, tz];
 		} else {
 			this.viewX = tx - w / (2 * this.viewScale);
-			this.viewY = ty - h / (2 * this.viewScale);
+			this.viewY = ty + h / (2 * this.viewScale);
 		}
 		this.markViewAdjusted();
 	}
@@ -6353,7 +6623,7 @@ private selectHovered(): void {
 		const node = this.nodes.find((n) => paths.length > 0 && n.path === paths[paths.length - 1]);
 		if (node) {
 			this.viewX = node.x - (this.canvas?.clientWidth ?? 0) / (2 * this.viewScale);
-			this.viewY = node.y - (this.canvas?.clientHeight ?? 0) / (2 * this.viewScale);
+			this.viewY = node.y + (this.canvas?.clientHeight ?? 0) / (2 * this.viewScale);
 		}
 		this.requestRedraw();
 	}
@@ -6447,7 +6717,7 @@ private selectHovered(): void {
 		this.candidateNodes = new Set(peekNodes.map((n) => n.path));
 		this.pressedKeys.clear();
 		this.hoverIndex = -1;
-		this.frameNodes(peekNodes, true, true);
+		this.frameSubset(peekNodes);
 	}
 
 	/** Discard the peek and restore the exact pre-peek camera. */

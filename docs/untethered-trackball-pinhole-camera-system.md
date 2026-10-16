@@ -15,9 +15,10 @@ It unifies five principles:
    depth term and projects with a single constant scale.
 2. **A bounded virtual screen.** A finite 2D rectangle tracks the canvas and
    carries the projection; it is the surface the pinhole image lands on.
-3. **Two reference frames.** Every quantity is expressed either in **world space**
-   or in the **focal-point / camera / virtual-screen frame**. Section 3 makes this
-   distinction explicit, because most of the subtlety of the system lives there.
+3. **Two reference frames.** Every quantity is expressed either in the **3D world
+   space reference frame** or in the **3D prime reference frame**. Section 3 makes
+   this distinction explicit, because most of the subtlety of the system lives
+   there.
 4. **Rigid-rig dolly.** The stand-off distance `R` between eye `E` and focal point
    `T` is the *only* magnitude the user can change, and it changes the
    **magnification**, not the geometry. It is driven exclusively by the camera
@@ -37,7 +38,7 @@ orientation, not the quantities the user drives directly (Section 7).
 
 ## 2. The Two Reference Frames
 
-### 2.1 World Space Frame
+### 2.1 3D World Space Reference Frame
 
 A fixed, right-handed Cartesian frame that never moves:
 
@@ -51,7 +52,7 @@ A fixed, right-handed Cartesian frame that never moves:
 All scene objects — nodes, edges, their radii, their velocities — live permanently
 in world space. **Their world coordinates are immutable during navigation.**
 
-### 2.2 Focal-Point / Camera / Virtual-Screen Frame
+### 2.2 3D Prime Reference Frame
 
 ![Prime Reference Frame](../images/prime-reference-frame.svg)
 
@@ -88,11 +89,21 @@ The up row is negated in storage so the canvas mapping stays a plain affine
 translate-and-scale (no sign flip of its own) while keeping
 `det R_rot = +1` (Section 9.1).
 
+> **2D mode is a different camera model.** This document describes the 3D camera
+> only: world *space*, rotation, a standoff-based magnification, and a pinhole or
+> orthographic projection. In 2D the world is an *area*, rotation is impossible,
+> and magnification is a plain `viewScale`. 2D also has a third frame — the canvas
+> frame, the only y-down one in the system — and therefore a single reflection at
+> the canvas boundary that 3D does not have. The 2D frames, their orientation, its
+> gizmos and their visibility control are specified in
+> [`2d-virtual-screen-frames.md`](2d-virtual-screen-frames.md); read that alongside
+> this one rather than inferring 2D from here.
+
 ---
 
 ## 3. What Moves and What Does Not
 
-| | World Space Frame | Screen Frame (what you see) |
+| | 3D World Space Reference Frame | 3D Prime Reference Frame (what you see) |
 | --- | --- | --- |
 | Scene objects (nodes, edges) | **Never move.** Fixed `(X, Y, Z)` forever. | Slide, rescale, resize |
 | Focal point `T` | **Moves.** The one thing in world space that navigation touches. | Stays at screen centre |
@@ -276,7 +287,7 @@ about the canvas centre in 2D). Their tooltips state which mechanism is active; 
 
 ---
 
-## 7. Rotation — Prime-Frame Trackball
+## 7. Rotation — 3D Prime Reference Frame Trackball
 
 ### 7.1 The anchor is `T`, never the world origin
 
@@ -285,7 +296,7 @@ camera navigation. Because `T` is held fixed and `E = T - R·F` is derived from 
 orientation, rotating the basis makes the eye sweep a sphere of radius `R` centred
 on `T`.
 
-### 7.2 Rotation is prime-frame: `θ'` about `y'`, `φ'` about `x'`
+### 7.2 Rotation is in the 3D prime reference frame: `θ'` about `y'`, `φ'` about `x'`
 
 The continuous rotation controls — `Shift`+arrow (`step()`) and `Shift`/middle
 drag — call
@@ -301,7 +312,7 @@ $$\mathbf{R}_{rot} \leftarrow \mathbf{R}_{rot} \cdot \operatorname{Rot}(y',\, \t
 
 followed by re-orthonormalisation. The prime axes are the assembly's body axes; in
 world space they are the rows of `rotM` (`x' = R_v`, `y' = -U_v` stored, `z' = F`).
-We never rotate about `z'`, so the prime-frame roll stays zero.
+We never rotate about `z'`, so the 3D prime reference frame roll stays zero.
 
 **Signs:**
 
@@ -321,7 +332,7 @@ The world angles `θ` and `Φ` are **read back out of `rotM`** by
   derived world angles and is an architectural inversion (tried 2026-10-03 and
   reverted). `setCameraState` / `rebuildBasis` are for **absolute framing only**
   (`fitToView`, programmatic resets, the MCP).
-* Prime-frame rotation **couples by design**: a yaw at non-zero elevation also moves
+* 3D prime reference frame rotation **couples by design**: a yaw at non-zero elevation also moves
   the elevation read-out. That is correct, not a bug — do not "decouple" it.
 * Because rotation is applied incrementally to the local frame rather than
   integrated against a world pole, there are **no clamps, no polar singularities,
@@ -380,7 +391,8 @@ $$U_v = \left(\sin\Phi\cos\theta,\ \ \cos\Phi,\ \ \sin\Phi\sin\theta\right) \qqu
 This is exact rather than iterative: no cross products, no accumulated error.
 Setting `θ = 90°`, `Φ = 0°` reproduces the home basis. It is used by
 `setCameraState` / `rebuildBasis` for **absolute framing** only — not by the
-continuous rotation control, which is prime-frame (Section 7).
+continuous rotation control, which operates in the 3D prime reference frame
+(Section 7).
 
 ### 8.4 State ownership
 
@@ -466,7 +478,7 @@ $$\Delta T = -S\left(\Delta x_{screen} R_v + \Delta y_{screen} U_v\right), \qqua
 
 $$T \leftarrow T + \Delta T, \qquad E \leftarrow E + \Delta T$$
 
-### 11.4 Prime-frame rotation
+### 11.4 3D prime reference frame rotation
 
 $$R_{rot} \leftarrow R_{rot} \cdot \operatorname{Rot}(y', \theta') \cdot \operatorname{Rot}(x', \phi')$$
 
@@ -537,7 +549,7 @@ class UntetheredTrackballPinholeCamera:
         delta = -self.view_scale * (dx_screen * self.right_v + dy_screen * self.up_v)
         self.T += delta          # eye follows rigidly; R and orientation invariant
 
-    # ---- prime-frame trackball rotation, anchored at T -----------------
+    # ---- 3D prime reference frame trackball rotation, anchored at T -----------------
     def apply_rotation_deltas(self, d_yaw, d_pitch):
         """theta' about the body y' axis, then phi' about the body x' axis."""
         if d_yaw:

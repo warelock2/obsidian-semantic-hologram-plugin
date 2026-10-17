@@ -3721,9 +3721,6 @@ export class SemanticHologramView extends ItemView {
 		} else {
 			this.hideEdgeTooltip();
 		}
-
-		this.drawHoverTooltip();
-		this.updateCursor();
 	}
 
 	private populateCwdDropdown(select: HTMLSelectElement): void {
@@ -3756,100 +3753,6 @@ export class SemanticHologramView extends ItemView {
 			return { x: w / 2 + rotated.x * s, y: h / 2 + rotated.y * s };
 		}
 		return { x: this.toScreenX(node.x), y: this.toScreenY(node.y) };
-	}
-
-	private drawHoverTooltip(): void {
-		const ctx = this.ctx;
-		const canvas = this.canvas;
-		if (!ctx || !canvas) return;
-		if (!this.pointerInside || this.hoverIndex < 0) return;
-		if (!this.is3D && !this.ctrlPressed) return;
-		if (this.ctrlPressed && !this.is3D) {
-			// In 2D, Ctrl+hover shows the HTML preview card via showPreviewCard(), not canvas tooltip
-			return;
-		}
-		if (this.rotating || this.panning || this.pinnedIndex >= 0 || this.selecting || this.selectMode || this.groupDragging) return;
-		const node = this.nodes[this.hoverIndex];
-		if (!node) return;
-
-		const cs = getComputedStyle(this.contentEl);
-		const fontFamily = cs.getPropertyValue('--font-interface').trim() || cs.fontFamily;
-		const labelFont = `600 12px ${fontFamily}`;
-		const bodyFont = `10px ${fontFamily}`;
-
-		const entry = this.searchIndex.get(node.path);
-		const preview = buildNodePreviewModel(
-			{ ...node, content: entry?.content, relDescs: entry?.relDescs },
-			this.plugin.settings,
-		);
-		const typeName = preview.typeName;
-		const meta =
-			(typeName ? typeName + ' · ' : '') +
-			`Confidence ${preview.confidencePct}%` +
-			` · Gravitas ${preview.gravitasPct}%`;
-		const pathText = preview.path.length > 64 ? preview.path.slice(0, 61) + '...' : preview.path;
-
-		const lines: Array<{ text: string; font: string; dim?: boolean }> = [
-			{ text: preview.label, font: labelFont },
-			{ text: pathText, font: bodyFont, dim: true },
-			{ text: meta, font: bodyFont },
-		];
-		if (preview.relDescs && preview.relDescs.length > 0) {
-			for (const d of preview.relDescs) {
-				lines.push({ text: `• ${d}`, font: bodyFont, dim: true });
-			}
-		}
-		lines.push({ text: preview.contentSnippet, font: bodyFont, dim: true });
-
-		const padX = 10;
-		const padY = 8;
-		const lineH = 15;
-		let boxW = 0;
-		for (const l of lines) {
-			ctx.font = l.font;
-			boxW = Math.max(boxW, ctx.measureText(l.text).width);
-		}
-		const boxH = lines.length * lineH + padY * 2;
-		boxW += padX * 2;
-
-		const rect = canvas.getBoundingClientRect();
-		let x = this.pointerX - rect.left + 14;
-		let y = this.pointerY - rect.top + 16;
-		if (x + boxW > rect.width - 8) {
-			x = this.pointerX - rect.left - boxW - 12;
-		}
-		if (y + boxH > rect.height - 8) {
-			y = this.pointerY - rect.top - boxH - 14;
-		}
-		x = Math.max(4, x);
-		y = Math.max(4, y);
-
-		ctx.save();
-		ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
-		ctx.shadowBlur = 10;
-		const bg = cs.getPropertyValue('--background-primary').trim() || '#1e1e1e';
-		const border = cs.getPropertyValue('--background-modifier-border').trim() || '#555';
-		ctx.fillStyle = bg;
-		this.roundRect(ctx, x, y, boxW, boxH, 6);
-		ctx.fill();
-		ctx.shadowBlur = 0;
-		ctx.strokeStyle = border;
-		ctx.lineWidth = 1;
-		this.roundRect(ctx, x, y, boxW, boxH, 6);
-		ctx.stroke();
-
-		ctx.textAlign = 'left';
-		ctx.textBaseline = 'middle';
-		for (let i = 0; i < lines.length; i++) {
-			const l = lines[i];
-			if (!l) continue;
-			ctx.font = l.font;
-			ctx.globalAlpha = l.dim ? 0.65 : 1;
-			ctx.fillStyle = cs.color || '#ccc';
-			ctx.fillText(l.text, x + padX, y + padY + i * lineH + lineH / 2);
-		}
-		ctx.globalAlpha = 1;
-		ctx.restore();
 	}
 
 	private hidePreviewCardTimer: number | null = null;

@@ -406,7 +406,16 @@ export class SemanticHologramView extends ItemView {
 	private selectAnchorY = 0;
 	private selectCurX = 0;
 	private selectCurY = 0;
+	private cancelPendingEdgeSwap(): void {
+		if (this.edgeTooltipSwapTimer) {
+			window.clearTimeout(this.edgeTooltipSwapTimer);
+			this.edgeTooltipSwapTimer = null;
+		}
+		this.edgeTooltipSwapEdge = null;
+	}
+
 	private hideEdgeTooltip(): void {
+		this.cancelPendingEdgeSwap();
 		if (this.hideEdgeTooltipTimer) {
 			window.clearTimeout(this.hideEdgeTooltipTimer);
 			this.hideEdgeTooltipTimer = null;
@@ -415,6 +424,7 @@ export class SemanticHologramView extends ItemView {
 			this.edgeTooltipEl.remove();
 			this.edgeTooltipEl = null;
 		}
+		this.edgeTooltipEdge = null;
 		this.flushPendingEdgeRefresh();
 	}
 
@@ -424,6 +434,46 @@ export class SemanticHologramView extends ItemView {
 		}
 		this.pendingEdgeRefresh = false;
 		void this.plugin.refreshGraphs();
+	}
+
+	/**
+	 * Pointer/key-driven entry point for the edge card, as opposed to
+	 * `drawEdgeTooltip`, which redraws the card already open.
+	 *
+	 * The first card appears immediately — delaying it would make hovering an
+	 * edge feel broken. Only a swap to a *different* edge waits
+	 * EDGE_CARD_SWAP_MS, and the wait restarts on every further edge crossed, so
+	 * sweeping toward a card yields one stable window instead of a trail of
+	 * rewrites. Re-requesting the edge already shown redraws at once, which is
+	 * what keeps an open card live when relations are added or removed.
+	 */
+	private requestEdgeTooltip(edge: GraphLink): void {
+		if (!this.edgeTooltipEl || this.edgeTooltipEdge === edge) {
+			this.cancelPendingEdgeSwap();
+			this.drawEdgeTooltip(edge);
+			return;
+		}
+		// The pointer reached the open card: leave it alone rather than swap.
+		if (this.edgeTooltipEl.classList.contains('is-hovering')) {
+			this.cancelPendingEdgeSwap();
+			return;
+		}
+		// A swap to this same edge is already counting down. Leave it running:
+		// re-arming on every request would let a per-frame caller (the 2D draw
+		// tail) restart the timer forever, so the card would never swap there.
+		if (this.edgeTooltipSwapEdge === edge && this.edgeTooltipSwapTimer) {
+			return;
+		}
+		this.cancelPendingEdgeSwap();
+		this.edgeTooltipSwapEdge = edge;
+		this.edgeTooltipSwapTimer = window.setTimeout(() => {
+			this.edgeTooltipSwapTimer = null;
+			const target = this.edgeTooltipSwapEdge;
+			this.edgeTooltipSwapEdge = null;
+			if (target) {
+				this.drawEdgeTooltip(target);
+			}
+		}, SemanticHologramView.EDGE_CARD_SWAP_MS);
 	}
 
 	private drawEdgeTooltip(edge: GraphLink): void {
@@ -450,6 +500,9 @@ export class SemanticHologramView extends ItemView {
 					window.clearTimeout(this.hideEdgeTooltipTimer);
 					this.hideEdgeTooltipTimer = null;
 				}
+				// Likewise cancel a queued swap: arriving at the card is the
+				// pointer winning the race the grace period exists to allow.
+				this.cancelPendingEdgeSwap();
 			});
 			this.edgeTooltipEl.addEventListener('mouseleave', () => {
 				this.edgeTooltipEl?.classList.remove('is-hovering');
@@ -487,6 +540,7 @@ export class SemanticHologramView extends ItemView {
 			});
 		}
 
+		this.edgeTooltipEdge = edge;
 		this.edgeTooltipEl.innerHTML = html;
 		
 		this.edgeTooltipEl.querySelectorAll('.sh-delete-rel').forEach(btn => {
@@ -572,7 +626,19 @@ export class SemanticHologramView extends ItemView {
 	private hoveredEdge: GraphLink | null = null;
 	private edgeTooltipEl: HTMLElement | null = null;
 	private hideEdgeTooltipTimer: number | null = null;
+	/**
+	 * Grace period before an open edge card is replaced by a *different* edge's
+	 * card. Reaching a card means crossing every edge in between, and without
+	 * this each crossing rewrites the card under the pointer, so it can never be
+	 * entered. Re-requesting the edge already shown is never delayed, and the
+	 * first card is immediate — only the swap waits.
+	 */
+	private static readonly EDGE_CARD_SWAP_MS = 700;
 	private pendingEdgeRefresh = false;
+	/** Edge whose card is on screen, so re-requesting it redraws instead of debouncing. */
+	private edgeTooltipEdge: GraphLink | null = null;
+	private edgeTooltipSwapTimer: number | null = null;
+	private edgeTooltipSwapEdge: GraphLink | null = null;
 	private resizeObserver: ResizeObserver | null = null;
 	private autoRotating: 'off' | 'cw' | 'ccw' = 'off';
 	private rotM: number[] = [
@@ -3714,12 +3780,24 @@ export class SemanticHologramView extends ItemView {
 			ctx.restore();
 		}
 		
-		// Edge hover inspection
+		// Edge hover inspection (2D only — 3D returns above; its card comes from
+		// the pointer/key handlers). Goes through the request entry point so this
+		// per-frame redraw cannot defeat the swap grace period; re-requesting the
+		// edge already shown stays immediate.
 		const edge = this.hoveredEdge;
 		if (edge && (this.is3D || this.ctrlPressed)) {
-			this.drawEdgeTooltip(edge);
-		} else {
-			this.hideEdgeTooltip();
+			this.requestEdgeTooltip(edge);
+		} else if (!this.edgeTooltipSwapTimer && !this.edgeTooltipEl?.classList.contains('is-hovering')) {
+			// The hide must be delayed and guarded, exactly as onPointerMove does
+			// it. Calling hideEdgeTooltip() straight from the render loop removed the
+			// card on the first frame between two edges, and that gap lasts a single
+			// frame during a real sweep - so in 2D the card could never be reached.
+			// Stay out of the way entirely while a swap is counting down: a hide
+			// armed here would land first (500ms vs the 700ms grace period) and
+			// cancel the very swap the pointer is waiting out.
+			if (!this.hideEdgeTooltipTimer) {
+				this.hideEdgeTooltipTimer = window.setTimeout(() => this.hideEdgeTooltip(), 500);
+			}
 		}
 	}
 
@@ -4886,7 +4964,7 @@ export class SemanticHologramView extends ItemView {
 		
 		// Only draw/update if Ctrl is pressed and we have a valid edge
 		if (this.ctrlPressed && this.hoveredEdge && this.hoverIndex < 0 && !this.edgeDraggingSourceNode) {
-			this.drawEdgeTooltip(this.hoveredEdge);
+			this.requestEdgeTooltip(this.hoveredEdge);
 		} else if (!this.edgeTooltipEl?.classList.contains('is-hovering')) {
 			if (!this.hideEdgeTooltipTimer) {
 				this.hideEdgeTooltipTimer = window.setTimeout(() => this.hideEdgeTooltip(), 500);
@@ -5990,7 +6068,7 @@ export class SemanticHologramView extends ItemView {
 				!this.edgeTooltipEl?.classList.contains('is-hovering')
 			) {
 				// 3D draws the edge card from pointermove only, so reveal it here too.
-				this.drawEdgeTooltip(this.hoveredEdge);
+				this.requestEdgeTooltip(this.hoveredEdge);
 			}
 		}
 		if (e.key === 'Shift') {

@@ -498,12 +498,28 @@ export default class SemanticHologramPlugin extends Plugin {
 	}
 
 	async setMode(mode: HologramMode): Promise<void> {
-		this.settings.hologramMode = mode;
-		await this.saveSettings();
+		// The view derives all mode bookkeeping from the focal point, and it must
+		// read the focal point of the mode being LEFT. The view learns the current
+		// mode from settings.hologramMode via its is3D getter, so that value has
+		// to still hold the OLD mode while v.setMode() runs. Capture it first and
+		// pass it explicitly; otherwise the view reads the destination mode's
+		// stale bookkeeping and the focal point jumps on every switch.
+		const fromMode: HologramMode = this.settings.hologramMode;
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM)) {
 			const v = leaf.view;
 			if (v instanceof SemanticHologramView) {
-				v.setMode(mode);
+				v.setMode(mode, fromMode);
+			}
+		}
+		this.settings.hologramMode = mode;
+		await this.saveSettings();
+		// Now that is3D reports the new mode, refresh the parts of the switch that
+		// are correct only in the destination mode (projection banner, magnify
+		// tooltips, tool dock, cursor).
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramView) {
+				v.refreshAfterModeSwitch();
 			}
 		}
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS)) {

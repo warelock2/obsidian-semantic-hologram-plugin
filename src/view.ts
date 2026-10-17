@@ -887,10 +887,16 @@ export class SemanticHologramView extends ItemView {
 		return { x: x2 + cx, y: y2 + cy, z: z2 + cz };
 	}
 
-	setMode(mode: '2d' | '3d'): void {
+	setMode(mode: '2d' | '3d', fromMode?: '2d' | '3d'): void {
 		// Preserve the focal point (world x,y) across the mode switch. The
 		// focal point is the independent variable; bookkeeping derives from it.
-		const focalBefore = this.getFocalPoint();
+		//
+		// `fromMode` is the mode being LEFT, passed explicitly because `is3D`
+		// reads `plugin.settings.hologramMode` and the caller flips that setting
+		// around this call. Without it the derivation reads the DESTINATION
+		// mode's stale bookkeeping instead of this mode's focal point, and the
+		// focal point is lost in both directions.
+		const focalBefore = this.focalPointInMode(fromMode);
 
 		if (this.modeBanner) {
 			this.modeBanner.innerHTML = mode === '3d' ? ICON_MODE_3D : ICON_MODE_2D;
@@ -899,24 +905,47 @@ export class SemanticHologramView extends ItemView {
 		if (this.toolDock && mode === '2d' && this.tool === 'rotate') {
 			void this.plugin.setTool('navigate');
 		}
-		// The effective projection depends on the mode, so the banner has to be
-		// re-read on every switch.
-		this.setProjectionMode(this.plugin.settings.projectionMode);
-		this.updateMagnifyTooltips();
-		this.updateToolDock();
-		this.updateCursor();
 
 		// After switching, derive bookkeeping from the preserved focal point.
 		// 2D: viewX/viewY derived from focal point (drop z). 3D: target stored directly.
+		// viewScale is deliberately untouched: magnification is preserved per mode.
 		if (mode === '2d') {
 			const w = this.canvas?.clientWidth ?? 800;
 			const h = this.canvas?.clientHeight ?? 600;
 			const scale = this.viewScale || 1;
 			this.viewX = focalBefore.x - w / (2 * scale);
 			this.viewY = focalBefore.y + h / (2 * scale);
+			// this.target is deliberately left alone, so target[2] retains the
+			// last 3D focal depth across the time spent in 2D. 2D has no depth
+			// axis - focalPointInMode reports z as 0 there.
 		} else {
-			this.target = [focalBefore.x, focalBefore.y, 0];
+			// Write x and y only, in place like every other target mutation
+			// (setFocalPoint, the pan handlers). Assigning focalBefore.z would
+			// reset the retained 3D focal depth to 0 on every 2D -> 3D switch,
+			// which is the one thing 2D never needed to touch: it has no depth
+			// axis, and the controls panel disables the z input when !is3D, so
+			// nothing in 2D can overwrite target[2] anyway.
+			this.target[0] = focalBefore.x;
+			this.target[1] = focalBefore.y;
 		}
+
+		this.refreshAfterModeSwitch();
+	}
+
+	/**
+	 * The half of a mode switch that must read the NEW mode.
+	 *
+	 * `setMode` cannot run these itself: the caller owns
+	 * `plugin.settings.hologramMode` and `is3D` reads it. Evaluating them before
+	 * the flip would resolve every branch against the mode being left.
+	 */
+	public refreshAfterModeSwitch(): void {
+		// The effective projection depends on the mode, so the banner has to
+		// be re-read on every switch.
+		this.setProjectionMode(this.plugin.settings.projectionMode);
+		this.updateMagnifyTooltips();
+		this.updateToolDock();
+		this.updateCursor();
 	}
 
 	setTool(tool: HologramTool): void {
@@ -3161,16 +3190,27 @@ export class SemanticHologramView extends ItemView {
 		this.applyViewScale(next, cx, cy, vp.w, vp.h);
 	}
 
-	public getFocalPoint(): { x: number; y: number; z: number } {
+	/**
+	 * The world-space focal point, evaluated in an explicitly named mode.
+	 *
+	 * `fromMode` exists because `is3D` reads `plugin.settings.hologramMode`, and
+	 * the caller flips that setting around this call. During a mode switch the
+	 * focal point of the mode being LEFT is what must be preserved, and by the
+	 * time the setting has flipped, `is3D` can no longer report it. Defaulting to
+	 * `is3D` keeps every existing caller correct.
+	 */
+	private focalPointInMode(fromMode?: '2d' | '3d'): { x: number; y: number; z: number } {
 		const w = this.canvas?.clientWidth ?? 0;
 		const h = this.canvas?.clientHeight ?? 0;
-		if (this.is3D) {
+		if (fromMode ? fromMode === '3d' : this.is3D) {
 			return { x: this.target[0], y: this.target[1], z: this.target[2] };
 		}
 		// In 2D, translate screen center to world coordinates
-		const sx = w / 2;
-		const sy = h / 2;
-		return { x: this.toWorldX(sx), y: this.toWorldY(sy), z: 0 };
+		return { x: this.toWorldX(w / 2), y: this.toWorldY(h / 2), z: 0 };
+	}
+
+	public getFocalPoint(): { x: number; y: number; z: number } {
+		return this.focalPointInMode();
 	}
 
 	public setFocalPoint(x: number, y: number, z = 0): void {

@@ -72,7 +72,14 @@ export default class SemanticHologramPlugin extends Plugin {
 		}
 		this.cacheRefreshTimer = window.setTimeout(() => {
 			this.cacheRefreshTimer = null;
-			void this.hologramService.loadCache();
+			void this.hologramService.loadCache().then(() => {
+				for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS)) {
+					const v = leaf.view as any;
+					if (v && typeof v.render === 'function') {
+						v.render();
+					}
+				}
+			});
 		}, CACHE_REFRESH_DEBOUNCE_MS);
 	}
 
@@ -542,6 +549,12 @@ export default class SemanticHologramPlugin extends Plugin {
 			const v = leaf.view;
 			if (v instanceof SemanticHologramView) {
 				await v.rebuildGraph();
+			}
+		}
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM_CONTROLS)) {
+			const v = leaf.view as any;
+			if (v && typeof v.render === 'function') {
+				v.render();
 			}
 		}
 	}

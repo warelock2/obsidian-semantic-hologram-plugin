@@ -131,18 +131,12 @@
 	max-height: min(70vh, 620px);
 	overflow-y: auto;
 	overscroll-behavior: contain;
-	columns: 2;
-	column-width: 300px;
-	column-gap: 28px;
 }
 
 .sh-help-title {
 	font-weight: 600;
 	margin-bottom: 4px;
 	letter-spacing: 0.03em;
-	/* Headings and the hint must span the full width; otherwise the title sits
-	   atop column one and the second column starts below the fold. */
-	column-span: all;
 }
 
 .sh-help-hint {
@@ -151,7 +145,6 @@
 	margin-bottom: 6px;
 	padding-bottom: 6px;
 	border-bottom: 1px solid var(--background-modifier-border);
-	column-span: all;
 }
 
 .sh-help-row {
@@ -744,6 +737,16 @@
     overflow: hidden;
 }
 
+.sh-review-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 8px 0;
+    border-top: 1px solid var(--background-modifier-border);
+    margin-top: 8px;
+    flex-shrink: 0;
+}
+
 .sh-review-scroll {
     flex: 1;
     overflow-y: auto;
@@ -988,6 +991,22 @@
     background: var(--background-secondary);
     padding: 4px;
     margin-bottom: 8px;
+}
+
+.sh-hologram-header {
+    display: flex;
+    align-items: center;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.sh-hologram-col-e {
+    width: 24px;
+    flex-shrink: 0;
+    text-align: center;
 }
 
 .sh-hologram-row {

@@ -272,6 +272,16 @@ export class ReviewConnectionsModal extends Modal {
 
 		const scroll = contentEl.createDiv({ cls: 'sh-review-scroll' });
 
+		const buttonRow = contentEl.createDiv({ cls: 'sh-review-buttons' });
+		const cancelBtn = buttonRow.createEl('button', { text: 'Cancel', cls: 'sh-review-cancel' });
+		cancelBtn.addEventListener('click', () => {
+			this.close();
+		});
+		const okBtn = buttonRow.createEl('button', { text: 'OK', cls: 'mod-cta sh-review-ok' });
+		okBtn.addEventListener('click', () => {
+			this.close();
+		});
+
 		if (!this.data) {
 			return;
 		}

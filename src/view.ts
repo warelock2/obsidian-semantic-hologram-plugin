@@ -18,7 +18,7 @@ import type { ScanGraph, ScanResult } from './diffraction';
 import { buildAdjacency, explainConnection, findNodeByRef, runScan } from './diffraction';
 import type { ScanLayerSettings } from './settings';
 import { HOLOGRAM_FOLDER } from './settings';
-import { moveDirInto, reportMoveResult, topLevelHologramDirs } from './hologramDirs';
+import { descendantDirs, moveDirInto, reportMoveResult, topLevelHologramDirs } from './hologramDirs';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
 
@@ -313,6 +313,7 @@ const ICON_TOOL_SELECT =
 
 export class SemanticHologramView extends ItemView {
 	plugin: SemanticHologramPlugin;
+	public currentCwd: string = '';
 	private canvas: HTMLCanvasElement | null = null;
 	private ctx: CanvasRenderingContext2D | null = null;
 	private modeBanner: HTMLElement | null = null;
@@ -391,6 +392,13 @@ export class SemanticHologramView extends ItemView {
 	private downX = 0;
 	private downY = 0;
 	private selected = new Set<number>();
+	/** Clipboard state for cut/copy/paste operations. */
+	private clipboard: {
+		action: 'cut' | 'copy' | null;
+		targetType: 'node' | 'anchor' | null;
+		paths: Set<string>;
+		anchorDir: string | null;
+	} = { action: null, targetType: null, paths: new Set(), anchorDir: null };
 	private selecting = false;
 	private selectMode = false;
 	private selectDragOccurred = false;
@@ -1414,6 +1422,7 @@ export class SemanticHologramView extends ItemView {
 		this.cursorOverlay.style.display = 'none';
 
 		const magnifyControls = container.createDiv({ cls: 'sh-map-magnify-controls' });
+
 		const btnIn = magnifyControls.createEl('button', { text: '+', cls: 'sh-map-magnify-btn' });
 		this.magnifyBtn = btnIn;
 		btnIn.addEventListener('click', (e) => this.magnify(e.shiftKey));
@@ -1801,6 +1810,11 @@ export class SemanticHologramView extends ItemView {
 			if (!relById.get(e.relId)?.enabled) {
 				continue;
 			}
+			const srcDir = this.getHologramDir(e.source);
+			const dstDir = this.getHologramDir(e.target);
+			if (srcDir !== dstDir) {
+				continue;
+			}
 			const a = Math.min(srcIdx, dstIdx);
 			const b = Math.max(srcIdx, dstIdx);
 			const key = `${a}|${b}`;
@@ -1865,6 +1879,11 @@ export class SemanticHologramView extends ItemView {
 			for (const targetPath of Object.keys(targets)) {
 				const dstIdx = index.get(targetPath);
 				if (dstIdx === undefined || dstIdx === srcIdx) {
+					continue;
+				}
+				const srcDir = this.getHologramDir(f.path);
+				const dstDir = this.getHologramDir(targetPath);
+				if (srcDir !== dstDir) {
 					continue;
 				}
 				const key = srcIdx < dstIdx ? `${srcIdx}|${dstIdx}` : `${dstIdx}|${srcIdx}`;
@@ -2070,7 +2089,24 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	/** A path is in hologram scope if it lives under Holograms/ or declares hologram-node. */
+	private getHologramDir(path: string): string | null {
+		const parts = path.split('/');
+		if (parts.length >= 2 && parts[0] === 'hologram') {
+			return parts[1] || null;
+		}
+		return null;
+	}
+
+	/** A path is in hologram scope if it lives under Holograms/ or declares hologram-node. */
 	private isInScope(path: string): boolean {
+		if (this.currentCwd) {
+			// Validate CWD: if folder no longer exists, reset to root
+			if (!this.app.vault.getAbstractFileByPath(this.currentCwd)) {
+				this.currentCwd = '';
+			} else if (!path.startsWith(`${this.currentCwd}/`)) {
+				return false;
+			}
+		}
 		return inScopePath(path, this.app.vault, this.app.metadataCache);
 	}
 
@@ -2119,7 +2155,8 @@ export class SemanticHologramView extends ItemView {
 			this.isRecording ||
 			this.pressedKeys.size > 0 ||
 			this.isInteracting() ||
-			this.frameEnergy > PHYS.settleEnergy
+			this.frameEnergy > PHYS.settleEnergy ||
+			this.clipboard.action === 'cut'
 		);
 	}
 
@@ -2774,7 +2811,7 @@ export class SemanticHologramView extends ItemView {
 	 * A node selection deliberately does NOT change what is framed; framing
 	 * a subset was removed rather than left to branch here.
 	 */
-	private fitToView(): void {
+	public fitToView(): void {
 		const canvas = this.canvas;
 		if (!canvas || this.nodes.length === 0) {
 			return;
@@ -3423,11 +3460,14 @@ export class SemanticHologramView extends ItemView {
 				const isCandidate = this.candidateNodes.has(node.path);
 				const isFaded = (this.hoverIndex >= 0 && !isHighlighted) || this.isNodeFadedByAnchors(i);
 				const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
+				const isCut = this.clipboard.action === 'cut' && this.clipboard.paths.has(node.path);
 				const r = this.nodeScreenRadius(node, p, maxAbsZ) * (isHighlighted ? 1.4 : 1.0);
+				if (isCut) ctx.globalAlpha = 0.4;
 				const viewSettings = this.plugin.settings;
 				const grav = node.gravitasDisplay;
 				const halo = node.confidenceTotal;
 				let alpha = isFaded ? 0.15 : (isSpecial ? 0.9 : (0.45 + depth * 0.55));
+				if (isCut) alpha = Math.min(alpha, 0.35);
 				if (viewSettings.showGravitasColor && !isFaded && !isSpecial) {
 					alpha = 0.35 + depth * 0.4;
 				}
@@ -3474,6 +3514,7 @@ export class SemanticHologramView extends ItemView {
 				ctx.arc(sx, sy, r, 0, Math.PI * 2);
 				ctx.fill();
 			}
+			ctx.globalAlpha = 1;
 
 			for (const { p, i } of order) {
 				const node = this.nodes[i]!;
@@ -3492,10 +3533,13 @@ export class SemanticHologramView extends ItemView {
 					scale = 1.0 + normZ * 1.0;
 				}
 				const fontSize = Math.max(6, Math.round(10 * scale));
+				const isCutLabel = this.clipboard.action === 'cut' && this.clipboard.paths.has(node.path);
+				if (isCutLabel) ctx.globalAlpha = 0.4;
 				ctx.font = `${fontSize}px var(--font-interface)`;
-				const labelAlpha = (0.35 + ((p.z + R) / (2 * R || 1)) * 0.65) * (this.isNodeFadedByAnchors(i) ? 0.2 : 1);
+				const labelAlpha = (0.35 + ((p.z + R) / (2 * R || 1)) * 0.65) * (this.isNodeFadedByAnchors(i) ? 0.2 : 1) * (isCutLabel ? 0.4 : 1);
 				ctx.fillStyle = this.withAlpha(this.labelColor, labelAlpha);
 				ctx.fillText(node.label, w / 2 + p.x * s + this.nodeScreenRadius(node, p, maxAbsZ) + 3, h / 2 + p.y * s);
+				if (isCutLabel) ctx.globalAlpha = 1;
 			}
 
 			// Edges are drawn in the foreground so arrowheads stay visible over nodes.
@@ -3563,12 +3607,15 @@ export class SemanticHologramView extends ItemView {
 			const isCandidate = this.candidateNodes.has(node.path);
 			const isFaded = (this.hoverIndex >= 0 && !isHighlighted) || this.isNodeFadedByAnchors(i);
 			const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
+			const isCut = this.clipboard.action === 'cut' && this.clipboard.paths.has(node.path);
+			if (isCut) ctx.globalAlpha = 0.4;
 			const r = Math.max(3, node.radius * this.viewScale * (isHighlighted ? 1.5 : 1.0));
 			
 			const viewSettings = this.plugin.settings;
 			const grav = node.gravitasDisplay;
 			const halo = node.confidenceTotal;
 			let alpha = 0.92;
+			if (isCut) alpha = 0.35;
 
 			const typeEntry = viewSettings.nodeTypes.find((t) => t.id === node.nodeType);
 			const baseColor = typeEntry?.color ?? this.nodeColor;
@@ -3588,7 +3635,9 @@ export class SemanticHologramView extends ItemView {
 				? this.withAlpha(isCandidate ? CANDIDATE_COLOR : baseColor, 0.15)
 				: (isCandidate
 					? CANDIDATE_COLOR
-					: (isSpecial ? baseColor : this.withAlpha(nodeColor, alpha)));
+					: (isSpecial
+						? (isCut ? this.withAlpha(baseColor, alpha) : baseColor)
+						: this.withAlpha(nodeColor, alpha)));
 			const scanLayer2d = this.scanLayerAt(i);
 			if (scanLayer2d) {
 				const hue = SCAN_LAYER_COLORS[scanLayer2d.key] ?? SCAN_LAYER_COLORS.activation!;
@@ -3609,16 +3658,21 @@ export class SemanticHologramView extends ItemView {
 			ctx.arc(sx, sy, r, 0, Math.PI * 2);
 			ctx.fill();
 		}
-
+		
+		ctx.globalAlpha = 1;
 		ctx.font = '10px var(--font-interface)';
 		for (let i = 0; i < this.nodes.length; i++) {
 			const node = this.nodes[i]!;
 			if (!this.isNodeVisible(node)) {
 				continue;
 			}
-			ctx.fillStyle = this.isNodeFadedByAnchors(i) ? this.withAlpha(this.labelColor, 0.15) : this.labelColor;
+			const isCutLabel = this.clipboard.action === 'cut' && this.clipboard.paths.has(node.path);
+			ctx.fillStyle = (this.isNodeFadedByAnchors(i) || isCutLabel)
+				? this.withAlpha(this.labelColor, isCutLabel ? 0.35 : 0.15)
+				: this.labelColor;
 			ctx.fillText(node.label, this.toScreenX(node.x) + node.radius + 3, this.toScreenY(node.y));
 		}
+		ctx.globalAlpha = 1;
 		// Edges are drawn in the foreground so arrowheads stay visible over nodes.
 		ctx.lineWidth = 1;
 		for (const l of this.links) {
@@ -3662,12 +3716,35 @@ export class SemanticHologramView extends ItemView {
 		
 		// Edge hover inspection
 		const edge = this.hoveredEdge;
-		if (edge) {
+		if (edge && (this.is3D || this.ctrlPressed)) {
 			this.drawEdgeTooltip(edge);
+		} else {
+			this.hideEdgeTooltip();
 		}
 
 		this.drawHoverTooltip();
 		this.updateCursor();
+	}
+
+	private populateCwdDropdown(select: HTMLSelectElement): void {
+		select.empty();
+		const rootOption = select.createEl('option', { value: '/', text: '/' });
+		
+		const dirs = descendantDirs(this.app.vault, 'hologram');
+		// Sort the directories to build a proper hierarchy
+		dirs.sort((a, b) => a.path.localeCompare(b.path));
+		
+		for (const dir of dirs) {
+			const relPath = dir.path.substring('hologram/'.length);
+			const depth = relPath.split('/').length - 1;
+			const indent = '\u00A0\u00A0\u00A0\u00A0'.repeat(depth);
+			select.createEl('option', {
+				value: dir.path,
+				text: `${indent}/${relPath}`
+			});
+		}
+		
+		select.value = this.currentCwd || '/';
 	}
 
 	private nodeScreenPos(node: GraphNode): { x: number, y: number } {
@@ -3685,7 +3762,12 @@ export class SemanticHologramView extends ItemView {
 		const ctx = this.ctx;
 		const canvas = this.canvas;
 		if (!ctx || !canvas) return;
-		if (!this.pointerInside || this.hoverIndex < 0 || this.ctrlPressed) return;
+		if (!this.pointerInside || this.hoverIndex < 0) return;
+		if (!this.is3D && !this.ctrlPressed) return;
+		if (this.ctrlPressed && !this.is3D) {
+			// In 2D, Ctrl+hover shows the HTML preview card via showPreviewCard(), not canvas tooltip
+			return;
+		}
 		if (this.rotating || this.panning || this.pinnedIndex >= 0 || this.selecting || this.selectMode || this.groupDragging) return;
 		const node = this.nodes[this.hoverIndex];
 		if (!node) return;
@@ -3855,11 +3937,11 @@ export class SemanticHologramView extends ItemView {
 		const viewportHeight = window.innerHeight;
 		const cardWidth = 320;
 
-		let left = rect.left + this.pointerX - cardWidth - 16;
-		let top = rect.top + this.pointerY;
+		let left = this.pointerX - cardWidth - 16;
+		let top = this.pointerY;
 
 		if (left < 8) {
-			left = rect.left + this.pointerX + 16;
+			left = this.pointerX + 16;
 		}
 
 		const cardHeight = this.activePreviewCard.getBoundingClientRect().height;
@@ -5099,6 +5181,18 @@ export class SemanticHologramView extends ItemView {
 				}
 				this.pinnedIndex = -1;
 			}
+			if (this.clipboard.action === 'cut' && moved < 6) {
+				const hit = this.hitTest(e);
+				const anchorHit = this.hitTestAnchor(e.clientX, e.clientY);
+				// Only cancel if the click is actually on the canvas, not on UI elements
+				const target = e.target as HTMLElement;
+				const isCanvasClick = target === this.canvas || this.canvas?.contains(target);
+				if (hit < 0 && anchorHit < 0 && isCanvasClick) {
+					this.clipboard = { action: null, targetType: null, paths: new Set(), anchorDir: null };
+					this.showToast('Cut cancelled');
+					this.wake();
+				}
+			}
 			if (this.clearOnUp && moved < 6) {
 				this.clearSelection();
 			}
@@ -5636,7 +5730,8 @@ export class SemanticHologramView extends ItemView {
 		}
 		const vs = (this.is3D && this.anchorDragScale > 0 ? this.anchorDragScale : this.viewScale) || 1;
 		const dsx = (e.clientX - this.anchorDragStartX) / vs;
-		const dsy = (e.clientY - this.anchorDragStartY) / vs;
+		const rawDsy = (e.clientY - this.anchorDragStartY) / vs;
+		const dsy = this.is3D ? rawDsy : -rawDsy;
 		this.anchorDragTravel = Math.hypot(e.clientX - this.anchorDragStartX, e.clientY - this.anchorDragStartY);
 		// Only arm a drop target once the drag is clearly a drag, so a small
 		// reposition that happens to start over another anchor does not reparent
@@ -5776,6 +5871,8 @@ export class SemanticHologramView extends ItemView {
 			const isUnion = it.g.id === '__union__';
 			const selected = this.selectedAnchor === it.i;
 			const hovered = this.hoveredAnchor === it.i;
+			const isCutAnchor = this.clipboard.action === 'cut' && this.clipboard.targetType === 'anchor' && this.clipboard.anchorDir === this.anchorDirectoryOf(it.g);
+			if (isCutAnchor) ctx.globalAlpha = 0.4;
 			// The folder this drag would land in: filled, so the user can see the
 			// membership change they are about to commit before letting go.
 			const dropTarget = this.anchorDragging && this.anchorDropTarget === it.i;
@@ -5785,9 +5882,10 @@ export class SemanticHologramView extends ItemView {
 					? ANCHOR_SELECTED_COLOR
 					: (isUnion ? ANCHOR_UNION_COLOR : ANCHOR_COLOR);
 			const rad = ANCHOR_RADIUS + (isUnion ? 4 : 0) + (hovered || selected ? 3 : 0) + (dropTarget ? 5 : 0);
+			const anchorAlpha = isCutAnchor ? 0.18 : (dropTarget ? 0.45 : 0.18);
 			ctx.beginPath();
 			ctx.arc(it.sx, it.sy, rad, 0, Math.PI * 2);
-			ctx.fillStyle = this.withAlpha(color, dropTarget ? 0.45 : 0.18);
+			ctx.fillStyle = this.withAlpha(color, anchorAlpha);
 			ctx.fill();
 			ctx.lineWidth = isUnion ? 3 : 2;
 			ctx.strokeStyle = color;
@@ -5801,8 +5899,9 @@ export class SemanticHologramView extends ItemView {
 			ctx.fillStyle = color;
 			ctx.fill();
 			ctx.font = isUnion ? '600 11px var(--font-interface)' : '11px var(--font-interface)';
-			ctx.fillStyle = this.withAlpha(color, 0.95);
+			ctx.fillStyle = this.withAlpha(color, isCutAnchor ? 0.4 : 0.95);
 			ctx.fillText((isUnion ? '\u222a ' : '') + it.g.tags.join(' + '), it.sx + rad + 4, it.sy);
+			if (isCutAnchor) ctx.globalAlpha = 1;
 		}
 		ctx.restore();
 	}
@@ -6027,6 +6126,75 @@ export class SemanticHologramView extends ItemView {
 				this.rebuildGraph();
 				return;
 			}
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !e.repeat) {
+				e.preventDefault();
+				if (this.selected.size > 0) {
+					const paths = new Set<string>();
+					for (const i of this.selected) {
+						const n = this.nodes[i];
+						if (n) paths.add(n.path);
+					}
+					this.clipboard = { action: 'copy', targetType: 'node', paths, anchorDir: null };
+					this.showToast(`Copied ${paths.size} node${paths.size === 1 ? '' : 's'} to clipboard`);
+				} else if (this.revealAnchors && this.hoveredAnchor >= 0) {
+					const g = this.activeAnchors()[this.hoveredAnchor];
+					if (g && g.id !== '__union__') {
+						const dir = this.anchorDirectoryOf(g);
+						if (dir) {
+							this.clipboard = { action: 'copy', targetType: 'anchor', paths: new Set(), anchorDir: dir };
+							this.showToast(`Copied hologram "${g.id}" to clipboard`);
+						}
+					}
+				} else {
+					this.showToast('Nothing selected to copy');
+					return;
+				}
+				return;
+			}
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x' && !e.repeat) {
+				e.preventDefault();
+				if (this.selected.size > 0) {
+					const paths = new Set<string>();
+					for (const i of this.selected) {
+						const n = this.nodes[i];
+						if (n) paths.add(n.path);
+					}
+					this.clipboard = { action: 'cut', targetType: 'node', paths, anchorDir: null };
+					this.showToast(`Cut ${paths.size} node${paths.size === 1 ? '' : 's'} to clipboard`);
+				} else if (this.revealAnchors && this.hoveredAnchor >= 0) {
+					const g = this.activeAnchors()[this.hoveredAnchor];
+					if (g && g.id !== '__union__') {
+						const dir = this.anchorDirectoryOf(g);
+						if (dir) {
+							this.clipboard = { action: 'cut', targetType: 'anchor', paths: new Set(), anchorDir: dir };
+							this.showToast(`Cut hologram "${g.id}" to clipboard`);
+						}
+					}
+				} else {
+					this.showToast('Nothing selected to cut');
+					return;
+				}
+				this.wake();
+				return;
+			}
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && !e.repeat) {
+				e.preventDefault();
+				if (this.clipboard.action === null || this.clipboard.paths.size === 0) {
+					this.showToast('Clipboard is empty');
+					return;
+				}
+				void this.pasteClipboard();
+				return;
+			}
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'h' && !e.repeat) {
+				e.preventDefault();
+				if (this.selected.size === 0) {
+					this.showToast('No nodes selected to create hologram');
+					return;
+				}
+				void this.createNewHologramFromSelection();
+				return;
+			}
 			return;
 		}
 		const target = e.target as HTMLElement | null;
@@ -6034,7 +6202,7 @@ export class SemanticHologramView extends ItemView {
 		const inp = target as HTMLInputElement;
 		const isCheckbox = tag === 'INPUT' && inp?.type === 'checkbox';
 		const inTypingContext =
-			tag === 'TEXTAREA' || !!target?.isContentEditable || (tag === 'INPUT' && !isCheckbox);
+			tag === 'TEXTAREA' || tag === 'SELECT' || !!target?.isContentEditable || (tag === 'INPUT' && !isCheckbox);
 		if (inTypingContext) {
 			return;
 		}
@@ -6043,7 +6211,12 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		const key = e.key.toLowerCase();
-		if (e.key === 'Escape' && this.anchorDragging && !e.repeat) {
+		if (e.key === 'Escape' && this.clipboard.action === 'cut' && !e.repeat) {
+			e.preventDefault();
+			this.clipboard = { action: null, targetType: null, paths: new Set(), anchorDir: null };
+			this.showToast('Cut cancelled');
+			this.wake();
+		} else if (e.key === 'Escape' && this.anchorDragging && !e.repeat) {
 			// Esc aborts an in-flight reparent and puts the hologram back where it
 			// was. Leaving the nodes at the release point would persist a layout
 			// the user explicitly backed out of.
@@ -6063,9 +6236,16 @@ export class SemanticHologramView extends ItemView {
 			e.preventDefault();
 			this.toggleProjection();
 		} else if (key === 'a' && !e.repeat) {
-			// Hold to reveal hologram anchors for placement. Rebuild on reveal
+			// Toggle reveal hologram anchors for placement. Rebuild on reveal
 			// so membership matches the current tag graph.
-			if (!this.revealAnchors) {
+			if (this.revealAnchors) {
+				this.revealAnchors = false;
+				this.hoveredAnchor = -1;
+				if (this.anchorDragging) {
+					this.cancelAnchorDrag();
+				}
+				this.updateCursor();
+			} else {
 				this.rebuildAnchors();
 				this.revealAnchors = true;
 				this.updateCursor();
@@ -6100,10 +6280,21 @@ export class SemanticHologramView extends ItemView {
 			e.preventDefault();
 			this.showToast('Merge: drag nodes onto another hologram');
 		} else if (key === 's' && !e.repeat) {
-			this.selectMode = true;
-			this.selectDragOccurred = false;
-			this.updateCursor();
-		} else if (e.key.startsWith('Arrow')) {
+			if (this.revealAnchors && this.hoveredAnchor >= 0) {
+				e.preventDefault();
+				const g = this.activeAnchors()[this.hoveredAnchor];
+				if (g && g.id !== '__union__') {
+					this.selected.clear();
+					for (const idx of g.nodeIndices) {
+						this.selected.add(idx);
+					}
+					this.showToast(`Hologram "${g.id}" selected`);
+				}
+			} else {
+				this.selectMode = true;
+				this.selectDragOccurred = false;
+				this.updateCursor();
+			}
 			e.preventDefault();
 			this.pressedKeys.add(e.key);
 		} else if (e.key === ' ' && !e.repeat && this.is3D && target?.tagName !== 'INPUT' && target?.tagName !== 'TEXTAREA') {
@@ -6175,6 +6366,15 @@ private selectHovered(): void {
 				ty += n.y;
 				tz += n.z;
 				count++;
+			}
+		} else if (this.revealAnchors && this.hoveredAnchor >= 0) {
+			const g = this.activeAnchors()[this.hoveredAnchor];
+			if (g && g.id !== '__union__') {
+				const centroid = this.anchorCentroid(g);
+				tx = centroid.x;
+				ty = centroid.y;
+				tz = centroid.z;
+				count = 1;
 			}
 		} else {
 			const idx = this.hoverIndex >= 0 ? this.hoverIndex : this.pinnedIndex >= 0 ? this.pinnedIndex : -1;
@@ -6290,6 +6490,145 @@ private selectHovered(): void {
 		}
 	}
 
+	private async createNewHologramFromSelection(): Promise<void> {
+		const newTag = await this.promptNewHologramTag();
+		if (!newTag) return;
+
+		const vault = this.app.vault;
+		const destDir = this.currentCwd ? `${this.currentCwd}/${newTag}` : `hologram/${newTag}`;
+
+		try {
+			if (!vault.getAbstractFileByPath(destDir)) {
+				await vault.createFolder(destDir);
+			}
+		} catch {
+			// Already exists
+		}
+
+		const files: TFile[] = [];
+		for (const i of this.selected) {
+			const n = this.nodes[i];
+			if (!n) continue;
+			const f = vault.getAbstractFileByPath(n.path);
+			if (f instanceof TFile) files.push(f);
+		}
+
+		for (const f of files) {
+			const dest = `${destDir}/${f.name}`;
+			try {
+				await vault.rename(f, dest);
+			} catch (err) {
+				console.error(`[SH] move failed for ${f.path}:`, err);
+			}
+		}
+
+		this.selected.clear();
+		for (const node of this.nodes) node.selected = false;
+
+		await this.plugin.hologramService.loadCache();
+		await this.plugin.refreshGraphs();
+
+		// Reveal anchors so the new anchor is visible
+		if (!this.revealAnchors) {
+			this.rebuildAnchors();
+			this.revealAnchors = true;
+			this.updateCursor();
+		}
+
+		this.showToast(`Created hologram "${newTag}" with ${files.length} node${files.length === 1 ? '' : 's'}`);
+	}
+	private async pasteClipboard(): Promise<void> {
+		if (this.clipboard.action === null) {
+			this.showToast('Clipboard is empty');
+			return;
+		}
+
+		const vault = this.app.vault;
+
+		if (this.clipboard.targetType === 'anchor' && this.clipboard.anchorDir) {
+			let destDir: string;
+			if (this.hoveredAnchor >= 0) {
+				const g = this.activeAnchors()[this.hoveredAnchor];
+				if (g && g.id !== '__union__') {
+					destDir = `hologram/${g.id}`;
+				} else {
+					destDir = this.currentCwd ? this.currentCwd : 'hologram';
+				}
+			} else {
+				destDir = this.currentCwd ? this.currentCwd : 'hologram';
+			}
+
+			try {
+				if (!vault.getAbstractFileByPath(destDir)) {
+					await vault.createFolder(destDir);
+				}
+			} catch {
+				// Already exists
+			}
+
+			const srcDir = this.clipboard.anchorDir;
+			const res = await moveDirInto(vault, srcDir, destDir);
+			if (res.moved.length) {
+				await this.plugin.hologramService.loadCache();
+				await this.plugin.refreshGraphs();
+				this.showToast(`Moved hologram to ${destDir}`);
+			} else {
+				this.showToast(res.skipped.map(s => s.reason).join(', ') || 'Nothing moved');
+			}
+		} else if (this.clipboard.paths.size > 0) {
+			let destDir: string;
+			if (this.hoveredAnchor >= 0) {
+				const g = this.activeAnchors()[this.hoveredAnchor];
+				if (g && g.id !== '__union__') {
+					destDir = `hologram/${g.id}`;
+				} else {
+					destDir = this.currentCwd ? this.currentCwd : 'hologram';
+				}
+			} else {
+				destDir = this.currentCwd ? this.currentCwd : 'hologram';
+			}
+
+			try {
+				if (!vault.getAbstractFileByPath(destDir)) {
+					await vault.createFolder(destDir);
+				}
+			} catch {
+				// Already exists
+			}
+
+			const action = this.clipboard.action;
+			const paths = [...this.clipboard.paths];
+			let count = 0;
+
+			for (const srcPath of paths) {
+				const file = vault.getAbstractFileByPath(srcPath);
+				if (!(file instanceof TFile)) continue;
+
+				const dest = `${destDir}/${file.name}`;
+				try {
+					if (action === 'cut') {
+						await vault.rename(file, dest);
+					} else {
+						await vault.copy(file, dest);
+					}
+					count++;
+				} catch (err) {
+					console.error(`[SH] paste failed for ${srcPath}:`, err);
+				}
+			}
+
+			await this.plugin.hologramService.loadCache();
+			await this.plugin.refreshGraphs();
+
+			const verb = action === 'cut' ? 'Moved' : 'Copied';
+			this.showToast(`${verb} ${count} note${count === 1 ? '' : 's'} to ${destDir}`);
+		} else {
+			this.showToast('Clipboard is empty');
+			return;
+		}
+
+		this.clipboard = { action: null, targetType: null, paths: new Set(), anchorDir: null };
+	}
 	private async takeScreenshot(): Promise<void> {
 		if (!this.canvas || !this.contentEl) {
 			return;
@@ -6359,6 +6698,11 @@ private selectHovered(): void {
 			'<div class="sh-help-row"><span class="sh-help-key">h</span><span class="sh-help-desc">hold: show help</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+f</span><span class="sh-help-desc">focus node search</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+a</span><span class="sh-help-desc">select all visible nodes</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+h</span><span class="sh-help-desc">create new hologram from selected nodes</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+c</span><span class="sh-help-desc">copy selected nodes or anchor to clipboard</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+x</span><span class="sh-help-desc">cut selected nodes (dimmed until paste/cancel)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+v</span><span class="sh-help-desc">paste clipboard into hovered hologram or CWD</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Esc</span><span class="sh-help-desc">cancel pending cut</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+z</span><span class="sh-help-desc">undo</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+Shift+z / Ctrl+y</span><span class="sh-help-desc">redo</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">c</span><span class="sh-help-desc">center hovered / selected node(s) on rotation origin</span></div>' +
@@ -6438,13 +6782,6 @@ private selectHovered(): void {
 				this.selectLasso = [];
 				this.pointerDown = false;
 				this.clearOnUp = false;
-			}
-			this.updateCursor();
-		} else if (e.key.toLowerCase() === 'a') {
-			this.revealAnchors = false;
-			this.hoveredAnchor = -1;
-			if (this.anchorDragging) {
-				this.endAnchorDrag();
 			}
 			this.updateCursor();
 		} else if (e.key.startsWith('Arrow')) {
@@ -6798,7 +7135,14 @@ private selectHovered(): void {
 	refreshControlsPanel(): void {
 		for (const leaf of this.app.workspace.getLeavesOfType('semantic-hologram-controls')) {
 			const view = leaf.view as any;
-			if (view.render) view.render();
+			if (view.render) {
+				const active = document.activeElement;
+				const hasFocus = active && view.contentEl?.contains(active) && (active.tagName === 'SELECT' || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+				if (!hasFocus) {
+					view.render();
+				}
+			}
+			// Always update camera read-outs, even if panel isn't re-rendered
 			if (view.onCameraChange) view.onCameraChange();
 		}
 	}

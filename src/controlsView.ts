@@ -1,6 +1,7 @@
-import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
+import { ItemView, WorkspaceLeaf, setIcon, TFolder, TFile } from 'obsidian';
 import type SemanticHologramPlugin from './main';
 import { SemanticHologramView, VIEW_TYPE_HOLOGRAM, buildNodePreviewModel } from './view';
+import { descendantDirs } from './hologramDirs';
 import type { SearchIndexEntry } from './view';
 import { parseSearchQuery, matchEntry } from './searchLogic';
 import { subscribeLegendRefresh } from './legendBus';
@@ -100,12 +101,24 @@ export class SemanticHologramControlsView extends ItemView {
 		this.render();
 
 		this.registerEvent(
-			this.app.workspace.on('layout-change', () => this.render()),
+			this.app.workspace.on('layout-change', () => {
+				const active = document.activeElement;
+				if (active && this.contentEl.contains(active) && (active.tagName === 'SELECT' || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+					return;
+				}
+				this.render();
+			}),
 		);
 		// Re-render when the derived state this panel shows changes. `delete` and
 		// `rename` used to be absent, so a trashed or renamed note left its tag
 		// listed in the Hologram Manager until an unrelated modify landed.
-		const rerenderSoon = () => window.setTimeout(() => this.render(), 100);
+		const rerenderSoon = () => {
+			const active = document.activeElement;
+			if (active && this.contentEl.contains(active) && (active.tagName === 'SELECT' || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+				return;
+			}
+			window.setTimeout(() => this.render(), 100);
+		};
 		this.registerEvent(this.app.vault.on('modify', rerenderSoon));
 		this.registerEvent(this.app.vault.on('create', rerenderSoon));
 		this.registerEvent(this.app.vault.on('delete', rerenderSoon));
@@ -253,8 +266,22 @@ export class SemanticHologramControlsView extends ItemView {
 	}
 
 	render(): void {
-		console.log('Rendering controls view, settings:', this.plugin.settings);
+		const active = document.activeElement;
+		const hasFocus = active && this.contentEl.contains(active) && (active.tagName === 'SELECT' || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+		if (hasFocus) {
+			this.onCameraChange();
+			return;
+		}
 		this.endHologramPeek();
+
+		// Validate CWD: if the folder no longer exists, reset to root
+		const cwdView = this.getView();
+		if (cwdView) {
+			const cwd = cwdView.currentCwd || '';
+			if (cwd !== '' && !this.plugin.app.vault.getAbstractFileByPath(cwd)) {
+				cwdView.currentCwd = '';
+			}
+		}
 		const { contentEl } = this;
 		contentEl.empty();
 		document.querySelectorAll('.sh-node-preview-card').forEach(el => el.remove());
@@ -267,7 +294,50 @@ export class SemanticHologramControlsView extends ItemView {
 		const is3D = this.plugin.settings.hologramMode === '3d';
 
 		const header = contentEl.createDiv({ cls: 'sh-controls-header' });
-		header.createEl('h4', { text: 'Semantic Hologram' });
+		header.createEl('h4', { text: 'Semantic Hologram', attr: { style: 'margin-bottom: 6px;' } });
+		header.createDiv({ text: "Press 'h' for help", cls: 'sh-controls-hint', attr: { style: 'font-size: 11px; opacity: 0.7; margin-bottom: 10px; text-align: center; width: 100%; display: block;' } });
+
+		const cwdSelect = header.createEl('select', { cls: 'sh-cwd-selector', attr: { style: 'width: 100%; margin-bottom: 12px;' } });
+		const populateCwd = (sel: HTMLSelectElement) => {
+			sel.empty();
+			sel.createEl('option', { value: '/', text: '/' });
+			const dirs = descendantDirs(this.plugin.app.vault, 'hologram');
+			dirs.sort((a, b) => a.path.localeCompare(b.path));
+			for (const dir of dirs) {
+				const relPath = dir.path.substring('hologram/'.length);
+				const depth = relPath.split('/').length - 1;
+				const indent = '\u00A0\u00A0\u00A0\u00A0'.repeat(depth);
+				sel.createEl('option', {
+					value: dir.path,
+					text: `${indent}/${relPath}`
+				});
+			}
+			if (view) {
+				sel.value = view.currentCwd || '/';
+			}
+		};
+		populateCwd(cwdSelect);
+		cwdSelect.addEventListener('change', () => {
+			if (view) {
+				view.currentCwd = cwdSelect.value === '/' ? '' : cwdSelect.value;
+				void this.plugin.refreshGraphs();
+				view.fitToView();
+			}
+		});
+		cwdSelect.addEventListener('keydown', (e) => {
+			if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+				const options = Array.from(cwdSelect.options);
+				let idx = cwdSelect.selectedIndex;
+				if (e.key === 'ArrowUp') idx = Math.max(0, idx - 1);
+				else idx = Math.min(options.length - 1, idx + 1);
+				cwdSelect.selectedIndex = idx;
+				if (view) {
+					view.currentCwd = cwdSelect.value === '/' ? '' : cwdSelect.value;
+					void this.plugin.refreshGraphs();
+					view.fitToView();
+				}
+			}
+		});
 
 		// Camera Controls
 		const cameraControls = contentEl.createDiv({ cls: 'sh-camera-controls' });
@@ -615,6 +685,7 @@ export class SemanticHologramControlsView extends ItemView {
 
 				item.addEventListener('click', (e) => {
 					if (!view) return;
+					hidePreview();
 					if (e.ctrlKey || e.metaKey) {
 						// Deselect or toggle individual
 						view.toggleCandidateNode(entry.path);
@@ -623,6 +694,10 @@ export class SemanticHologramControlsView extends ItemView {
 						view.toggleCandidateNode(entry.path);
 						view.focusGraph();
 						resultsContainer.style.display = 'none';
+						resultsContainer.empty();
+						// Clear search query to prevent re-triggering results
+						searchInput.value = '';
+						this.searchQuery = '';
 					}
 					updateCandidateStates();
 				});
@@ -638,9 +713,33 @@ export class SemanticHologramControlsView extends ItemView {
 		});
 
 	// Hologram Manager (integrated)
-		contentEl.createEl('h5', { text: 'Emulsified Holograms' });
+		const headerRow = contentEl.createDiv({ cls: 'sh-hologram-header' });
+		headerRow.createDiv({ text: 'E?', cls: 'sh-hologram-col-e' });
+		headerRow.createDiv({ text: 'Visible Holograms', cls: 'sh-hologram-col-label' });
 		const hologramList = contentEl.createDiv({ cls: 'sh-hologram-list' });
-		const allTags = this.plugin.hologramService.getAllTags();
+		let allTags: string[] = [];
+		const activeView = this.app.workspace.getLeavesOfType('semantic-hologram-view')[0]?.view as any;
+		const cwd = activeView?.currentCwd || '';
+		const cache = (this.plugin.hologramService as any).cache; // Access private cache
+		
+		const visibleTags = new Set<string>();
+		for (const [path, tags] of cache.entries()) {
+			if (cwd === '' || path.startsWith(`${cwd}/`)) {
+				for (const t of tags) visibleTags.add(t);
+			}
+		}
+		allTags = Array.from(visibleTags).sort();
+
+		// Filter out the root container folder name — it's not a hologram
+		allTags = allTags.filter(t => t !== 'hologram');
+
+		if (cwd !== '') {
+			const folderName = cwd.split('/').pop();
+			if (folderName && !allTags.includes(folderName)) {
+				allTags.unshift(folderName);
+			}
+		}
+		
 		const selected = new Set(this.plugin.settings.selectedHolograms);
 
 		const refreshRows = () => {
@@ -668,6 +767,20 @@ export class SemanticHologramControlsView extends ItemView {
 			if (selected.has(tag)) {
 				row.addClass('is-active');
 			}
+			// Emulsification status: only for children of CWD, only if they have their own children
+			const isCwd = cwd !== '' && tag === cwd.split('/').pop();
+			let isEmulsified = false;
+			if (!isCwd) {
+				const folder = this.app.vault.getAbstractFileByPath(`hologram/${tag}`);
+				if (folder instanceof TFolder) {
+					// Emulsified = has child folders that contain nodes (markdown files)
+					isEmulsified = folder.children.some(c => {
+						if (!(c instanceof TFolder)) return false;
+						return c.children.some(f => f instanceof TFile && f.extension === 'md');
+					});
+				}
+			}
+			row.createDiv({ text: isEmulsified ? '✓' : '', cls: 'sh-hologram-col-e' });
 			row.createSpan({ text: tag, cls: 'sh-hologram-label' });
 			row.addEventListener('mouseenter', () => {
 				this.requestHologramPeek(tag, false);

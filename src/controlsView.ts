@@ -265,11 +265,54 @@ export class SemanticHologramControlsView extends ItemView {
 		}
 	}
 
+	/**
+	 * Repaint the per-row state of the Visible Holograms list: the emulsification
+	 * ✓ and the selected highlight.
+	 *
+	 * Split out because `render()` early-returns whenever a camera/focal input
+	 * holds focus (rebuilding those inputs would clobber the caret and the
+	 * in-progress value). That guard is correct for the inputs, but it meant the
+	 * hologram list silently went stale too — a ✓ that had been true would keep
+	 * showing, or vanish, with nothing repainting it until focus left the panel.
+	 * Rows are div[role=button] with no inputs inside, so refreshing their state
+	 * cannot disturb whatever the user is typing.
+	 */
+	private refreshHologramRowStates(): void {
+		const selected = new Set(this.plugin.settings.selectedHolograms);
+		this.contentEl.querySelectorAll<HTMLElement>('.sh-hologram-row').forEach((row) => {
+			const tag = row.getAttribute('data-tag');
+			if (tag === null) return;
+			row.toggleClass('is-active', selected.has(tag));
+			const cell = row.querySelector<HTMLElement>('.sh-hologram-col-e');
+			if (cell) cell.textContent = this.isEmulsifiedHologram(tag) ? '✓' : '';
+		});
+	}
+
+	/**
+	 * A hologram is emulsified when it has child folders that hold notes — its
+	 * own nodes overlaid with every node beneath it, all the way down.
+	 *
+	 * This is a property of the FOLDER and deliberately does not consider the
+	 * current CWD. Keying it off the CWD made the ✓ disappear the instant the CWD
+	 * became that hologram, which reads as the emulsion state flipping when
+	 * nothing about the folder changed.
+	 */
+	private isEmulsifiedHologram(tag: string): boolean {
+		const folder = this.app.vault.getAbstractFileByPath(`hologram/${tag}`);
+		if (!(folder instanceof TFolder)) return false;
+		return folder.children.some(
+			(c) => c instanceof TFolder && c.children.some((f) => f instanceof TFile && f.extension === 'md')
+		);
+	}
+
 	render(): void {
 		const active = document.activeElement;
 		const hasFocus = active && this.contentEl.contains(active) && (active.tagName === 'SELECT' || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
 		if (hasFocus) {
 			this.onCameraChange();
+			// The inputs must not be rebuilt, but the hologram list is derived from
+			// the vault and carries no inputs, so it still has to keep up.
+			this.refreshHologramRowStates();
 			return;
 		}
 		this.endHologramPeek();
@@ -751,6 +794,7 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const saveAndRefresh = () => {
 			this.plugin.settings.selectedHolograms = [...selected];
+			this.refreshHologramRowStates();
 			void this.plugin.saveSettings();
 		};
 
@@ -767,20 +811,12 @@ export class SemanticHologramControlsView extends ItemView {
 			if (selected.has(tag)) {
 				row.addClass('is-active');
 			}
-			// Emulsification status: only for children of CWD, only if they have their own children
-			const isCwd = cwd !== '' && tag === cwd.split('/').pop();
-			let isEmulsified = false;
-			if (!isCwd) {
-				const folder = this.app.vault.getAbstractFileByPath(`hologram/${tag}`);
-				if (folder instanceof TFolder) {
-					// Emulsified = has child folders that contain nodes (markdown files)
-					isEmulsified = folder.children.some(c => {
-						if (!(c instanceof TFolder)) return false;
-						return c.children.some(f => f instanceof TFile && f.extension === 'md');
-					});
-				}
-			}
-			row.createDiv({ text: isEmulsified ? '✓' : '', cls: 'sh-hologram-col-e' });
+			// Emulsification is a property of the FOLDER, not of the current CWD: a
+			// hologram is emulsified when it has child folders holding notes, and
+			// that stays true while you are standing inside it. Skipping the check
+			// for the CWD hologram made the ✓ disappear the moment the CWD became
+			// that hologram, which reads as the emulsion state flipping.
+			row.createDiv({ text: this.isEmulsifiedHologram(tag) ? '✓' : '', cls: 'sh-hologram-col-e' });
 			row.createSpan({ text: tag, cls: 'sh-hologram-label' });
 			row.addEventListener('mouseenter', () => {
 				this.requestHologramPeek(tag, false);

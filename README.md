@@ -392,6 +392,8 @@ Configuration lives under **Settings → Semantic Hologram**:
 
 | Document | Contents |
 | --- | --- |
+| [`docs/hologram-emulsification.md`](docs/hologram-emulsification.md) | Emulsification: how the filesystem subtree becomes a hologram. **Authoritative** on membership, CWD partitioning, and edge/physics scoping. |
+| [`docs/filesystem-hologram-management.md`](docs/filesystem-hologram-management.md) | Filesystem-hologram concepts, operations, and UI design. |
 | [`docs/untethered-trackball-pinhole-camera-system.md`](docs/untethered-trackball-pinhole-camera-system.md) | The camera model, in full. |
 | [`docs/semantic-structure.md`](docs/semantic-structure.md) | Abstraction hierarchy, frontmatter schema, topology. |
 | [`docs/example-node.md`](docs/example-node.md) | The new-note template. |

@@ -128,6 +128,21 @@ export default class SemanticHologramPlugin extends Plugin {
 		);
 		this.registerEvent(
 			this.app.vault.on('delete', async (file) => {
+				if (file instanceof TFolder) {
+					// A folder delete is a membership change, exactly like a folder
+					// rename: every note under it loses its membership in that
+					// hologram, so the path-keyed tag cache and the derived anchor
+					// groups must both be invalidated. The rename handler below
+					// already treats folders this way; this one used to return
+					// early for anything that was not a TFile, which left a
+					// deleted hologram's anchor on screen until something else
+					// (a reveal toggle, a reload) happened to rebuild it.
+					if (file.path.startsWith(`${HOLOGRAM_FOLDER}/`)) {
+						this.scheduleCacheRefresh();
+						this.scheduleRebuild();
+					}
+					return;
+				}
 				if (file instanceof TFile && this.isInScope(file.path)) {
 					this.scheduleCacheRefresh();
 					await this.refreshIncomingRelationships();

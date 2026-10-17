@@ -1,4 +1,4 @@
-import { App, ItemView, Modal, Notice, Platform, TFile, TextComponent, WorkspaceLeaf } from 'obsidian';
+import { App, ItemView, Modal, Notice, Platform, TFile, TFolder, TextComponent, WorkspaceLeaf } from 'obsidian';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 // @ts-ignore
@@ -18,7 +18,7 @@ import type { ScanGraph, ScanResult } from './diffraction';
 import { buildAdjacency, explainConnection, findNodeByRef, runScan } from './diffraction';
 import type { ScanLayerSettings } from './settings';
 import { HOLOGRAM_FOLDER } from './settings';
-import { descendantDirs, moveDirInto, reportMoveResult, topLevelHologramDirs } from './hologramDirs';
+import { descendantDirs, moveDirInto, notesInDir, reportMoveResult, topLevelHologramDirs } from './hologramDirs';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
 
@@ -1874,6 +1874,10 @@ export class SemanticHologramView extends ItemView {
 
 		const n = nodes.length;
 		const R = n > 0 ? this.worldR() : 400;
+		// Nodes seeded fresh by this build. Their ring position is a placeholder:
+		// links are not known yet, so they get re-seeded from their neighbours
+		// once the link pass below has run. See the re-seed after link building.
+		const freshSeeds: number[] = [];
 		nodes.forEach((node, i) => {
 			if (!node.homeSet) {
 				const angle = (i / Math.max(1, n)) * Math.PI * 2;
@@ -1888,6 +1892,7 @@ export class SemanticHologramView extends ItemView {
 				node.vx = 0;
 				node.vy = 0;
 				node.vz = 0;
+				freshSeeds.push(i);
 			}
 		});
 
@@ -2012,6 +2017,95 @@ export class SemanticHologramView extends ItemView {
 			degree[l.a] = (degree[l.a] ?? 0) + 1;
 			degree[l.b] = (degree[l.b] ?? 0) + 1;
 		}
+
+		// Place nodes that just arrived where they belong, then let them settle.
+		//
+		// A node arriving by CUT/PASTE gets a new path, so the incremental rebuild
+		// cannot match it to its previous position and seeds it on the ring. Left
+		// there, the home spring anchors it at that seed and it never integrates:
+		// the edges reconnect (topology changed, so physics re-arms) while the
+		// node itself stays put.
+		//
+		// The group is translated so its CENTROID lands on the centroid of the
+		// destination hologram's existing nodes. Landing the whole arriving group
+		// on the destination centre, rather than each node on its own neighbours,
+		// is what makes the settle look natural — the springs then spread the group
+		// outward from a sensible centre instead of untangling from wherever the
+		// ring happened to drop them. The group's internal arrangement is left
+		// intact so the springs, not the seed, decide the final layout.
+		//
+		// Link construction already drops any edge whose endpoints are in
+		// different holograms, so an arriving group has no links to its old
+		// hologram — the destination is the only thing pulling on it.
+		//
+		// Incremental only. On a FRESH open every node is a fresh seed, and
+		// re-seeding them all throws away the ring spread that keeps an
+		// unconnected or weakly-connected graph from collapsing into one blob.
+		// That starting layout is deliberate.
+		if (incremental && freshSeeds.length > 0) {
+			const freshSet = new Set(freshSeeds);
+			// Arriving nodes grouped by the hologram they joined.
+			const arrivals = new Map<string, number[]>();
+			for (const i of freshSeeds) {
+				const node = nodes[i];
+				if (!node) continue;
+				const dir = this.getHologramDir(node.path) ?? '';
+				const list = arrivals.get(dir) ?? [];
+				list.push(i);
+				arrivals.set(dir, list);
+			}
+
+			for (const [dir, group] of arrivals) {
+				// Centroid of the hologram's pre-existing nodes. Excluding the
+				// arriving group is what makes this the destination centre rather
+				// than the centre of everything.
+				let ex = 0;
+				let ey = 0;
+				let ez = 0;
+				let ec = 0;
+				for (let i = 0; i < nodes.length; i++) {
+					if (freshSet.has(i)) continue;
+					const node = nodes[i];
+					if (!node) continue;
+					if ((this.getHologramDir(node.path) ?? '') !== dir) continue;
+					ex += node.x;
+					ey += node.y;
+					ez += node.z;
+					ec++;
+				}
+				if (ec === 0) continue; // nothing to align to; keep the ring seed
+
+				let gx = 0;
+				let gy = 0;
+				let gz = 0;
+				for (const i of group) {
+					const node = nodes[i];
+					if (!node) continue;
+					gx += node.x;
+					gy += node.y;
+					gz += node.z;
+				}
+				const dx = ex / ec - gx / group.length;
+				const dy = ey / ec - gy / group.length;
+				const dz = ez / ec - gz / group.length;
+				for (const i of group) {
+					const node = nodes[i];
+					if (!node) continue;
+					node.x += dx;
+					node.y += dy;
+					node.z += dz;
+					// Home follows, so the spring pulls toward the integrated
+					// position rather than back to the ring seed it just left.
+					node.homeX = node.x;
+					node.homeY = node.y;
+					node.homeZ = node.z;
+					node.vx = 0;
+					node.vy = 0;
+					node.vz = 0;
+				}
+			}
+		}
+
 		const maxDeg = Math.max(1, ...degree);
 		nodes.forEach((node, i) => {
 			node.radius = 3 + Math.min(7, Math.sqrt(degree[i] ?? 0) * 2.2 * Math.sqrt(maxDeg) / Math.sqrt(maxDeg));
@@ -2052,9 +2146,21 @@ export class SemanticHologramView extends ItemView {
 			this.settlingNotice = new Notice('Graph is settling…', 0);
 		}
 		// Captured before the swap: the shape of the previous graph is what tells
-		// us whether physics needs to re-arm below.
-		const prevNodeCount = this.nodes?.length ?? 0;
-		const prevLinkCount = this.links?.length ?? 0;
+		// us whether physics needs to re-arm below. Compared as PATH and PATH-PAIR
+		// sets, not counts: a cut/paste that moves notes between two in-scope
+		// folders leaves the node count identical, so a count comparison reports
+		// "unchanged" and physics never re-arms — the pasted nodes would sit
+		// frozen while their edges reconnected. Link pairs must be keyed by path,
+		// not by index, because indices are reassigned on every rebuild.
+		const pairKey = (nodesArr: GraphNode[], l: { a: number; b: number }): string => {
+			const pa = nodesArr[l.a]?.path ?? `#${l.a}`;
+			const pb = nodesArr[l.b]?.path ?? `#${l.b}`;
+			return pa < pb ? `${pa}|${pb}` : `${pb}|${pa}`;
+		};
+		const prevNodes = this.nodes ?? [];
+		const prevLinks = this.links ?? [];
+		const prevPaths = new Set(prevNodes.map((n) => n.path));
+		const prevPairs = new Set(prevLinks.map((l) => pairKey(prevNodes, l)));
 		this.nodes = nodes;
 		this.links = links;
 		for (const i of this.selected) {
@@ -2066,7 +2172,10 @@ export class SemanticHologramView extends ItemView {
 		this.calculateFaces();
 		this.rebuildAnchors();
 		console.log(`[SH] buildGraph: nodes=${nodes.length} links=${links.length} faces=${this.faces.length} settled=${this.settled}`);
-		const topologyChanged = nodes.length !== prevNodeCount || links.length !== prevLinkCount;
+		const sameSet = (a: Set<string>, b: Set<string>): boolean => a.size === b.size && [...a].every((v) => b.has(v));
+		const nextPaths = new Set(nodes.map((n) => n.path));
+		const nextPairs = new Set(links.map((l) => pairKey(nodes, l)));
+		const topologyChanged = !sameSet(prevPaths, nextPaths) || !sameSet(prevPairs, nextPairs);
 		if (!incremental || topologyChanged) {
 			// Physics must re-arm when the shape changes. `settled` is a one-way
 			// latch — the settle detector is gated on `!this.settled` — and a node
@@ -5589,25 +5698,40 @@ export class SemanticHologramView extends ItemView {
 	 * anchors (one per directory level).
 	 */
 	private rebuildAnchors(): void {
+		// Emulsification: a hologram is a virtual overlay of its own nodes with
+		// every node of its children, all the way down the filesystem tree. So a
+		// folder and its whole subtree are ONE hologram, not one per directory
+		// level.
+		//
+		// This groups by the TOP-LEVEL hologram directory (the same value the edge
+		// filter uses via getHologramDir), so nested folders no longer produce
+		// sibling anchors. It also matches anchorDirectoryOf(), which already
+		// resolved every anchor to a top-level folder by name — grouping per tag
+		// was producing anchors that function could not round-trip.
+		//
+		// `tags` keeps the union of every member's tags, not just the top-level
+		// name, because selectedHolograms filters on those and may name a nested
+		// folder: selecting 'Syscall' must still light up the emulsified 'Linux
+		// Kernel Internals' anchor that contains it.
 		const groups = new Map<string, { tags: Set<string>; nodeIndices: number[] }>();
 		for (let i = 0; i < this.nodes.length; i++) {
 			const node = this.nodes[i];
 			if (!node) {
 				continue;
 			}
-			const tags = [...this.plugin.hologramService.getTags(node.path)];
-			if (tags.length === 0) {
+			const top = this.getHologramDir(node.path);
+			if (!top) {
 				continue;
 			}
-			for (const tag of tags) {
-				let g = groups.get(tag);
-				if (!g) {
-					g = { tags: new Set(), nodeIndices: [] };
-					groups.set(tag, g);
-				}
-				g.tags.add(tag);
-				g.nodeIndices.push(i);
+			let g = groups.get(top);
+			if (!g) {
+				g = { tags: new Set(), nodeIndices: [] };
+				groups.set(top, g);
 			}
+			for (const tag of this.plugin.hologramService.getTags(node.path)) {
+				g.tags.add(tag);
+			}
+			g.nodeIndices.push(i);
 		}
 
 		this.anchorGroups = [...groups].map(([root, g]) => ({
@@ -5921,7 +6045,11 @@ export class SemanticHologramView extends ItemView {
 			ctx.fill();
 			ctx.font = isUnion ? '600 11px var(--font-interface)' : '11px var(--font-interface)';
 			ctx.fillStyle = this.withAlpha(color, isCutAnchor ? 0.4 : 0.95);
-			ctx.fillText((isUnion ? '\u222a ' : '') + it.g.tags.join(' + '), it.sx + rad + 4, it.sy);
+			// An emulsified anchor carries every descendant tag, so joining them
+			// would label one hologram "A + B + C". Label it by its top-level id
+			// instead; only the synthetic union anchor, which has no folder of its
+			// own, is named by its member tags.
+			ctx.fillText(isUnion ? '\u222a ' + it.g.tags.join(' + ') : it.g.id, it.sx + rad + 4, it.sy);
 			if (isCutAnchor) ctx.globalAlpha = 1;
 		}
 		ctx.restore();
@@ -6149,15 +6277,7 @@ export class SemanticHologramView extends ItemView {
 			}
 			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !e.repeat) {
 				e.preventDefault();
-				if (this.selected.size > 0) {
-					const paths = new Set<string>();
-					for (const i of this.selected) {
-						const n = this.nodes[i];
-						if (n) paths.add(n.path);
-					}
-					this.clipboard = { action: 'copy', targetType: 'node', paths, anchorDir: null };
-					this.showToast(`Copied ${paths.size} node${paths.size === 1 ? '' : 's'} to clipboard`);
-				} else if (this.revealAnchors && this.hoveredAnchor >= 0) {
+				if (this.revealAnchors && this.hoveredAnchor >= 0) {
 					const g = this.activeAnchors()[this.hoveredAnchor];
 					if (g && g.id !== '__union__') {
 						const dir = this.anchorDirectoryOf(g);
@@ -6166,6 +6286,14 @@ export class SemanticHologramView extends ItemView {
 							this.showToast(`Copied hologram "${g.id}" to clipboard`);
 						}
 					}
+				} else if (this.selected.size > 0) {
+					const paths = new Set<string>();
+					for (const i of this.selected) {
+						const n = this.nodes[i];
+						if (n) paths.add(n.path);
+					}
+					this.clipboard = { action: 'copy', targetType: 'node', paths, anchorDir: null };
+					this.showToast(`Copied ${paths.size} node${paths.size === 1 ? '' : 's'} to clipboard`);
 				} else {
 					this.showToast('Nothing selected to copy');
 					return;
@@ -6174,15 +6302,7 @@ export class SemanticHologramView extends ItemView {
 			}
 			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x' && !e.repeat) {
 				e.preventDefault();
-				if (this.selected.size > 0) {
-					const paths = new Set<string>();
-					for (const i of this.selected) {
-						const n = this.nodes[i];
-						if (n) paths.add(n.path);
-					}
-					this.clipboard = { action: 'cut', targetType: 'node', paths, anchorDir: null };
-					this.showToast(`Cut ${paths.size} node${paths.size === 1 ? '' : 's'} to clipboard`);
-				} else if (this.revealAnchors && this.hoveredAnchor >= 0) {
+				if (this.revealAnchors && this.hoveredAnchor >= 0) {
 					const g = this.activeAnchors()[this.hoveredAnchor];
 					if (g && g.id !== '__union__') {
 						const dir = this.anchorDirectoryOf(g);
@@ -6191,6 +6311,14 @@ export class SemanticHologramView extends ItemView {
 							this.showToast(`Cut hologram "${g.id}" to clipboard`);
 						}
 					}
+				} else if (this.selected.size > 0) {
+					const paths = new Set<string>();
+					for (const i of this.selected) {
+						const n = this.nodes[i];
+						if (n) paths.add(n.path);
+					}
+					this.clipboard = { action: 'cut', targetType: 'node', paths, anchorDir: null };
+					this.showToast(`Cut ${paths.size} node${paths.size === 1 ? '' : 's'} to clipboard`);
 				} else {
 					this.showToast('Nothing selected to cut');
 					return;
@@ -6200,7 +6328,15 @@ export class SemanticHologramView extends ItemView {
 			}
 			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && !e.repeat) {
 				e.preventDefault();
-				if (this.clipboard.action === null || this.clipboard.paths.size === 0) {
+				// An ANCHOR clipboard keeps its payload in `anchorDir` and leaves
+				// `paths` empty by design, so testing `paths.size` alone reported
+				// every anchor paste as "Clipboard is empty" and returned before
+				// pasteClipboard ran. Judge emptiness by whichever field this
+				// clipboard actually uses.
+				const clip = this.clipboard;
+				const empty = clip.action === null
+					|| (clip.targetType === 'anchor' ? !clip.anchorDir : clip.paths.size === 0);
+				if (empty) {
 					this.showToast('Clipboard is empty');
 					return;
 				}
@@ -6620,6 +6756,8 @@ private selectHovered(): void {
 			const action = this.clipboard.action;
 			const paths = [...this.clipboard.paths];
 			let count = 0;
+			// Source folders touched by this cut, so they can be pruned once emptied.
+			const sourceDirs = new Set<string>();
 
 			for (const srcPath of paths) {
 				const file = vault.getAbstractFileByPath(srcPath);
@@ -6633,8 +6771,38 @@ private selectHovered(): void {
 						await vault.copy(file, dest);
 					}
 					count++;
+					if (action === 'cut') {
+						const slash = srcPath.lastIndexOf('/');
+						const srcDir = slash > 0 ? srcPath.slice(0, slash) : '';
+						// Guard against pruning the destination, or a folder that
+						// contains it.
+						if (srcDir && srcDir !== destDir && !destDir.startsWith(`${srcDir}/`)) {
+							sourceDirs.add(srcDir);
+						}
+					}
 				} catch (err) {
 					console.error(`[SH] paste failed for ${srcPath}:`, err);
+				}
+			}
+
+			// A cut that emptied a source folder must not leave it behind. Only
+			// prune when the folder's ENTIRE subtree is note-free: an otherwise
+			// empty folder whose child folders still hold notes is a legitimate
+			// parent hologram, and pruning on `children.length === 0` would
+			// destroy exactly that structure. Deepest first, so a parent is judged
+			// only after its own children are gone.
+			if (action === 'cut' && sourceDirs.size > 0) {
+				const dirs = [...sourceDirs].sort((a, b) => b.length - a.length);
+				for (const dir of dirs) {
+					try {
+						const folder = vault.getAbstractFileByPath(dir);
+						if (!(folder instanceof TFolder)) continue;
+						if (notesInDir(vault, dir).length > 0) continue;
+						if (dir === destDir || destDir.startsWith(`${dir}/`)) continue;
+						await vault.delete(folder, true);
+					} catch (err) {
+						console.error(`[SH] could not prune emptied folder ${dir}:`, err);
+					}
 				}
 			}
 

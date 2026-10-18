@@ -8,7 +8,7 @@ import type SemanticHologramPlugin from './main';
 import type { HologramTool, ProjectionMode, RelTypeEntry } from './settings';
 import type { SemanticHologramSettings } from './settings';
 import type { RelationEdge, RelationScan } from './relations';
-import { findRelationsSection, formatStrength, inScopePath, scanRelations } from './relations';
+import { findRelationsSection, formatStrength, scanRelations } from './relations';
 import { notifyLegendRefresh } from './legendBus';
 import { addRelation, removeRelation } from './reviewCommon';
 import { computeNodeStats, isEvidenceType, readNodeMetas, scanGravitas } from './gravitas';
@@ -18,7 +18,7 @@ import type { ScanGraph, ScanResult } from './diffraction';
 import { buildAdjacency, explainConnection, findNodeByRef, runScan } from './diffraction';
 import type { ScanLayerSettings } from './settings';
 import { HOLOGRAM_FOLDER } from './settings';
-import { descendantDirs, moveDirInto, notesInDir, reportMoveResult, topLevelHologramDirs } from './hologramDirs';
+import { descendantDirs, displayedHolograms, moveDirInto, notesInDir, reportMoveResult } from './hologramDirs';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
 
@@ -85,12 +85,7 @@ export interface GraphNode {
 	nodeType: string;
 }
 
-/**
- * A derived hologram anchor: one connected component of the hologram-tag graph.
- * Tags that share a node (an emulsified bridge) are unioned into a single
- * component, so an emulsified pair has ONE anchor. Membership is stable; the
- * centroid is computed live from `nodeIndices` so it tracks the nodes.
- */
+/** A CWD-derived, displayed hologram anchor. */
 export interface AnchorGroup {
 	id: string;
 	tags: string[];
@@ -321,6 +316,10 @@ export class SemanticHologramView extends ItemView {
 	private magnifyBtn: HTMLButtonElement | null = null;
 	private demagnifyBtn: HTMLButtonElement | null = null;
 	private nodes: GraphNode[] = [];
+	/** CWD-relative displayed-hologram directory for each node path. */
+	private displayedOwner = new Map<string, string>();
+	/** Stable per-build centres keep sibling holograms physically separate. */
+	private displayedCenters = new Map<string, [number, number, number]>();
 	private historyStack = new HistoryStack();
 	private links: GraphLink[] = [];
 	private searchIndex: Map<string, SearchIndexEntry> = new Map();
@@ -1525,6 +1524,13 @@ export class SemanticHologramView extends ItemView {
 		const btnFit = magnifyControls.createEl('button', { text: '⌖', cls: 'sh-map-magnify-btn' });
 		btnFit.title = 'Fit to View (fits the selection when there is one)';
 		btnFit.addEventListener('click', () => this.fitToView());
+		const btnUp = magnifyControls.createEl('button', { text: '↑', cls: 'sh-map-magnify-btn' });
+		btnUp.title = 'Go to parent folder';
+		const parent = this.currentCwd.includes('/')
+			? this.currentCwd.slice(0, this.currentCwd.lastIndexOf('/'))
+			: '';
+		btnUp.disabled = !this.currentCwd;
+		btnUp.addEventListener('click', () => this.setCurrentCwd(parent));
 
 		const btnOut = magnifyControls.createEl('button', { text: '−', cls: 'sh-map-magnify-btn' });
 		this.demagnifyBtn = btnOut;
@@ -1547,6 +1553,7 @@ export class SemanticHologramView extends ItemView {
 		this.canvas.addEventListener('pointerdown', this.onPointerDown);
 		this.canvas.addEventListener('pointermove', this.onPointerMove);
 		this.canvas.addEventListener('pointerup', this.onPointerUp);
+		this.canvas.addEventListener('dblclick', this.onDoubleClick);
 		this.canvas.addEventListener('pointerleave', this.onPointerLeave);
 		this.canvas.addEventListener('pointercancel', this.onPointerUp);
 		this.canvas.addEventListener('wheel', this.onWheel, { passive: false });
@@ -1607,6 +1614,7 @@ export class SemanticHologramView extends ItemView {
 			this.canvas.removeEventListener('pointerdown', this.onPointerDown);
 			this.canvas.removeEventListener('pointermove', this.onPointerMove);
 			this.canvas.removeEventListener('pointerup', this.onPointerUp);
+			this.canvas.removeEventListener('dblclick', this.onDoubleClick);
 			this.canvas.removeEventListener('pointerleave', this.onPointerLeave);
 			this.canvas.removeEventListener('pointercancel', this.onPointerUp);
 			this.canvas.removeEventListener('wheel', this.onWheel);
@@ -1771,8 +1779,12 @@ export class SemanticHologramView extends ItemView {
 		if (!incremental && !this.loadingNotice) {
 			this.loadingNotice = new Notice('Loading hologram…', 0);
 		}
-		const allFiles = this.app.vault.getMarkdownFiles();
-		const files = allFiles.filter((f) => this.isInScope(f.path));
+		const partition = displayedHolograms(this.app.vault, this.currentCwd);
+		const ownerByPath = new Map<string, string>();
+		for (const hologram of partition) {
+			for (const path of hologram.paths) ownerByPath.set(path, hologram.directory);
+		}
+		const files = this.app.vault.getMarkdownFiles().filter((f) => ownerByPath.has(f.path));
 		const resolved = this.app.metadataCache.resolvedLinks;
 		const settings = this.plugin.settings;
 
@@ -1793,9 +1805,9 @@ export class SemanticHologramView extends ItemView {
 			this.app.metadataCache,
 			knownIds,
 			settings.defaultRelStrength,
-			(path) => this.isInScope(path),
+			(path) => ownerByPath.has(path),
 		);
-		const gscan = await scanGravitas(files, this.app.vault, this.app.metadataCache, (path) => this.isInScope(path));
+		const gscan = await scanGravitas(files, this.app.vault, this.app.metadataCache, (path) => ownerByPath.has(path));
 		// A newer build may have started while we were reading; drop stale results.
 		if (buildSeq !== this.buildSeq) {
 			return;
@@ -1874,17 +1886,25 @@ export class SemanticHologramView extends ItemView {
 
 		const n = nodes.length;
 		const R = n > 0 ? this.worldR() : 400;
+		const owners = [...new Set(ownerByPath.values())].sort();
+		this.displayedCenters.clear();
+		owners.forEach((owner, i) => {
+			const angle = (i / Math.max(1, owners.length)) * Math.PI * 2;
+			const radius = owners.length > 1 ? R * 0.38 : 0;
+			this.displayedCenters.set(owner, [Math.cos(angle) * radius, Math.sin(angle) * radius, 0]);
+		});
 		// Nodes seeded fresh by this build. Their ring position is a placeholder:
 		// links are not known yet, so they get re-seeded from their neighbours
 		// once the link pass below has run. See the re-seed after link building.
 		const freshSeeds: number[] = [];
 		nodes.forEach((node, i) => {
 			if (!node.homeSet) {
+				const centre = ownerByPath.get(node.path) ? this.displayedCenters.get(ownerByPath.get(node.path)!) : undefined;
 				const angle = (i / Math.max(1, n)) * Math.PI * 2;
 				const rad = R * 0.45 * (0.6 + Math.random() * 0.4);
-				node.x = Math.cos(angle) * rad;
-				node.y = Math.sin(angle) * rad;
-				node.z = (Math.random() - 0.5) * R * 0.5;
+				node.x = (centre?.[0] ?? 0) + Math.cos(angle) * rad;
+				node.y = (centre?.[1] ?? 0) + Math.sin(angle) * rad;
+				node.z = (centre?.[2] ?? 0) + (Math.random() - 0.5) * R * 0.5;
 				node.homeX = node.x;
 				node.homeY = node.y;
 				node.homeZ = node.z;
@@ -1910,8 +1930,8 @@ export class SemanticHologramView extends ItemView {
 			if (!relById.get(e.relId)?.enabled) {
 				continue;
 			}
-			const srcDir = this.getHologramDir(e.source);
-			const dstDir = this.getHologramDir(e.target);
+			const srcDir = ownerByPath.get(e.source);
+			const dstDir = ownerByPath.get(e.target);
 			if (srcDir !== dstDir) {
 				continue;
 			}
@@ -1981,8 +2001,8 @@ export class SemanticHologramView extends ItemView {
 				if (dstIdx === undefined || dstIdx === srcIdx) {
 					continue;
 				}
-				const srcDir = this.getHologramDir(f.path);
-				const dstDir = this.getHologramDir(targetPath);
+				const srcDir = ownerByPath.get(f.path);
+				const dstDir = ownerByPath.get(targetPath);
 				if (srcDir !== dstDir) {
 					continue;
 				}
@@ -2049,7 +2069,7 @@ export class SemanticHologramView extends ItemView {
 			for (const i of freshSeeds) {
 				const node = nodes[i];
 				if (!node) continue;
-				const dir = this.getHologramDir(node.path) ?? '';
+				const dir = ownerByPath.get(node.path) ?? '';
 				const list = arrivals.get(dir) ?? [];
 				list.push(i);
 				arrivals.set(dir, list);
@@ -2067,7 +2087,7 @@ export class SemanticHologramView extends ItemView {
 					if (freshSet.has(i)) continue;
 					const node = nodes[i];
 					if (!node) continue;
-					if ((this.getHologramDir(node.path) ?? '') !== dir) continue;
+					if ((ownerByPath.get(node.path) ?? '') !== dir) continue;
 					ex += node.x;
 					ey += node.y;
 					ez += node.z;
@@ -2162,6 +2182,7 @@ export class SemanticHologramView extends ItemView {
 		const prevPaths = new Set(prevNodes.map((n) => n.path));
 		const prevPairs = new Set(prevLinks.map((l) => pairKey(prevNodes, l)));
 		this.nodes = nodes;
+		this.displayedOwner = ownerByPath;
 		this.links = links;
 		for (const i of this.selected) {
 			const nd = this.nodes[i];
@@ -2292,26 +2313,28 @@ export class SemanticHologramView extends ItemView {
 		return edgeMaxLength - s * (edgeMaxLength - edgeMinLength);
 	}
 
-	/** A path is in hologram scope if it lives under Holograms/ or declares hologram-node. */
-	private getHologramDir(path: string): string | null {
-		const parts = path.split('/');
-		if (parts.length >= 2 && parts[0] === 'hologram') {
-			return parts[1] || null;
-		}
-		return null;
+	/** Change filesystem presentation level and deliberately re-seed its new layout. */
+	public setCurrentCwd(cwd: string): void {
+		const next = cwd === HOLOGRAM_FOLDER ? '' : cwd;
+		if (next && !(this.app.vault.getAbstractFileByPath(next) instanceof TFolder)) return;
+		if (next === this.currentCwd) return;
+		this.currentCwd = next;
+		this.selected.clear();
+		this.plugin.settings.selectedHolograms = [];
+		// Positions belong to the active CWD partition. Do not reuse old nodes when
+		// its physics problem changes.
+		this.nodes = [];
+		this.links = [];
+		this.displayedOwner.clear();
+		this.settled = false;
+		this.settleCount = 0;
+		this.layoutFrames = 0;
+		this.userAdjustedView = false;
+		void this.plugin.refreshGraphs().then(() => this.fitToView());
 	}
 
-	/** A path is in hologram scope if it lives under Holograms/ or declares hologram-node. */
-	private isInScope(path: string): boolean {
-		if (this.currentCwd) {
-			// Validate CWD: if folder no longer exists, reset to root
-			if (!this.app.vault.getAbstractFileByPath(this.currentCwd)) {
-				this.currentCwd = '';
-			} else if (!path.startsWith(`${this.currentCwd}/`)) {
-				return false;
-			}
-		}
-		return inScopePath(path, this.app.vault, this.app.metadataCache);
+	private ownerOf(node: GraphNode): string | null {
+		return this.displayedOwner.get(node.path) ?? null;
 	}
 
 	private worldR(): number {
@@ -3426,6 +3449,7 @@ export class SemanticHologramView extends ItemView {
 							continue;
 						}
 						const b = nodes[j]!;
+						if (this.ownerOf(a) !== this.ownerOf(b)) continue;
 						if (b.pinned || b.selected) {
 							continue;
 						}
@@ -3482,8 +3506,9 @@ export class SemanticHologramView extends ItemView {
 			if (!visible[i] || node.pinned || node.selected) {
 				continue;
 			}
-			node.vx += (0 - node.x) * PHYS.center;
-			node.vy += (0 - node.y) * PHYS.center;
+			const centre = this.displayedCenters.get(this.ownerOf(node) ?? '') ?? [0, 0, 0];
+			node.vx += (centre[0] - node.x) * PHYS.center;
+			node.vy += (centre[1] - node.y) * PHYS.center;
 		}
 	}
 
@@ -3497,6 +3522,7 @@ export class SemanticHologramView extends ItemView {
 			}
 			for (let j = i + 1; j < nodes.length; j++) {
 				const b = nodes[j]!;
+				if (this.ownerOf(a) !== this.ownerOf(b)) continue;
 				if (!visible[j] || b.pinned || b.selected) {
 					continue;
 				}
@@ -3557,9 +3583,10 @@ export class SemanticHologramView extends ItemView {
 			if (!visible[i] || node.pinned || node.selected) {
 				continue;
 			}
-			node.vx += (0 - node.x) * PHYS.center;
-			node.vy += (0 - node.y) * PHYS.center;
-			node.vz += (0 - node.z) * PHYS.center;
+			const centre = this.displayedCenters.get(this.ownerOf(node) ?? '') ?? [0, 0, 0];
+			node.vx += (centre[0] - node.x) * PHYS.center;
+			node.vy += (centre[1] - node.y) * PHYS.center;
+			node.vz += (centre[2] - node.z) * PHYS.center;
 		}
 	}
 
@@ -5098,6 +5125,16 @@ export class SemanticHologramView extends ItemView {
 		this.hoverIndex = idx;
 	};
 
+	private onDoubleClick = (e: MouseEvent): void => {
+		if (!this.revealAnchors) return;
+		const anchor = this.hitTestAnchor(e.clientX, e.clientY);
+		if (anchor < 0) return;
+		const directory = this.anchorDirectoryOf(this.activeAnchors()[anchor]);
+		if (!directory) return;
+		e.preventDefault();
+		this.setCurrentCwd(directory);
+	};
+
 	private onPointerMove = (e: PointerEvent): void => {
 		this.wake();
 		if (this.touch) {
@@ -5627,37 +5664,16 @@ export class SemanticHologramView extends ItemView {
 		this.maybeMergeIntoHologram(selCentroid);
 	}
 
-	private nodeMatchesTags(node: GraphNode, tags: string[]): boolean {
-		if (!tags || tags.length === 0) {
-			return true;
-		}
-		const nodeTags = this.plugin.hologramService.getTags(node.path);
-		return [...nodeTags].some((t) => tags.includes(t));
-	}
-
 	private nodeMatchesSelectedHolograms(node: GraphNode): boolean {
-		return this.nodeMatchesTags(node, this.plugin.settings.selectedHolograms);
+		const selected = this.plugin.settings.selectedHolograms;
+		return selected.length === 0 || selected.includes(this.ownerOf(node) ?? '');
 	}
 
 	/** Visibility used by draw(): a live peek overrides the persisted filter without writing it. */
 	private isNodeVisible(node: GraphNode): boolean {
 		return this.peekActive
-			? this.nodeMatchesTags(node, this.peekTags)
+			? this.peekTags.includes(this.ownerOf(node) ?? '')
 			: this.nodeMatchesSelectedHolograms(node);
-	}
-
-	/** Tags carried by any selected node. */
-	private selectedHologramTags(): Set<string> {
-		const tags = new Set<string>();
-		for (const i of this.selected) {
-			const node = this.nodes[i];
-			if (node) {
-				for (const t of this.plugin.hologramService.getTags(node.path)) {
-					tags.add(t);
-				}
-			}
-		}
-		return tags;
 	}
 
 	/**
@@ -5672,8 +5688,13 @@ export class SemanticHologramView extends ItemView {
 	 * all, and those return false here.
 	 */
 	private selectionIsWholeHolograms(): boolean {
-		const tags = this.selectedHologramTags();
-		if (tags.size === 0) {
+		const owners = new Set<string>();
+		for (const i of this.selected) {
+			const node = this.nodes[i];
+			const owner = node ? this.ownerOf(node) : null;
+			if (owner) owners.add(owner);
+		}
+		if (owners.size === 0) {
 			return false;
 		}
 		for (let i = 0; i < this.nodes.length; i++) {
@@ -5681,63 +5702,38 @@ export class SemanticHologramView extends ItemView {
 			if (!node || this.selected.has(i)) {
 				continue;
 			}
-			const nodeTags = this.plugin.hologramService.getTags(node.path);
-			for (const t of tags) {
-				if (nodeTags.has(t)) {
-					return false;
-				}
-			}
+			if (owners.has(this.ownerOf(node) ?? '')) return false;
 		}
 		return true;
 	}
 
 	/**
-	 * Rebuild the hologram anchor groups from directory membership.
-	 * Each directory under hologram/ is a hologram; nodes in the same directory
-	 * belong to the same anchor. Nodes in nested directories belong to multiple
-	 * anchors (one per directory level).
+	 * Rebuild one anchor per CWD-displayed hologram. A child subtree has one
+	 * recursive owner, so descendants have no separate anchor at this level.
 	 */
 	private rebuildAnchors(): void {
-		// Emulsification: a hologram is a virtual overlay of its own nodes with
-		// every node of its children, all the way down the filesystem tree. So a
-		// folder and its whole subtree are ONE hologram, not one per directory
-		// level.
-		//
-		// This groups by the TOP-LEVEL hologram directory (the same value the edge
-		// filter uses via getHologramDir), so nested folders no longer produce
-		// sibling anchors. It also matches anchorDirectoryOf(), which already
-		// resolved every anchor to a top-level folder by name — grouping per tag
-		// was producing anchors that function could not round-trip.
-		//
-		// `tags` keeps the union of every member's tags, not just the top-level
-		// name, because selectedHolograms filters on those and may name a nested
-		// folder: selecting 'Syscall' must still light up the emulsified 'Linux
-		// Kernel Internals' anchor that contains it.
-		const groups = new Map<string, { tags: Set<string>; nodeIndices: number[] }>();
+		const groups = new Map<string, number[]>();
 		for (let i = 0; i < this.nodes.length; i++) {
 			const node = this.nodes[i];
 			if (!node) {
 				continue;
 			}
-			const top = this.getHologramDir(node.path);
-			if (!top) {
+			const owner = this.ownerOf(node);
+			if (!owner) {
 				continue;
 			}
-			let g = groups.get(top);
+			let g = groups.get(owner);
 			if (!g) {
-				g = { tags: new Set(), nodeIndices: [] };
-				groups.set(top, g);
+				g = [];
+				groups.set(owner, g);
 			}
-			for (const tag of this.plugin.hologramService.getTags(node.path)) {
-				g.tags.add(tag);
-			}
-			g.nodeIndices.push(i);
+			g.push(i);
 		}
 
-		this.anchorGroups = [...groups].map(([root, g]) => ({
-			id: root,
-			tags: [...g.tags].sort(),
-			nodeIndices: g.nodeIndices,
+		this.anchorGroups = [...groups].map(([directory, nodeIndices]) => ({
+			id: directory,
+			tags: [directory],
+			nodeIndices,
 		}));
 		this.anchorMember.clear();
 		for (const g of this.anchorGroups) {
@@ -5792,7 +5788,7 @@ export class SemanticHologramView extends ItemView {
 			return this.anchorGroups;
 		}
 		const selSet = new Set(sel);
-		const rest = this.anchorGroups.filter((g) => !g.tags.some((t) => selSet.has(t)));
+		const rest = this.anchorGroups.filter((g) => !selSet.has(g.id));
 		const union = this.unionAnchor();
 		return union ? [...rest, union] : rest;
 	}
@@ -5966,14 +5962,7 @@ export class SemanticHologramView extends ItemView {
 	 */
 	private anchorDirectoryOf(g: AnchorGroup | undefined): string | null {
 		if (!g || g.id === '__union__') return null;
-		const name = g.id;
-		if (!name) return null;
-		// Prefer the real folder over the derived name: a union anchor's members
-		// can span folders, and an anchor whose folder was renamed mid-session
-		// should resolve to where the notes actually are.
-		const tops = topLevelHologramDirs(this.app.vault);
-		const match = tops.find((f) => f.name === name);
-		return match ? match.path : `${HOLOGRAM_FOLDER}/${name}`;
+		return this.app.vault.getAbstractFileByPath(g.id) instanceof TFolder ? g.id : null;
 	}
 
 	/** Move a hologram folder under another, then rebuild from the new tree. */
@@ -6045,11 +6034,7 @@ export class SemanticHologramView extends ItemView {
 			ctx.fill();
 			ctx.font = isUnion ? '600 11px var(--font-interface)' : '11px var(--font-interface)';
 			ctx.fillStyle = this.withAlpha(color, isCutAnchor ? 0.4 : 0.95);
-			// An emulsified anchor carries every descendant tag, so joining them
-			// would label one hologram "A + B + C". Label it by its top-level id
-			// instead; only the synthetic union anchor, which has no folder of its
-			// own, is named by its member tags.
-			ctx.fillText(isUnion ? '\u222a ' + it.g.tags.join(' + ') : it.g.id, it.sx + rad + 4, it.sy);
+			ctx.fillText(isUnion ? '\u222a ' + it.g.tags.join(' + ') : (it.g.id.split('/').pop() ?? it.g.id), it.sx + rad + 4, it.sy);
 			if (isCutAnchor) ctx.globalAlpha = 1;
 		}
 		ctx.restore();
@@ -7235,7 +7220,7 @@ private selectHovered(): void {
 		this.userAdjustedView = true;
 		const selected = this.plugin.settings.selectedHolograms;
 		this.peekTags = selected.includes(tag) ? [...selected] : [tag];
-		const peekNodes = this.nodes.filter((n) => this.nodeMatchesTags(n, this.peekTags));
+		const peekNodes = this.nodes.filter((n) => this.peekTags.includes(this.ownerOf(n) ?? ''));
 		if (peekNodes.length === 0) {
 			return;
 		}

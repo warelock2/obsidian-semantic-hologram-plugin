@@ -148,17 +148,16 @@ hologram/
 | CWD | Displayed holograms | Node sets |
 | --- | --- | --- |
 | `hologram` | `Linux Kernel Internals` | all 25 |
-| `hologram/Linux Kernel Internals` | *(none)*, `Syscall` | `{Syscall/CPU Ring, Syscall/Operating System, Syscall/Syscall}` |
+| `hologram/Linux Kernel Internals` | `Linux Kernel Internals`, `Syscall` | `{22 direct notes}`, `{Syscall/CPU Ring, Syscall/Operating System, Syscall/Syscall}` |
 
 At the CWD `hologram`, `Linux Kernel Internals` is a direct child with notes, so
 it emulsifies its whole subtree — its 22 direct notes plus `Syscall`'s 3 — into
 one hologram of 25 nodes.
 
-At the CWD `Linux Kernel Internals`, the picture inverts completely: the 22
-direct notes belong to the CWD itself and form no hologram at all, while `Syscall`
-is now the direct child and stands alone as a 3-note hologram. The same 25 nodes,
-partitioned completely differently, with the emulsification boundary moved one
-level down.
+At the CWD `Linux Kernel Internals`, the 22 direct notes form the CWD-local
+hologram, while `Syscall` is the direct child and stands alone as a 3-note
+hologram. The same 25 nodes are partitioned completely differently, with the
+emulsification boundary moved one level down.
 
 ---
 

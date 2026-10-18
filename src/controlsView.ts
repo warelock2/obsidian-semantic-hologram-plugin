@@ -1,7 +1,7 @@
 import { ItemView, WorkspaceLeaf, setIcon, TFolder, TFile } from 'obsidian';
 import type SemanticHologramPlugin from './main';
 import { SemanticHologramView, VIEW_TYPE_HOLOGRAM, buildNodePreviewModel } from './view';
-import { descendantDirs } from './hologramDirs';
+import { descendantDirs, displayedHolograms } from './hologramDirs';
 import type { SearchIndexEntry } from './view';
 import { parseSearchQuery, matchEntry } from './searchLogic';
 import { subscribeLegendRefresh } from './legendBus';
@@ -288,21 +288,20 @@ export class SemanticHologramControlsView extends ItemView {
 		});
 	}
 
-	/**
-	 * A hologram is emulsified when it has child folders that hold notes — its
-	 * own nodes overlaid with every node beneath it, all the way down.
-	 *
-	 * This is a property of the FOLDER and deliberately does not consider the
-	 * current CWD. Keying it off the CWD made the ✓ disappear the instant the CWD
-	 * became that hologram, which reads as the emulsion state flipping when
-	 * nothing about the folder changed.
-	 */
-	private isEmulsifiedHologram(tag: string): boolean {
-		const folder = this.app.vault.getAbstractFileByPath(`hologram/${tag}`);
+	/** A displayed hologram is emulsified when its root has descendant-note folders. */
+	private isEmulsifiedHologram(directory: string): boolean {
+		const folder = this.app.vault.getAbstractFileByPath(directory);
 		if (!(folder instanceof TFolder)) return false;
-		return folder.children.some(
-			(c) => c instanceof TFolder && c.children.some((f) => f instanceof TFile && f.extension === 'md')
-		);
+		const hasNotesBelow = (f: TFolder): boolean => {
+			for (const c of f.children) {
+				if (c instanceof TFolder) {
+					if (c.children.some((ch) => ch instanceof TFile && ch.extension === 'md')) return true;
+					if (hasNotesBelow(c)) return true;
+				}
+			}
+			return false;
+		};
+		return hasNotesBelow(folder);
 	}
 
 	render(): void {
@@ -362,9 +361,8 @@ export class SemanticHologramControlsView extends ItemView {
 		populateCwd(cwdSelect);
 		cwdSelect.addEventListener('change', () => {
 			if (view) {
-				view.currentCwd = cwdSelect.value === '/' ? '' : cwdSelect.value;
-				void this.plugin.refreshGraphs();
-				view.fitToView();
+				view.setCurrentCwd(cwdSelect.value === '/' ? '' : cwdSelect.value);
+				this.render();
 			}
 		});
 		cwdSelect.addEventListener('keydown', (e) => {
@@ -375,9 +373,8 @@ export class SemanticHologramControlsView extends ItemView {
 				else idx = Math.min(options.length - 1, idx + 1);
 				cwdSelect.selectedIndex = idx;
 				if (view) {
-					view.currentCwd = cwdSelect.value === '/' ? '' : cwdSelect.value;
-					void this.plugin.refreshGraphs();
-					view.fitToView();
+					view.setCurrentCwd(cwdSelect.value === '/' ? '' : cwdSelect.value);
+					this.render();
 				}
 			}
 		});
@@ -760,29 +757,20 @@ export class SemanticHologramControlsView extends ItemView {
 		headerRow.createDiv({ text: 'E?', cls: 'sh-hologram-col-e' });
 		headerRow.createDiv({ text: 'Visible Holograms', cls: 'sh-hologram-col-label' });
 		const hologramList = contentEl.createDiv({ cls: 'sh-hologram-list' });
-		let allTags: string[] = [];
 		const activeView = this.app.workspace.getLeavesOfType('semantic-hologram-view')[0]?.view as any;
 		const cwd = activeView?.currentCwd || '';
+		let allTags: string[] = [];
+		const cwdDir = cwd || 'hologram';
+		const vault = this.plugin.app.vault;
+		try {
+			const partition = displayedHolograms(vault, cwdDir);
+			allTags = partition.map((h) => h.directory);
+		} catch (e) {
+			allTags = [];
+		}
+		allTags = allTags.filter((t) => t !== '');
+		allTags.sort((a, b) => a.localeCompare(b));
 		const cache = (this.plugin.hologramService as any).cache; // Access private cache
-		
-		const visibleTags = new Set<string>();
-		for (const [path, tags] of cache.entries()) {
-			if (cwd === '' || path.startsWith(`${cwd}/`)) {
-				for (const t of tags) visibleTags.add(t);
-			}
-		}
-		allTags = Array.from(visibleTags).sort();
-
-		// Filter out the root container folder name — it's not a hologram
-		allTags = allTags.filter(t => t !== 'hologram');
-
-		if (cwd !== '') {
-			const folderName = cwd.split('/').pop();
-			if (folderName && !allTags.includes(folderName)) {
-				allTags.unshift(folderName);
-			}
-		}
-		
 		const selected = new Set(this.plugin.settings.selectedHolograms);
 
 		const refreshRows = () => {
@@ -817,7 +805,15 @@ export class SemanticHologramControlsView extends ItemView {
 			// for the CWD hologram made the ✓ disappear the moment the CWD became
 			// that hologram, which reads as the emulsion state flipping.
 			row.createDiv({ text: this.isEmulsifiedHologram(tag) ? '✓' : '', cls: 'sh-hologram-col-e' });
-			row.createSpan({ text: tag, cls: 'sh-hologram-label' });
+			const labelText = (() => {
+				if (cwd === '' || cwd === '/') {
+					return tag === 'hologram' ? 'hologram' : (tag.startsWith('hologram/') ? tag.slice('hologram/'.length) : tag);
+				}
+				// Relative to current CWD (strip cwd prefix + '/')
+				const prefix = cwd + '/';
+				return tag === cwd ? cwd.split('/').pop()! : (tag.startsWith(prefix) ? tag.slice(prefix.length) : tag);
+			})();
+			row.createSpan({ text: labelText, cls: 'sh-hologram-label' });
 			row.addEventListener('mouseenter', () => {
 				this.requestHologramPeek(tag, false);
 			});

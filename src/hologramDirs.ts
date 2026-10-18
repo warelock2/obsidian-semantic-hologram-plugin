@@ -25,6 +25,45 @@ export function notesInDir(vault: Vault, dir: string): TFile[] {
 	return out;
 }
 
+/** Markdown files directly in `dir`, excluding all child folders. */
+export function directNotesInDir(vault: Vault, dir: string): TFile[] {
+	const root = vault.getAbstractFileByPath(dir);
+	if (!(root instanceof TFolder)) return [];
+	return root.children.filter((child): child is TFile => child instanceof TFile && child.extension === 'md');
+}
+
+/**
+ * The CWD-relative, filesystem-only hologram partition.
+ *
+ * The CWD's direct notes are one hologram when non-empty. Each direct child
+ * folder with notes in its recursive subtree is another hologram. Deeper
+ * folders are absorbed into that direct child's recursive set.
+ */
+export interface DisplayedHologram {
+	directory: string;
+	paths: string[];
+	isCwdDirectNotes: boolean;
+}
+
+export function displayedHolograms(vault: Vault, cwd: string): DisplayedHologram[] {
+	const directory = cwd || HOLOGRAM_FOLDER;
+	const root = vault.getAbstractFileByPath(directory);
+	if (!(root instanceof TFolder)) return [];
+	const result: DisplayedHologram[] = [];
+	const own = directNotesInDir(vault, directory);
+	if (own.length) {
+		result.push({ directory, paths: own.map((f) => f.path).sort(), isCwdDirectNotes: true });
+	}
+	for (const child of root.children) {
+		if (!(child instanceof TFolder)) continue;
+		const notes = notesInDir(vault, child.path);
+		if (notes.length) {
+			result.push({ directory: child.path, paths: notes.map((f) => f.path).sort(), isCwdDirectNotes: false });
+		}
+	}
+	return result.sort((a, b) => a.directory.localeCompare(b.directory));
+}
+
 /** Top-level hologram folders — the things the anchor list shows. */
 export function topLevelHologramDirs(vault: Vault): TFolder[] {
 	const root = vault.getAbstractFileByPath(HOLOGRAM_FOLDER);

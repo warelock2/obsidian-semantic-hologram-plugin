@@ -109,6 +109,8 @@ interface CameraSnapshot {
 }
 
 interface Relation {
+	relId?: string;
+	justification?: string;
 	type: string;
 	strength: number;
 	/** Note that authored the relation line, when this is an authored relation. */
@@ -1148,14 +1150,20 @@ export class SemanticHologramView extends ItemView {
 		scanGraph(): ScanGraph {
 		return {
 			nodes: this.nodes.map((n) => ({ path: n.path, label: n.label })),
-			edges: this.links.map((l) => {
+			edges: this.links.flatMap((l) => {
 				// A link can carry several typed relations; conductance is their
 				// mean strength, which is what the layout's rest length already uses.
 				const strengths = l.relations.map((r) => r.strength).filter((s) => Number.isFinite(s));
 				const strength = strengths.length > 0
 					? strengths.reduce((a, b) => a + b, 0) / strengths.length
 					: 0.5;
-				return { a: l.a, b: l.b, strength };
+				return l.relations.map((r) => ({
+					a: l.a,
+					b: l.b,
+					strength,
+					relId: r.relId,
+					justification: r.justification,
+				}));
 			}),
 		};
 	}

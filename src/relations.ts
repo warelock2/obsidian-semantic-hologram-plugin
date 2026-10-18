@@ -14,6 +14,7 @@ export interface RelationEdge {
 	reversed: boolean; // authored with {R}
 	authoredFrom: string; // path of the note containing the line
 	raw: string; // verbatim line text (for mirroring)
+	justification?: string;
 }
 
 export interface MalformedRelation {
@@ -65,11 +66,11 @@ export interface NoteFrontmatter {
 
 export { ANY_HEADER, CONFIDENCE_HEADER, GRAVITAS_HEADER, INCOMING_HEADER, PROVENANCE_HEADER, RELATION_HEADER, sectionHeader } from './headers';
 
-// - logic/supports [[Target]] {R}? (0.5)
+// - logic/supports [[Target]] {R}? (0.5) :: optional justification
 // - related [[Target]] (0.5)
 // - structural/subsumed-by [[Target]] (0.75)
 const REL_LINE =
-	/^-\s+([a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?)\s+\[\[([^\]]+)\]\]\s*(\{R\})?\s*\((\d{1,2}(?:\.\d{1,2})?)\)\s*$/;
+	/^-\s+([a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?)\s+\[\[([^\]]+)\]\]\s*(\{R\})?\s*\((\d{1,2}(?:\.\d{1,2})?)\)(?:\s*::\s*(.*?))?\s*$/;
 
 export function isHologramNote(
 	frontmatter: Record<string, unknown> | null,
@@ -335,6 +336,7 @@ export function findIncomingSection(content: string): { startLine: number; endLi
 			const targetName = m[2]!;
 			const reversed = !!m[3];
 			const strengthStr = m[4];
+			const justification = (m[5] ?? '').trim() || undefined;
 			const strength = parseFloat(strengthStr!);
 
 			if (!knownIds.has(relId)) {
@@ -365,6 +367,7 @@ export function findIncomingSection(content: string): { startLine: number; endLi
 				reversed,
 				authoredFrom: path,
 				raw: trimmed,
+				justification,
 			});
 		}
 		return { outgoing, malformed };

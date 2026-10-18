@@ -18,6 +18,7 @@
     "check:example": "node --experimental-strip-types scripts/gen-example-node.mjs --check",
     "test:cdp": "node --test tests/cdp-camera.test.mjs",
     "test:diff": "node --experimental-strip-types --test tests/diffraction.test.mjs",
+    "sweep:grounding": "node scripts/sweep-grounding.mjs",
     "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "keywords": [],

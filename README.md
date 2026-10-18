@@ -185,7 +185,6 @@ section:
 hologram-node: true
 node-type: concept
 created: 2026-10-03
-hologram: [Operating Systems]
 groups:
   - "[[Linux Kernel Internals]]"
 ---
@@ -210,8 +209,8 @@ A process is an executing instance of a program.
 | `hologram-node: true` | Marks the note as part of the graph. **Required.** |
 | `node-type` | The node's type (see below). `note-type` is accepted as a legacy alias. |
 | `created` | Creation date (`YYYY-MM-DD`). |
-| `hologram` / `holograms` | The hologram(s) the note belongs to. |
 | `groups` | Parent nodes this node rolls up into (membership edges). |
+| *(directory location)* | Hologram membership is determined by the note's path under `hologram/` (e.g. `hologram/<topic>/note.md`), not by frontmatter. |
 | `local-confidence` | Optional user-set confidence, `0`–`1`. |
 | `source-kind` | For evidence notes, the credibility class (`source/data`, `source/scientific`, …). |
 

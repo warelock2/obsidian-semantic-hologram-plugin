@@ -45,8 +45,8 @@ Every semantic node note in the `hologram/` folder begins with frontmatter:
 | `hologram-node: true` | Marks the note as part of the semantic topology graph. **Required.** |
 | `node-type` | The node's type (see Section 1). `note-type` is accepted as a legacy alias. |
 | `created` | Creation date (`YYYY-MM-DD`). |
-| `hologram` / `holograms` | The containing hologram(s). |
 | `groups` | Parent node(s) this node rolls up into (membership edges). |
+| *(directory location)* | Hologram membership is determined by the note's path under `hologram/` (e.g. `hologram/<topic>/note.md`), not by frontmatter. |
 | `local-confidence` | Optional user-set confidence, `0`–`1`. |
 | `source-kind` | For evidence notes, the credibility class (`source/data`, `source/scientific`, …). |
 
@@ -102,7 +102,6 @@ The shipped template for a new semantic node is
 hologram-node: true
 node-type: concept
 created: {{date}}
-hologram:
 groups:
   - "[[Parent Node]]"
 ---

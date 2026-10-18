@@ -30,26 +30,23 @@ not merely the files sitting directly in that folder. See
 | **Node membership** | A node belongs to every hologram whose subtree contains it — a nested note belongs to its child folder *and* to each ancestor |
 | **Edge/relationship** | Wikilinks, `[[links]]`, or `## Relationships` section, rendered only between nodes in the same displayed hologram |
 
-### 1.2 The `holograms:` Frontmatter Tag (Optional)
+### 1.2 Hologram Membership (Directory-Based)
 
-While directory location is the primary identity mechanism, an optional `holograms:` frontmatter tag can provide additional metadata:
+Hologram membership is determined entirely by the note's path under `hologram/`.
+There is no `holograms:` (or `hologram:`) frontmatter field; the plugin strips
+any such key on import and during migration. A note at `hologram/<a>/<b>/note.md`
+belongs to both `a` and `b`.
 
 ```yaml
 ---
-holograms: [hologram-a, hologram-b]
-nodeType: concept
+hologram-node: true
+node-type: concept
 ---
 ```
 
-- **Move mode**: Tag is updated to reflect new directory membership
-- **Copy mode**: Tag accumulates multiple hologram memberships
-- **Export**: Tag and relationships section are removed, returning the note to plain Zettelkasten form
-
-> **Open question.** Membership under the emulsification model is positional. Whether
-> a frontmatter `holograms:` entry should make a note a member of a hologram it is
-> *not* filed under is **undecided** — see
-> [`hologram-emulsification.md`](hologram-emulsification.md) §11, item 5. Until it is
-> settled, treat this tag as metadata, not as membership.
+- **Move mode**: Moving the file changes its hologram membership.
+- **Copy mode**: Copying the file creates a distinct node in each destination folder.
+- **Export**: Frontmatter and the `## Relationships` section are removed, returning the note to plain Zettelkasten form.
 
 ### 1.3 Import/Export Cycle
 

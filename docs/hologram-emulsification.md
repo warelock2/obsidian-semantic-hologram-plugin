@@ -26,7 +26,7 @@ covers the broader concepts, operations, and UI; and alongside
 which covers how a hologram is rendered once it exists. This document covers only
 **which nodes are in which hologram**.
 
-> **Status:** settled design, not yet implemented. Section 10 lists what it
+> **Status:** settled design (implemented). Section 10 lists what it
 > replaces and Section 11 lists what is still open.
 >
 > **Reconciliation:** `filesystem-hologram-management.md` previously described a
@@ -337,7 +337,7 @@ These are deliberately unsettled. None of them undermine the rule in Section 3.
 4. **Layout continuity.** Section 8 establishes that positions must change across
    a CWD switch. Whether returning to a previous CWD restores the layout it had
    last time is a separate, UX-level choice.
-5. **Frontmatter membership.** `inScopePath` already half-supports notes that
-   declare hologram membership in frontmatter rather than by position. Whether
-   such a note participates in an emulsified node set is undecided; this document
-   assumes purely positional membership throughout.
+5. **Frontmatter membership.** Hologram membership is purely positional; there is
+   no `hologram:` / `holograms:` frontmatter field, and any such key is stripped
+   on import and during migration. This document assumes purely positional
+   membership throughout.

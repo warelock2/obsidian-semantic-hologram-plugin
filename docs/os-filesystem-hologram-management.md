@@ -45,7 +45,6 @@ vault-root/
 hologram-node: true
 node-type: concept
 created: 2026-10-03
-hologram: [Operating Systems]
 groups:
   - "[[Linux Kernel Internals]]"
 ---
@@ -70,8 +69,8 @@ A process is an executing instance of a program.
 | `hologram-node: true` | Marks the note as part of the graph. **Required.** | Yes |
 | `node-type` | The node's type (see Node Types below). `note-type` is accepted as a legacy alias. | Yes |
 | `created` | Creation date (`YYYY-MM-DD`). | Yes |
-| `hologram` / `holograms` | The hologram(s) the note belongs to. | No |
 | `groups` | Parent nodes this node rolls up into (membership edges). | No |
+| *(directory location)* | Hologram membership is determined by the note's path under `hologram/` (e.g. `hologram/<topic>/note.md`), not by frontmatter. | — |
 | `local-confidence` | Optional user-set confidence, `0`–`1`. | No |
 | `source-kind` | For evidence notes, the credibility class (`source/data`, `source/scientific`, …). | No |
 
@@ -124,8 +123,8 @@ On plugin activation, the following occurs:
 
 The view (`src/view.ts`) reads notes through these paths:
 
-- **`hologramService.getAllTags()`** — reads the tag cache from `data.json`. Each tag maps to a hologram note `basename.md` in the `hologram/` directory.
-- **`hologramService.loadCache()`** — populates the full tag-to-note mapping. On vault events, this is refreshed via `window.setTimeout(() => this.hologramService.loadCache(), 250)`.
+- **`hologramService.getAllTags()`** — derives hologram (folder) names from the vault paths under `hologram/`. Membership is positional, not read from `data.json`.
+- **`hologramService.loadCache()`** — populates the in-memory path → tag set mapping from the vault tree. On vault events, this is refreshed via `window.setTimeout(() => this.hologramService.loadCache(), 250)`.
 - **`this.app.vault.getMarkdownFiles()`** — gets all markdown files in the vault.
 - **`this.app.metadataCache.getFileCache(file)`** — gets the metadata cache for a file, including frontmatter.
 - **`scanRelations()`** in `src/relations.ts` — parses all `## Relationships` sections across all vault notes, using `metadataCache` for frontmatter resolution.
@@ -133,7 +132,8 @@ The view (`src/view.ts`) reads notes through these paths:
 The **data flow** is:
 
 ```
-Vault files → metadataCache.frontmatter → parseNoteFrontmatter() → nodeType, hologram, groups, etc.
+Vault files (paths under hologram/) → hologramService → membership tags
+Vault files → metadataCache.frontmatter → parseNoteFrontmatter() → nodeType, groups, etc.
 Vault files → relationships text → scanRelations() → edges (source, target, relId, strength)
 ```
 
@@ -156,8 +156,8 @@ These are **demand-driven**: they are recomputed when `invalidateScan()` is call
 The `CreateNodeModal` in `src/main.ts` handles node creation:
 
 1. User provides a name, content, note type, and optional hologram topic.
-2. The plugin builds content via `buildHologramSkeleton({title, body, noteType, created, hologram})`.
-3. The target path is `${HOLOGRAM_FOLDER}/${name}.md` (i.e., `hologram/<name>.md`).
+2. The plugin builds content via `buildHologramSkeleton({title, body, noteType, created})` (no `hologram` key is emitted; membership is the path).
+3. The target path is `${HOLOGRAM_FOLDER}/${hologram}/${name}.md` when a hologram is given, otherwise `${HOLOGRAM_FOLDER}/${name}.md`.
 4. If the folder doesn't exist, `this.app.vault.createFolder("hologram")` is called.
 5. `this.app.vault.create(path, content)` writes the file.
 6. `this.plugin.refreshGraphs().catch(() => undefined)` rebuilds the in-memory graph.

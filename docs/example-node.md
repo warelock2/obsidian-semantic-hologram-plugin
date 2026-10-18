@@ -2,7 +2,6 @@
 hologram-node: true
 node-type: concept
 created: {{date}}
-hologram: [Parent Node]
 ---
 
 # Node title

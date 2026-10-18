@@ -36,7 +36,7 @@ This document captures the recent ideation discussion about using the **operatin
 
 ### 4. Copying (Duplicate Introduction)
 - **Action**: User copies a node note file to a new location under a different hologram directory.
-- **Filesystem result**: A duplicate `.md` file exists in both the source and destination hologram directories. The note carries multiple `hologram:` tags.
+- **Filesystem result**: A duplicate `.md` file exists in both the source and destination hologram directories. The note exists in multiple hologram folders.
 - **Visual rendering**: The node appears in both holograms. Edges/relationships must be explicitly assigned to one hologram or the other when created (user-mediated decision).
 
 ## Path-to-World-Space Mapping

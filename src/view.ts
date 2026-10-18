@@ -6438,6 +6438,8 @@ export class SemanticHologramView extends ItemView {
 				this.updateCursor();
 			}
 			e.preventDefault();
+		} else if (e.key.startsWith('Arrow')) {
+			e.preventDefault();
 			this.pressedKeys.add(e.key);
 		} else if (e.key === ' ' && !e.repeat && this.is3D && target?.tagName !== 'INPUT' && target?.tagName !== 'TEXTAREA') {
 			if (this.autoRotating !== 'off') {

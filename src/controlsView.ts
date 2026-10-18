@@ -1130,6 +1130,10 @@ export class SemanticHologramControlsView extends ItemView {
 			? (this.plugin.settings.gifMode ?? 'full')
 			: (this.plugin.settings.gifMode === 'full' || !this.plugin.settings.gifMode ? 'time' : this.plugin.settings.gifMode);
 		gifSelect.value = gifModeDefault;
+		if (is3D && this.plugin.settings.gifMode !== 'full') {
+			this.plugin.settings.gifMode = 'full';
+			void this.plugin.saveSettings();
+		}
 		if (!is3D && this.plugin.settings.gifMode === 'full') {
 			this.plugin.settings.gifMode = 'time';
 			void this.plugin.saveSettings();

@@ -1154,24 +1154,32 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 				sk.id = newId;
 				void this.persist();
 			});
-			if (sk.description) {
-				info.createDiv({ cls: 'sh-glossary-desc' }).setText(sk.description);
+			if (sk.description !== undefined) {
+				const descInput = info.createDiv({ cls: 'sh-glossary-desc' }).createEl('input', { type: 'text', value: sk.description, cls: 'sh-glossary-desc' });
+				descInput.addEventListener('change', () => {
+					sk.description = descInput.value.trim() || undefined;
+					void this.persist();
+				});
 			}
 			const move = row.createDiv({ cls: 'sh-glossary-move' });
-			const pctLabel = move.createSpan({ cls: 'sh-conf-pct', text: `${sk.percent}%` });
+			const isFaith = sk.id.startsWith('faith/');
+			if (isFaith) { sk.percent = 0; }
+			const pctLabel = move.createSpan({ cls: 'sh-conf-pct', text: isFaith ? '0%' : `${sk.percent}%` });
 			pctLabel.style.minWidth = '44px';
 			pctLabel.style.textAlign = 'right';
-			const slider = move.createEl('input', {
+			const slider = isFaith ? null : move.createEl('input', {
 				type: 'range',
 				attr: { min: '0', max: '100', step: '1', value: String(sk.percent) },
 			});
-			slider.style.flex = '1';
-			slider.addEventListener('input', () => {
-				const v = parseInt(slider.value, 10);
-				sk.percent = v;
-				pctLabel.setText(`${v}%`);
-				void this.persist();
-			});
+			if (slider) {
+				slider.style.flex = '1';
+				slider.addEventListener('input', () => {
+					const v = parseInt(slider.value, 10);
+					sk.percent = v;
+					pctLabel.setText(`${v}%`);
+					void this.persist();
+				});
+			}
 
 			const controls = row.createDiv({ cls: 'sh-glossary-controls' });
 			const del = controls.createEl('button', { cls: 'sh-glossary-del', attr: { 'aria-label': 'Delete' } });
@@ -1190,7 +1198,8 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 				if (!r.type) {
 					return;
 				}
-				const id = r.type.startsWith('source/') ? r.type : `source/${r.type}`;
+				let id = r.family ? `${r.family}/${r.type}` : r.type;
+			if (!id.includes('/')) id = `source/${id}`;
 				if (this.plugin.settings.sourceKinds.some((k) => k.id === id)) {
 					new Notice(`Source kind "${id}" already exists.`);
 					return;

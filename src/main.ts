@@ -808,6 +808,15 @@ export default class SemanticHologramPlugin extends Plugin {
 			this.settings.maxDepth = legacyMaxDepth;
 		}
 		if ((this.settings.maxDepth) === undefined) this.settings.maxDepth = this.settings.hoverDepth;
+	// `Object.assign` is shallow: a saved `relTypes` array replaces the default
+	// one wholesale, so relation types added to the defaults (e.g.
+	// `functional/supports`) are absent on any vault that already had settings
+	// saved. Re-assert them here, keyed by id, rather than trusting the blob.
+	for (const def of DEFAULT_SETTINGS.relTypes) {
+		if (!this.settings.relTypes.some((rt) => rt.id === def.id)) {
+			this.settings.relTypes.push({ ...def });
+		}
+	}
 		// scanLayers was added as a nested object; a settings blob written before it
 		// merges to undefined rather than picking up the default, so fill it in.
 		const stored = (saved as { scanLayers?: Partial<SemanticHologramSettings['scanLayers']> })?.scanLayers;

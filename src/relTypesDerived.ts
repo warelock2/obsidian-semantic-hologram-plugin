@@ -121,6 +121,7 @@ export const derivedRelTypes: { id: string; color: string; description: string; 
   { id: 'functional/prerequisite', color: '#FF595E', description: 'Functional / Prerequisite.', enabled: true },
   { id: 'functional/goal-dependence', color: '#4D9DE0', description: 'Functional / Goal-Dependence.', enabled: true },
   { id: 'functional/trade-off', color: '#43AA8B', description: 'Functional / Trade-Off.', enabled: true },
+{ id: 'functional/supports', color: '#4D9DE0', description: 'Functional / Supports.', enabled: true },
   { id: 'normative/good-bad', color: '#E76F51', description: 'Normative / Good-Bad.', enabled: true },
   { id: 'normative/better-worse', color: '#F4A261', description: 'Normative / Better-Worse.', enabled: true },
   { id: 'normative/preference', color: '#9B5DE5', description: 'Normative / Preference.', enabled: true },

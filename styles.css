@@ -34,7 +34,7 @@
 }
 
 .sh-mode-banner.sh-mode-indicator {
-	left: 8px;
+	left: 0px;
 	transform: none;
 	top: 8px;
 	pointer-events: auto;
@@ -42,8 +42,8 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 20px;
-	height: 20px;
+	width: 32px;
+	height: 32px;
 	color: var(--text-muted);
 }
 .sh-mode-banner.sh-mode-indicator:hover {
@@ -56,13 +56,26 @@
 }
 .sh-mode-banner.sh-mode-indicator svg {
 	display: block;
-	width: 18px;
-	height: 18px;
+	width: 29px;
+	height: 29px;
 }
 
 /* Projection toggle sits directly under the 2D/3D badge. */
 .sh-mode-banner.sh-projection-banner.sh-mode-indicator {
-	top: 32px;
+	top: 44px;
+}
+
+/* Phase 5 cognitive/perceptive banner sits under projection badge. */
+.sh-mode-banner.sh-display-banner.sh-mode-indicator {
+	top: 80px;
+	left: 0px;
+	width: 32px;
+	height: 32px;
+}
+.sh-mode-banner.sh-display-banner svg {
+	width: 29px;
+	height: 29px;
+	filter: brightness(1.35);
 }
 
 .sh-cursor-overlay {
@@ -182,8 +195,8 @@
 .sh-toast {
 	position: absolute;
 	left: 50%;
-	top: 50%;
-	transform: translate(-50%, -50%);
+	top: 10px;
+	transform: translate(-50%, 0);
 	z-index: 30;
 	pointer-events: none;
 	background: var(--background-modifier-hover);

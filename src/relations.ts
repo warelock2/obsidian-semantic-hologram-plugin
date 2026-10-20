@@ -4,7 +4,7 @@ import { HOLOGRAM_FOLDER } from './settings';
 // Header delimiters are pure and live in ./headers so they can be unit-tested
 // without the type-only `obsidian` package. Re-exported below for the many
 // existing `./relations` importers.
-import { ANY_HEADER, CONFIDENCE_HEADER, GRAVITAS_HEADER, INCOMING_HEADER, RELATION_HEADER } from './headers';
+import { ANY_HEADER, CONFIDENCE_HEADER, GRAVITAS_HEADER, GRAVITAS_PROVENANCE_HEADER, INCOMING_HEADER, RELATION_HEADER } from './headers';
 
 export interface RelationEdge {
 	source: string; // path of the source note
@@ -38,7 +38,7 @@ export interface RelationScan {
 	conflicts: RelationConflict[];
 }
 
-/** A lends-gravitas-to edge authored in an evidence note's ## Gravitas section. */
+/** A epistemic/evidence edge authored in an evidence note's ## Gravitas section. */
 export interface GravitasEdge {
 	source: string; // path of the evidence note
 	target: string; // path of the concept note supported
@@ -64,7 +64,7 @@ export interface NoteFrontmatter {
 	holograms?: string[];
 }
 
-export { ANY_HEADER, CONFIDENCE_HEADER, GRAVITAS_HEADER, INCOMING_HEADER, PROVENANCE_HEADER, RELATION_HEADER, sectionHeader } from './headers';
+export { ANY_HEADER, CONFIDENCE_HEADER, GRAVITAS_HEADER, GRAVITAS_PROVENANCE_HEADER, INCOMING_HEADER, PROVENANCE_HEADER, RELATION_HEADER, sectionHeader } from './headers';
 
 // - logic/supports [[Target]] {R}? (0.5) :: optional justification
 // - related [[Target]] (0.5)
@@ -193,16 +193,23 @@ export function findRelationsSection(content: string): { startLine: number; endL
 	return findSection(content, RELATION_HEADER);
 }
 
+/** Find the line range of the `## Gravitas` or `## Gravitas Provenance` section, if any. */
+export function findGravitasProvenanceSection(content: string): { startLine: number; endLine: number } | null {
+	const legacy = findSection(content, GRAVITAS_HEADER);
+	if (legacy) return legacy;
+	return findSection(content, GRAVITAS_PROVENANCE_HEADER);
+}
+
 /** Find the line range of the `## Gravitas` section, if any. */
 export function findGravitasSection(content: string): { startLine: number; endLine: number } | null {
 	return findSection(content, GRAVITAS_HEADER);
 }
 
-/** Author-led line in an evidence note: `- lends-gravitas-to [[Target]] (0.8)`. */
-const GRAVITAS_LINE = /^-\s+lends-gravitas-to\s+\[\[([^\]]+)\]\]\s*\((\d{1,2}(?:\.\d{1,2})?)\)\s*$/;
+/** Author-led line in an evidence note: `- epistemic/evidence [[Target]] (0.8)`. */
+const GRAVITAS_LINE = /^-\s+epistemic\/evidence\s+\[\[([^\]]+)\]\]\s*\((\d{1,2}(?:\.\d{1,2})?)\)\s*$/;
 
 /**
- * Parse a note's ## Gravitas section into lends-gravitas-to edges.
+ * Parse a note's ## Gravitas section into epistemic/evidence edges.
  * Only authored lines count; mirror lines (`- ([[source]]) ...`) are skipped.
  */
 export function parseGravitasSection(
@@ -212,7 +219,7 @@ export function parseGravitasSection(
 ): { edges: GravitasEdge[]; malformed: MalformedRelation[] } {
 	const edges: GravitasEdge[] = [];
 	const malformed: MalformedRelation[] = [];
-	const section = findGravitasSection(content);
+	const section = findGravitasProvenanceSection(content);
 	if (!section) {
 		return { edges, malformed };
 	}
@@ -220,7 +227,7 @@ export function parseGravitasSection(
 	for (let i = section.startLine + 1; i < section.endLine; i++) {
 		const line = lines[i] ?? '';
 		const trimmed = line.trim();
-		if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('---') || trimmed.startsWith('- DEFUNCT:') || trimmed.startsWith('- (')) {
+		if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('---') || trimmed.startsWith('- DEFUNCT:') || trimmed.startsWith('- (') || trimmed.startsWith('- gravitas:')) {
 			continue;
 		}
 		if (!trimmed.startsWith('-')) {
@@ -234,7 +241,7 @@ export function parseGravitasSection(
 		const targetName = m[1]!;
 		const amount = parseFloat(m[2]!);
 		if (amount < 0.1 || amount > 1) {
-			malformed.push({ path, line: i, text: trimmed, reason: `lends-gravitas-to amount out of range [0.1,1]: ${m[2]}` });
+			malformed.push({ path, line: i, text: trimmed, reason: `epistemic/evidence amount out of range [0.1,1]: ${m[2]}` });
 			continue;
 		}
 		const target = resolve(targetName, path);
@@ -248,27 +255,65 @@ export function parseGravitasSection(
 	return { edges, malformed };
 }
 
-/** Replace the `## Gravitas` section body with authored lends-gravitas-to rows. */
+/**
+ * Replace the authored `epistemic/evidence` rows inside `## Relationships`.
+ *
+ * The rows live in `## Relationships` (authored, user-editable); the
+ * `## Gravitas` section is derived and never written here.
+ */
 export function setGravitasRowsInContent(content: string, rows: Array<{ targetName: string; amount: number }>): string {
-	const header = '## Gravitas';
+	const header = '## Relationships';
 	const body = rows
-		.map((r) => `- lends-gravitas-to [[${r.targetName}]] (${formatStrength(r.amount)})`)
+		.map((r) => `- epistemic/evidence [[${r.targetName}]] (${formatStrength(r.amount)})`)
 		.sort();
-	const section = findGravitasSection(content);
+	const section = findRelationsSection(content);
+	if (!section && body.length === 0) {
+		return content;
+	}
+	const lines = content.split(/\r?\n/);
+	if (body.length === 0 && section) {
+		const newLines = lines.filter((_, i) => !(i > section.startLine && i < section.endLine));
+		return newLines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+	}
 	if (!section) {
-		if (body.length === 0) {
-			return content;
-		}
 		const ending = content.endsWith('\n') ? '\n' : '\n\n';
 		return content + ending + header + '\n\n' + body.join('\n') + '\n';
 	}
-	const lines = content.split(/\r?\n/);
-	if (body.length === 0) {
-		const newLines = [...lines.slice(0, section.startLine), ...lines.slice(section.endLine)];
-		return newLines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+	const out: string[] = [];
+	let inSection = false;
+	let wroteBody = false;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i]!;
+		if (i === section.startLine) {
+			out.push(header);
+			inSection = true;
+			continue;
+		}
+		if (inSection && i >= section.endLine) {
+			inSection = false;
+			if (!wroteBody) {
+				out.push(...body);
+				wroteBody = true;
+			}
+			out.push(line);
+			continue;
+		}
+		if (inSection) {
+			if (line.trim().startsWith('- epistemic/evidence ') || line.trim() === '') {
+				continue;
+			}
+			if (!wroteBody) {
+				out.push(...body);
+				wroteBody = true;
+			}
+			continue;
+		}
+		out.push(line);
 	}
-	const newLines = [...lines.slice(0, section.startLine), header, ...body.map((b) => `  ${b}`), ...lines.slice(section.endLine)];
-	return newLines.join('\n').replace(/\n{3,}/g, '\n\n');
+	if (inSection && !wroteBody) {
+		out.push(...body);
+	}
+	return out.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
 /** Find the line range of the `## Confidence` mirror section, if any. */

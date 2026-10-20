@@ -356,6 +356,19 @@ export default class SemanticHologramPlugin extends Plugin {
 
 
 		this.addCommand({
+			id: 'toggle-cognitive-perceptive',
+			name: 'Toggle cognitive / perceptive view',
+			callback: () => {
+				const v = this.app.workspace.getActiveViewOfType(SemanticHologramView);
+				if (v) {
+					v.toggleDisplayMode();
+				} else {
+					void this.setDisplayMode(this.settings.displayMode === 'perceptive' ? 'cognitive' : 'perceptive');
+				}
+			},
+		});
+
+		this.addCommand({
 			id: 'open-hologram-controls',
 			name: 'Show hologram controls',
 			callback: () => {
@@ -510,6 +523,18 @@ export default class SemanticHologramPlugin extends Plugin {
 		this.settings.hoverDepth = value;
 		this.settings.maxDepth = value;
 		await this.saveSettings();
+	}
+
+	async setDisplayMode(mode: 'cognitive' | 'perceptive'): Promise<void> {
+		this.settings.displayMode = mode;
+		await this.saveSettings();
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_HOLOGRAM)) {
+			const v = leaf.view;
+			if (v instanceof SemanticHologramView) {
+				v.updateDisplayBanner();
+				v.requestRedraw();
+			}
+		}
 	}
 
 	async setMode(mode: HologramMode): Promise<void> {
@@ -766,6 +791,8 @@ export default class SemanticHologramPlugin extends Plugin {
 		const savedRaw = (await this.loadData()) as unknown;
 		const saved = savedRaw as Partial<SemanticHologramSettings> | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {});
+		// Phase 5: Cognitive mode default on load/reload
+		this.settings.displayMode = 'cognitive';
 		// `Object.assign` is shallow: a saved `nodeTypes` array replaces the default
 		// one wholesale, so anything derived from the defaults (e.g. `locked`) is
 		// absent on any vault that already had settings saved. Permanent types are

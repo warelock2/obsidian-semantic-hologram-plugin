@@ -1,8 +1,8 @@
 import { App, Modal, Notice, Setting, TFile } from 'obsidian';
 import type SemanticHologramPlugin from './main';
-import { scanRelations, extractFrontmatter, parseNoteFrontmatter, setGravitasRowsInContent, findGravitasSection } from './relations';
+import { scanRelations, extractFrontmatter, parseNoteFrontmatter, setGravitasRowsInContent, findGravitasProvenanceSection } from './relations';
 import type { NodeStats } from './gravitas';
-import { computeNodeStats, isEvidenceType, readNodeMetasFresh, scanGravitas } from './gravitas';
+import { computeNodeStats, isEvidenceType, readNodeMetasFresh } from './gravitas';
 import { defaultNodeType } from './settings';
 
 /** Set (or add) the `local-confidence:` frontmatter field of a note body. */
@@ -161,14 +161,7 @@ export class NodeConfidenceModal extends Modal {
 			this.plugin.settings.defaultRelStrength,
 			(path) => this.plugin.isInScope(path),
 		);
-		const gscan = await scanGravitas(
-			files,
-			this.plugin.app.vault,
-			this.plugin.app.metadataCache,
-			(path) => this.plugin.isInScope(path),
-			defaultNodeType(this.plugin.settings.nodeTypes),
-		);
-		this.stats = computeNodeStats(metas, scan.edges, gscan.edges, this.plugin.settings.sourceKinds, this.plugin.settings.defaultConfidence);
+		this.stats = computeNodeStats(metas, scan.edges.filter(e => e.relId === 'structural/subsumed-by'), scan.edges, this.plugin.settings.sourceKinds, this.plugin.settings.defaultConfidence);
 		const topic = await computeTopicKnowledge(this.plugin, files);
 
 		const resolve = (name: string, sourcePath: string): string | null => {
@@ -211,7 +204,7 @@ export class NodeConfidenceModal extends Modal {
 			}
 			const fm = parseNoteFrontmatter(extractFrontmatter(content));
 			const entries: GravitasRow[] = [];
-			if (findGravitasSection(content)) {
+			if (findGravitasProvenanceSection(content)) {
 				const parsed = parseGravitasSectionJson(content, resolve, f.path);
 				for (const e of parsed) {
 					entries.push({ targetName: targetLabel(e.target), amount: e.amount });
@@ -431,17 +424,17 @@ function parseGravitasSectionJson(
 	sourcePath: string,
 ): Array<{ target: string; amount: number }> {
 	const out: Array<{ target: string; amount: number }> = [];
-	const section = findGravitasSection(content);
+	const section = findGravitasProvenanceSection(content);
 	if (!section) {
 		return out;
 	}
 	const lines = content.split(/\r?\n/);
 	for (let i = section.startLine + 1; i < section.endLine; i++) {
 		const trimmed = (lines[i] ?? '').trim();
-		if (!trimmed.startsWith('- lends-gravitas-to ')) {
+		if (!trimmed.startsWith('- epistemic/evidence ')) {
 			continue;
 		}
-		const m = trimmed.match(/^-\s+lends-gravitas-to\s+\[\[([^\]]+)\]\]\s*\((\d{1,2}(?:\.\d{1,2})?)\)\s*$/);
+		const m = trimmed.match(/^-\s+epistemic\/evidence\s+\[\[([^\]]+)\]\]\s*\((\d{1,2}(?:\.\d{1,2})?)\)\s*$/);
 		if (!m) {
 			continue;
 		}

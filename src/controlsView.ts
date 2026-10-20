@@ -155,7 +155,7 @@ export class SemanticHologramControlsView extends ItemView {
 	public onCameraChange(): void {
 		const view = this.getView();
 		if (!view) return;
-		const is3D = this.plugin.settings.hologramMode === '3d';
+		const is3D = this.plugin.settings.hologramMode === '3d' || this.plugin.settings.hologramMode === 'nd';
 
 		const state = view.getCameraState();
 		if (this.cameraInputs[0]) {
@@ -333,7 +333,7 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const view = this.getView();
 		const state = view ? view.getCameraState() : { elevation: 0, azimuth: 0, distance: 1000 };
-		const is3D = this.plugin.settings.hologramMode === '3d';
+		const is3D = this.plugin.settings.hologramMode === '3d' || this.plugin.settings.hologramMode === 'nd';
 
 		const header = contentEl.createDiv({ cls: 'sh-controls-header' });
 		header.createEl('h4', { text: 'Semantic Hologram', attr: { style: 'margin-bottom: 6px;' } });
@@ -464,6 +464,9 @@ export class SemanticHologramControlsView extends ItemView {
 		relTypeSelect.addEventListener('change', (e) => {
 			(this.plugin.settings as any).defaultRelType = (e.target as HTMLSelectElement).value;
 			void this.plugin.saveSettings();
+			const isLends = (e.target as HTMLSelectElement).value === 'epistemic/evidence';
+			strengthSlider.disabled = isLends;
+			strengthInput.disabled = isLends;
 		});
 
 		const strengthRow = edgeSettings.createDiv({ cls: 'sh-strength-row' });
@@ -471,6 +474,7 @@ export class SemanticHologramControlsView extends ItemView {
 		strengthRow.style.alignItems = 'center';
 		strengthRow.style.gap = '8px';
 
+const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistemic/evidence';
 		const strengthSlider = strengthRow.createEl('input', {
 			type: 'range',
 			cls: 'sh-strength-slider',
@@ -482,6 +486,11 @@ export class SemanticHologramControlsView extends ItemView {
 			cls: 'sh-strength-input',
 			attr: { min: '0', max: '1', step: '0.1', value: this.plugin.settings.defaultRelStrength.toString(), style: 'width: 50px;' }
 		});
+
+		if (initialIsLends) {
+			strengthSlider.disabled = true;
+			strengthInput.disabled = true;
+		}
 
 		strengthSlider.addEventListener('input', (e) => {
 			const val = (e.target as HTMLInputElement).value;
@@ -917,12 +926,15 @@ export class SemanticHologramControlsView extends ItemView {
 		const modeRow = contentEl.createDiv({ cls: 'sh-controls-row' });
 		modeRow.createSpan({ text: 'Mode', cls: 'sh-controls-label' });
 		const toggle = modeRow.createEl('button', {
-			cls: mode === '3d' ? 'mod-cta sh-mode-toggle' : 'sh-mode-toggle',
-			text: mode === '3d' ? '3D' : '2D',
+			cls: mode === '3d' || mode === 'nd' ? 'mod-cta sh-mode-toggle' : 'sh-mode-toggle',
+			text: mode === 'nd' ? 'nD' : mode === '3d' ? '3D' : '2D',
 		});
-		toggle.title = 'Toggle 2D / 3D';
+		toggle.title = 'Toggle 2D / 3D / nD';
 		toggle.addEventListener('click', () => {
-			const next = mode === '2d' ? '3d' : '2d';
+			let next: import('./settings').HologramMode = '2d';
+			if (mode === '2d') next = '3d';
+			else if (mode === '3d') next = 'nd';
+			else if (mode === 'nd') next = '2d';
 			void this.plugin.setMode(next);
 			this.render();
 		});
@@ -1048,6 +1060,23 @@ export class SemanticHologramControlsView extends ItemView {
 			this.getView()?.requestRedraw();
 		});
 
+		// n Dimension Layer Separation (nD separation)
+		const ndRow = contentEl.createDiv({ cls: 'sh-controls-row' });
+		ndRow.createSpan({ text: 'n Dimension Layer Separation: ' + (this.plugin.settings.ndLayerSeparation ?? 0), cls: 'sh-controls-label' });
+		const ndSlider = ndRow.createEl('input', {
+			cls: 'sh-nd-separation-slider',
+			type: 'range',
+			attr: { min: '0', max: '500', step: '10', value: String(this.plugin.settings.ndLayerSeparation ?? 0) },
+		});
+		ndSlider.addEventListener('input', () => {
+			const v = parseInt(ndSlider.value, 10);
+			this.plugin.settings.ndLayerSeparation = v;
+			void this.plugin.saveSettings();
+			const label = ndRow.querySelector('.sh-controls-label');
+			if (label) label.textContent = 'n Dimension Layer Separation: ' + v;
+			this.getView()?.requestRedraw();
+		});
+
 		// Face Opacity Controls
 		const faceOpacityRow = contentEl.createDiv({ cls: 'sh-controls-row' });
 		
@@ -1077,9 +1106,10 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const hint = contentEl.createDiv({ cls: 'sh-controls-hint' });
 		hint.setText(
-			mode === '3d'
+			mode === 'nd' ? 'n dimensions mode — layered DAG along Y (Shift+scroll steps layers). Click mode button to cycle.'
+			: mode === '3d'
 				? '3D mode — Shift+drag to rotate about the focal point, drag to pan, scroll to dolly. Nodes live in full 3D physics.'
-				: '2D canvas mode. Toggle to 3D for depth — Shift+drag rotates once you switch.',
+				: '2D canvas mode. Toggle to 3D / nD for depth.',
 		);
 
 		const actions = contentEl.createDiv({ cls: 'sh-controls-actions' });

@@ -40,6 +40,7 @@ export const RELATION_HEADER = sectionHeader('Relations(?:hips)?|Relationship');
 export const INCOMING_HEADER = sectionHeader('Incoming[ \\t]+Relations(?:hips)?');
 export const GRAVITAS_HEADER = sectionHeader('Gravitas');
 export const CONFIDENCE_HEADER = sectionHeader('Confidence');
+export const GRAVITAS_PROVENANCE_HEADER = sectionHeader('Gravitas[ \\t]+Provenance');
 export const PROVENANCE_HEADER = sectionHeader('Provenance');
 
 /** The canonical header text the skeleton emits. */

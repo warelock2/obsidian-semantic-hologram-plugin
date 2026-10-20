@@ -1,17 +1,17 @@
 import { App, ItemView, Modal, Notice, Platform, TFile, TFolder, TextComponent, WorkspaceLeaf } from 'obsidian';
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 // @ts-ignore
 import * as gifenc from 'gifenc';
 const { GIFEncoder, quantize, applyPalette } = gifenc;
 import type SemanticHologramPlugin from './main';
-import type { HologramTool, ProjectionMode, RelTypeEntry } from './settings';
+import type { HologramMode, HologramTool, ProjectionMode, RelTypeEntry } from './settings';
 import type { SemanticHologramSettings } from './settings';
 import type { RelationEdge, RelationScan } from './relations';
 import { findRelationsSection, formatStrength, scanRelations } from './relations';
 import { notifyLegendRefresh } from './legendBus';
 import { addRelation, removeRelation } from './reviewCommon';
-import { computeNodeStats, isEvidenceType, readNodeMetas, scanGravitas } from './gravitas';
+import { computeNodeStats, isEvidenceType, readNodeMetas } from './gravitas';
 import { ReviewConnectionsModal } from './review';
 import type { GravitasScan } from './gravitas';
 import type { ScanGraph, ScanResult } from './diffraction';
@@ -303,6 +303,8 @@ const ICON_MODE_2D =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/></svg>';
 const ICON_MODE_3D =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8l-9-5-9 5v8l9 5 9-5z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></svg>';
+const ICON_MODE_ND =
+	'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" fill="#fff"/><rect x="9" y="6" width="3" height="3"/><rect x="9" y="15" width="3" height="3"/><rect x="6" y="9" width="3" height="3"/><rect x="15" y="9" width="3" height="3"/><rect x="9" y="9" width="6" height="6"/></g></svg>';
 const ICON_TOOL_NAVIGATE =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/></svg>';
 const ICON_TOOL_SELECT =
@@ -315,6 +317,8 @@ export class SemanticHologramView extends ItemView {
 	private ctx: CanvasRenderingContext2D | null = null;
 	private modeBanner: HTMLElement | null = null;
 	private projectionBanner: HTMLElement | null = null;
+	private displayBanner: HTMLElement | null = null;
+	private ndLayerStep = -1; // 2D layer stepping: -1 = all, 0+ = layer
 	private magnifyBtn: HTMLButtonElement | null = null;
 	private demagnifyBtn: HTMLButtonElement | null = null;
 	private nodes: GraphNode[] = [];
@@ -726,7 +730,8 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	private get is3D(): boolean {
-		return this.plugin.settings.hologramMode === '3d';
+		const m = this.plugin.settings.hologramMode;
+		return m === '3d' || m === 'nd';
 	}
 
 	/**
@@ -888,7 +893,21 @@ export class SemanticHologramView extends ItemView {
 		return { x: x2 + cx, y: y2 + cy, z: z2 + cz };
 	}
 
-	setMode(mode: '2d' | '3d', fromMode?: '2d' | '3d'): void {
+	setMode(mode: HologramMode, fromMode?: HologramMode): void {
+		if (mode === '2d') {
+			this.ndLayerStep = -1;
+			// Restore 2D spread from 3D/nD plane: 2D vertical lives in z after nD pin
+			for (let i = 0; i < this.nodes.length; i++) {
+				const n = this.nodes[i]!;
+				// If z is non-zero and y is pinned at plane (0 with sep=0), swap z back to y
+				if (Math.abs(n.z) > 0.01 || n.z !== 0) {
+					n.y = n.z;
+					n.homeY = n.z;
+					n.z = 0;
+					n.homeZ = 0;
+				}
+			}
+		}
 		// Preserve the focal point (world x,y) across the mode switch. The
 		// focal point is the independent variable; bookkeeping derives from it.
 		//
@@ -900,8 +919,13 @@ export class SemanticHologramView extends ItemView {
 		const focalBefore = this.focalPointInMode(fromMode);
 
 		if (this.modeBanner) {
-			this.modeBanner.innerHTML = mode === '3d' ? ICON_MODE_3D : ICON_MODE_2D;
-			this.modeBanner.classList.toggle('is-3d', mode === '3d');
+			this.modeBanner.innerHTML = mode === 'nd' ? ICON_MODE_ND : (mode === '3d' ? ICON_MODE_3D : ICON_MODE_2D);
+			this.modeBanner.title = mode === 'nd'
+				? 'n dimensions — layered DAG (Shift+scroll to step layers)'
+				: mode === '3d'
+					? '3 dimensions — click (or press M) for n dimensions'
+					: '2 dimensions — click (or press M) for 3 dimensions';
+			this.modeBanner.classList.toggle('is-3d', mode === '3d' || mode === 'nd');
 		}
 		if (this.toolDock && mode === '2d' && this.tool === 'rotate') {
 			void this.plugin.setTool('navigate');
@@ -966,6 +990,32 @@ export class SemanticHologramView extends ItemView {
 					: 'Projection: orthographic — click (or press P) for perspective';
 		}
 		this.requestRedraw();
+	}
+
+	public updateDisplayBanner(): void {
+		if (!this.displayBanner) return;
+		const mode = this.plugin.settings.displayMode ?? 'cognitive';
+		const isPerceptive = mode === 'perceptive';
+		this.displayBanner.innerHTML = '';
+		this.displayBanner.title = isPerceptive ? 'Perceptive mode (showing source nodes)' : 'Cognitive mode (showing mechanism nodes)';
+		this.displayBanner.classList.toggle('is-3d', this.is3D);
+		// Phase 5 SVG icons from images/ (currentColor recolored via banner CSS)
+		const iconName = isPerceptive ? 'eye-open.svg' : 'brain.svg';
+		try {
+			const svgPath = join(this.plugin.pluginDir(), 'images', iconName);
+			const svgText = readFileSync(svgPath, 'utf8');
+			// Inject inline SVG (currentColor inherits banner color)
+			this.displayBanner.innerHTML = svgText;
+		} catch {
+			this.displayBanner.textContent = isPerceptive ? '👁' : '🧠';
+		}
+	}
+
+	public toggleDisplayMode(): void {
+		const current = this.plugin.settings.displayMode ?? 'cognitive';
+		const next = current === 'perceptive' ? 'cognitive' : 'perceptive';
+		this.showToast(next === 'perceptive' ? 'Perceptive mode (sources)' : 'Cognitive mode (mechanisms)');
+		void this.plugin.setDisplayMode(next);
 	}
 
 	/** The projection toggle is a 3D control: 2D has no eye, so it stays orthographic. */
@@ -1503,7 +1553,11 @@ export class SemanticHologramView extends ItemView {
 		this.modeBanner = container.createDiv({ cls: 'sh-mode-banner sh-mode-indicator' });
 		this.modeBanner.title = 'Toggle 2D / 3D mode';
 		this.modeBanner.addEventListener('click', () => {
-			const next = this.is3D ? '2d' : '3d';
+			const m = this.plugin.settings.hologramMode;
+			let next: HologramMode = '2d';
+			if (m === '2d') next = '3d';
+			else if (m === '3d') next = 'nd';
+			else if (m === 'nd') next = '2d';
 			void this.plugin.setMode(next);
 		});
 		this.setMode(this.plugin.settings.hologramMode);
@@ -1515,6 +1569,12 @@ export class SemanticHologramView extends ItemView {
 			this.toggleProjection();
 		});
 		this.setProjectionMode(this.plugin.settings.projectionMode);
+
+		// Phase 5 — Cognitive / Perceptive toggle banner (brain / eye SVG icons from images/)
+		this.displayBanner = container.createDiv({ cls: 'sh-mode-banner sh-display-banner sh-mode-indicator' });
+		this.displayBanner.title = 'Toggle Cognitive / Perceptive view';
+		this.displayBanner.addEventListener('click', () => this.toggleDisplayMode());
+		this.updateDisplayBanner();
 
 		this.cursorOverlay = container.createDiv({ cls: 'sh-cursor-overlay' });
 		this.cursorOverlay.setAttribute('aria-hidden', 'true');
@@ -1815,14 +1875,13 @@ export class SemanticHologramView extends ItemView {
 			settings.defaultRelStrength,
 			(path) => ownerByPath.has(path),
 		);
-		const gscan = await scanGravitas(files, this.app.vault, this.app.metadataCache, (path) => ownerByPath.has(path));
 		// A newer build may have started while we were reading; drop stale results.
 		if (buildSeq !== this.buildSeq) {
 			return;
 		}
 
 		const metas = readNodeMetas(files, this.app.metadataCache, settings.defaultConfidence);
-		const stats = computeNodeStats(metas, scan.edges, gscan.edges, settings.sourceKinds, settings.defaultConfidence);
+		const stats = computeNodeStats(metas, scan.edges.filter(e => e.relId === 'structural/subsumed-by'), scan.edges, settings.sourceKinds, settings.defaultConfidence);
 
 		const nodes: GraphNode[] = [];
 		const index = new Map<string, number>();
@@ -1840,7 +1899,7 @@ export class SemanticHologramView extends ItemView {
 
 		for (const f of files) {
 			const meta = metas.get(f.path);
-			if (meta && isEvidenceType(meta.nodeType)) {
+			if (meta && isEvidenceType(meta.nodeType) && meta.nodeType !== 'source') {
 				continue;
 			}
 			const oldIdx = existing.get(f.path);
@@ -1907,6 +1966,21 @@ export class SemanticHologramView extends ItemView {
 		const freshSeeds: number[] = [];
 		nodes.forEach((node, i) => {
 			if (!node.homeSet) {
+				// Phase 5: source nodes start at world-space origin (0,0,0)
+				if (node.nodeType === 'source') {
+					node.x = 0;
+					node.y = 0;
+					node.z = 0;
+					node.homeX = 0;
+					node.homeY = 0;
+					node.homeZ = 0;
+					node.homeSet = true;
+					node.vx = 0;
+					node.vy = 0;
+					node.vz = 0;
+					freshSeeds.push(i);
+					return;
+				}
 				const centre = ownerByPath.get(node.path) ? this.displayedCenters.get(ownerByPath.get(node.path)!) : undefined;
 				const angle = (i / Math.max(1, n)) * Math.PI * 2;
 				const rad = R * 0.45 * (0.6 + Math.random() * 0.4);
@@ -1938,6 +2012,18 @@ export class SemanticHologramView extends ItemView {
 			if (!relById.get(e.relId)?.enabled) {
 				continue;
 			}
+			// Faith-source edges (0% source-kind) are invalid: skip rendering
+			// and spring physics. The relationship definition stays in the note
+			// so a user can later detach the faith source.
+			const srcMeta = metas.get(e.source);
+			const dstMeta = metas.get(e.target);
+			const isFaithEdge =
+				(srcMeta?.nodeType === 'source' && srcMeta?.sourceKind?.startsWith('faith/')) ||
+				(dstMeta?.nodeType === 'source' && dstMeta?.sourceKind?.startsWith('faith/'));
+			if (isFaithEdge) {
+				continue;
+			}
+			// Perceptive and cognitive both show evidence relationships.
 			const srcDir = ownerByPath.get(e.source);
 			const dstDir = ownerByPath.get(e.target);
 			if (srcDir !== dstDir) {
@@ -1990,44 +2076,6 @@ export class SemanticHologramView extends ItemView {
 				edgeColor: colored,
 			});
 			covered.add(key);
-		}
-
-		// Plain wikilinks become white double arrows unless a typed relation
-		// already covers the same pair.
-		const seen = new Set(covered);
-		for (const f of files) {
-			const srcIdx = index.get(f.path);
-			if (srcIdx === undefined) {
-				continue;
-			}
-			const targets = resolved[f.path];
-			if (!targets) {
-				continue;
-			}
-			for (const targetPath of Object.keys(targets)) {
-				const dstIdx = index.get(targetPath);
-				if (dstIdx === undefined || dstIdx === srcIdx) {
-					continue;
-				}
-				const srcDir = ownerByPath.get(f.path);
-				const dstDir = ownerByPath.get(targetPath);
-				if (srcDir !== dstDir) {
-					continue;
-				}
-				const key = srcIdx < dstIdx ? `${srcIdx}|${dstIdx}` : `${dstIdx}|${srcIdx}`;
-				if (seen.has(key)) {
-					continue;
-				}
-				seen.add(key);
-				links.push({
-					a: Math.min(srcIdx, dstIdx),
-					b: Math.max(srcIdx, dstIdx),
-					restLen: this.restLengthFor(0.5),
-					dir: 'both',
-					relations: [{ type: 'default', strength: 0.5 }],
-					edgeColor: WHITE_EDGE,
-				});
-			}
 		}
 
 		// Zero-gravitas nodes float: their relationships carry effective strength
@@ -2158,7 +2206,7 @@ export class SemanticHologramView extends ItemView {
 		}
 		this.searchIndex = initialIndex;
 
-		this.searchIndex = await this.buildSearchIndex(nodes, scan, gscan, contentMap);
+		this.searchIndex = await this.buildSearchIndex(nodes, scan, contentMap);
 		if (buildSeq !== this.buildSeq) {
 			return;
 		}
@@ -2228,7 +2276,6 @@ export class SemanticHologramView extends ItemView {
 	private async buildSearchIndex(
 		nodes: GraphNode[],
 		scan: RelationScan,
-		gscan: GravitasScan,
         contentMap: Map<string, string>
 	): Promise<Map<string, SearchIndexEntry>> {
 		const settings = this.plugin.settings;
@@ -2245,7 +2292,7 @@ export class SemanticHologramView extends ItemView {
 			b.add(e.relId);
 			relIdsByPath.set(e.target, b);
 		}
-		for (const e of gscan.edges) {
+		for (const e of scan.edges.filter((e) => e.relId === 'epistemic/evidence')) {
 			for (const p of [e.source, e.target]) {
 				const s = relIdsByPath.get(p) ?? new Set<string>();
 				s.add('gravitas');
@@ -2877,6 +2924,21 @@ export class SemanticHologramView extends ItemView {
 			if (is3D) {
 				node.z += node.vz;
 			}
+			// nD layer plane offset
+			if (this.plugin.settings.hologramMode === 'nd') {
+				const sep = this.plugin.settings.ndLayerSeparation ?? 0;
+				const level = this.nodeLevel(node);
+				const yTarget = level * sep;
+				// Force y to plane; reset velocity so physics doesn't fight plane offset
+				node.y = yTarget;
+				node.vy = 0;
+				// Preserve informal 2D vertical (before plane offset) as z for within-plane layout
+				// But here we want to keep physics z intact; just override y.
+				// To preserve 2D layout vertical in z: we rely on 2D physics (is3D false for repulsion).
+				// Actually, for proper nD mapping: z should hold 2D vertical; but since 3D physics is active,
+				// we use z as physics depth. The user wants separation = 0 to look like 2D in 3D space,
+				// so for now we just pin y to plane and rely on x/z physics for spread.
+			}
 			node.x = Math.min(R, Math.max(-R, node.x));
 			node.y = Math.min(R, Math.max(-R, node.y));
 			if (is3D) {
@@ -3339,14 +3401,21 @@ export class SemanticHologramView extends ItemView {
 	 * time the setting has flipped, `is3D` can no longer report it. Defaulting to
 	 * `is3D` keeps every existing caller correct.
 	 */
-	private focalPointInMode(fromMode?: '2d' | '3d'): { x: number; y: number; z: number } {
+	private focalPointInMode(fromMode?: HologramMode): { x: number; y: number; z: number } {
 		const w = this.canvas?.clientWidth ?? 0;
 		const h = this.canvas?.clientHeight ?? 0;
-		if (fromMode ? fromMode === '3d' : this.is3D) {
+		if (fromMode ? (fromMode === '3d' || fromMode === 'nd') : this.is3D) {
 			return { x: this.target[0], y: this.target[1], z: this.target[2] };
 		}
 		// In 2D, translate screen center to world coordinates
 		return { x: this.toWorldX(w / 2), y: this.toWorldY(h / 2), z: 0 };
+	}
+
+	
+	private nodeLevel(node: GraphNode): number {
+		const meta = this.plugin.settings.nodeTypes.find(t => t.id === node.nodeType);
+		const lvl = meta?.level;
+		return (typeof lvl === 'number') ? lvl : 0;
 	}
 
 	public getFocalPoint(): { x: number; y: number; z: number } {
@@ -3724,9 +3793,9 @@ export class SemanticHologramView extends ItemView {
 
 				const typeEntry = viewSettings.nodeTypes.find((t) => t.id === node.nodeType);
 				const baseColor = typeEntry?.color ?? this.nodeColor;
-				const nodeColor = viewSettings.showGravitasColor ? this.getSpectrumColor(grav, alpha) : baseColor;
+				const nodeColor = (viewSettings.showGravitasColor || node.nodeType === 'source') ? this.getSpectrumColor(grav, alpha) : baseColor;
 
-				if (viewSettings.showConfidenceHalo && !isFaded) {
+				if ((viewSettings.showConfidenceHalo || node.nodeType === 'source') && !isFaded) {
 					ctx.beginPath();
 					ctx.arc(sx, sy, r * 1.25, 0, Math.PI * 2);
 					ctx.strokeStyle = isCandidate
@@ -3869,9 +3938,9 @@ export class SemanticHologramView extends ItemView {
 
 			const typeEntry = viewSettings.nodeTypes.find((t) => t.id === node.nodeType);
 			const baseColor = typeEntry?.color ?? this.nodeColor;
-			const nodeColor = viewSettings.showGravitasColor ? this.getSpectrumColor(grav, alpha) : baseColor;
+			const nodeColor = (viewSettings.showGravitasColor || node.nodeType === 'source') ? this.getSpectrumColor(grav, alpha) : baseColor;
 
-			if (viewSettings.showConfidenceHalo && !isFaded) {
+			if ((viewSettings.showConfidenceHalo || node.nodeType === 'source') && !isFaded) {
 				ctx.beginPath();
 				ctx.arc(sx, sy, r * 1.25, 0, Math.PI * 2);
 				ctx.strokeStyle = isCandidate
@@ -5679,9 +5748,22 @@ export class SemanticHologramView extends ItemView {
 
 	/** Visibility used by draw(): a live peek overrides the persisted filter without writing it. */
 	private isNodeVisible(node: GraphNode): boolean {
-		return this.peekActive
-			? this.peekTags.includes(this.ownerOf(node) ?? '')
-			: this.nodeMatchesSelectedHolograms(node);
+		if (this.peekActive) {
+			return this.peekTags.includes(this.ownerOf(node) ?? '');
+		}
+		// Perceptive mode: show ALL nodes including sources, plus percept edges.
+		const mode = this.plugin.settings.displayMode ?? 'cognitive';
+		if (mode === 'perceptive') {
+			return this.nodeMatchesSelectedHolograms(node);
+		}
+		// Cognitive (default): hide source nodes.
+		if (node.nodeType === 'source') return false;
+		return this.nodeMatchesSelectedHolograms(node);
+		// 2D layer stepping (Shift+scroll): -1 shows every layer.
+		if (!this.is3D && this.ndLayerStep >= 0) {
+			return this.nodeLevel(node) === this.ndLayerStep;
+		}
+		return true;
 	}
 
 	/**
@@ -7019,9 +7101,23 @@ private selectHovered(): void {
 			return;
 		}
 
-		// 2D is a flat canvas, but magnification still anchors on the focal
-		// point (the canvas centre) so that wheel, buttons and 3D dolly all
-		// behave alike. The cursor does not participate.
+		// 2D: Shift+scroll steps through DAG layers (nD layer stepping)
+		if (e.shiftKey) {
+			const maxLevel = Math.max(6, ...this.plugin.settings.nodeTypes.map(t => typeof t.level === 'number' ? t.level : 0));
+			const delta = dy > 0 ? 1 : -1;
+			let newStep = this.ndLayerStep + delta;
+			if (newStep < -1) newStep = -1; // -1 = all (unified)
+			if (newStep > maxLevel) newStep = maxLevel;
+			this.ndLayerStep = newStep;
+			if (newStep >= 0) {
+				this.showToast('Layer ' + newStep);
+			} else {
+				this.showToast('All layers');
+			}
+			this.requestRedraw();
+			return;
+		}
+		// 2D is a flat canvas, magnification anchors on focal point.
 		this.applyScaleAboutFocalPoint(Math.exp(-dy * PHYS.zoomSpeed));
 		this.markViewAdjusted();
 	};

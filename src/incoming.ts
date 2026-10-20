@@ -2,7 +2,7 @@ import { MetadataCache, TFile, Vault } from 'obsidian';
 import type { RelationEdge, RelationScan } from './relations';
 import { findIncomingSection, formatStrength, scanRelations } from './relations';
 
-const INCOMING_HEADER_TEXT = '## Incoming relationships';
+const INCOMING_HEADER_TEXT = '## Incoming relationships (generated)';
 
 function relVerb(relId: string): string {
 	return relId;

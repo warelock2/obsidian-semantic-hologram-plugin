@@ -82,7 +82,7 @@ export async function readNodeMetasFresh(
 }
 
 /**
- * Scan every hologram note's `## Gravitas` section for lends-gravitas-to edges.
+ * Scan every hologram note's `## Gravitas` section for epistemic/evidence edges.
  * Only notes typed as evidence contribute; the target must resolve inside the
  * hologram scope.
  */
@@ -121,6 +121,15 @@ export async function scanGravitas(
 		edges.push(...parsed.edges);
 		malformed.push(...parsed.malformed);
 	}
+	// Source notes (level 0) may only lend to concepts (level 1).
+	for (let i = edges.length - 1; i >= 0; i--) {
+		const e = edges[i]!;
+		const sMeta = metas.get(e.source);
+		const tMeta = metas.get(e.target);
+		if (sMeta && isEvidenceType(sMeta.nodeType) && tMeta && tMeta.nodeType !== 'concept') {
+			edges.splice(i, 1);
+		}
+	}
 	return { edges, malformed };
 }
 
@@ -132,10 +141,14 @@ export async function scanGravitas(
  * at 1. Confidence: total = local + inherited, where inherited = Σ children's
  * total. Shared descendants count once (memoized), cycles are guarded.
  */
+/** One source's contribution to a node's gravitas level. */
+export { computeProvenance } from './gravitasProvenance';
+export type { ProvenanceEntry } from './gravitasProvenance';
+
 export function computeNodeStats(
 	metas: Map<string, NodeMeta>,
 	subsumedEdges: RelationEdge[],
-	gravEdges: GravitasEdge[],
+	relEdges: RelationEdge[],
 	sourceKinds: SourceKindEntry[],
 	defaultConfidence: number,
 ): Map<string, NodeStats> {
@@ -147,10 +160,11 @@ export function computeNodeStats(
 	};
 
 	const direct = new Map<string, number>();
-	for (const e of gravEdges) {
+	for (const e of relEdges) {
+		if (e.relId !== 'epistemic/evidence') continue;
 		const meta = metas.get(e.source);
 		const pct = meta ? kindPercent(meta.sourceKind) : 0;
-		const v = e.amount * pct;
+		const v = e.strength * pct;
 		direct.set(e.target, (direct.get(e.target) ?? 0) + v);
 	}
 

@@ -1,0 +1,237 @@
+FAMILY / RELATIONSHIP-TYPE
+
+Logical / Identity
+Logical / Equivalence
+Logical / Implication
+Logical / Contradiction
+Logical / Contrariety
+Logical / Compatibility
+Logical / Independence
+Logical / Necessity
+Logical / Sufficiency
+Logical / Mutual Exclusivity
+Logical / Exhaustiveness
+
+Semantic / Synonymy
+Semantic / Antonymy
+Semantic / Hyponymy
+Semantic / Hypernymy
+Semantic / Part-Whole Meaning
+Semantic / Ambiguity
+Semantic / Polysemy
+Semantic / Contextual Dependence
+Semantic / Connotation
+
+Taxonomic / Class Membership
+Taxonomic / Subclass
+Taxonomic / Superclass
+Taxonomic / Overlap
+Taxonomic / Disjointness
+Taxonomic / Partition
+Taxonomic / Similarity
+Taxonomic / Difference
+Taxonomic / Analogy
+Taxonomic / Family Resemblance
+
+Compositional / Part-Whole
+Compositional / Component-System
+Compositional / Member-Collection
+Compositional / Element-Set
+Compositional / Substructure
+Compositional / Containment
+Compositional / Arrangement
+Compositional / Ordering
+Compositional / Adjacency
+Compositional / Connectivity
+
+Causal / Causation
+Causal / Contribution
+Causal / Enablement
+Causal / Prevention
+Causal / Dependence
+Causal / Independence
+Causal / Interaction
+Causal / Correlation
+Causal / Covariation
+Causal / Emergence
+Causal / Instantiation
+Causal / Realization
+Causal / Constitution
+Causal / Predisposition
+
+Temporal / Precedence
+Temporal / Succession
+Temporal / Simultaneity
+Temporal / Overlap
+Temporal / Duration
+Temporal / Beginning
+Temporal / Termination
+Temporal / Persistence
+Temporal / Change
+Temporal / Recurrence
+Temporal / Periodicity
+Temporal / Historical Dependence
+Temporal / Temporal Separation
+
+Spatial / Proximity
+Spatial / Distance
+Spatial / Containment
+Spatial / Exteriority
+Spatial / Adjacency
+Spatial / Intersection
+Spatial / Disjointness
+Spatial / Alignment
+Spatial / Orientation
+Spatial / Directionality
+Spatial / Connectivity
+Spatial / Topology
+
+Quantitative / Equality
+Quantitative / Inequality
+Quantitative / Proportionality
+Quantitative / Ratio
+Quantitative / Correlation
+Quantitative / Function
+Quantitative / Dependence
+Quantitative / Invariance
+Quantitative / Optimization
+Quantitative / Recursion
+Quantitative / Symmetry
+
+Modal / Necessity
+Modal / Possibility
+Modal / Impossibility
+Modal / Contingency
+Modal / Conditional Possibility
+Modal / Counterfactual Dependence
+Modal / Potentiality
+Modal / Actualization
+
+Epistemic / Evidence
+Epistemic / Confirmation
+Epistemic / Disconfirmation
+Epistemic / Entailment
+Epistemic / Inference
+Epistemic / Explanation
+Epistemic / Prediction
+Epistemic / Justification
+Epistemic / Underdetermination
+Epistemic / Consistency
+Epistemic / Inconsistency
+Epistemic / Reliance
+Epistemic / Uncertainty
+Epistemic / Falsifiability
+Epistemic / Discoverability
+
+Functional / Function
+Functional / Purpose
+Functional / Means-End
+Functional / Instrumentality
+Functional / Utility
+Functional / Optimization
+Functional / Prerequisite
+Functional / Goal-Dependence
+Functional / Trade-Off
+
+Normative / Good-Bad
+Normative / Better-Worse
+Normative / Preference
+Normative / Obligation
+Normative / Permission
+Normative / Prohibition
+Normative / Right-Duty
+Normative / Value-Means
+Normative / Consistency
+Normative / Violation
+
+Agentive / Belief
+Agentive / Knowledge
+Agentive / Desire
+Agentive / Intention
+Agentive / Decision
+Agentive / Agency
+Agentive / Control
+Agentive / Communication
+Agentive / Interpretation
+Agentive / Recognition
+Agentive / Learning
+
+Representational / Representation
+Representational / Reference
+Representational / Denotation
+Representational / Description
+Representational / Modeling
+Representational / Approximation
+Representational / Abstraction
+Representational / Measurement
+Representational / Encoding
+Representational / Interpretation
+
+
+FAMILY / CENTRAL QUESTION
+
+Logical / What follows from what?
+
+Semantic / What does something mean in relation to something else?
+
+Taxonomic / What kind of thing is it relative to another thing?
+
+Compositional / How are things constituted, organized, or structured
+               relative to one another?
+
+Causal / What produces, influences, enables, or prevents what?
+
+Temporal / When does something occur relative to something else?
+
+Spatial / Where is something located or oriented relative to something else?
+
+Quantitative / How much, how many, or in what measurable relationship?
+
+Modal / What must, can, cannot, or could otherwise be the case?
+
+Epistemic / What grounds, supports, limits, or establishes our knowledge
+            or belief about something?
+
+Functional / What does something do, enable, or contribute toward achieving?
+
+Normative / How does something relate to a standard, value, obligation,
+            or evaluation?
+
+Agentive / How does an agent relate to beliefs, intentions, decisions,
+           actions, or other agents?
+
+Representational / How does something represent, describe, model, or refer
+                   to something else?
+
+
+RELATIONSHIP PROPERTIES / FORMAL CHARACTERISTICS
+
+Formal / Symmetry
+Formal / Asymmetry
+Formal / Antisymmetry
+Formal / Reflexivity
+Formal / Irreflexivity
+Formal / Transitivity
+
+FORMAL / CENTRAL QUESTION
+
+Formal / What structural or mathematical properties does a relationship
+         possess, independently of its subject matter?
+
+
+EPISTEMIC BASIS / METHOD OF ESTABLISHMENT
+
+Epistemic Basis / Definitional
+Epistemic Basis / Deductive
+Epistemic Basis / Inductive
+Epistemic Basis / Abductive
+Epistemic Basis / Empirical
+Epistemic Basis / Statistical
+Epistemic Basis / Axiomatic
+Epistemic Basis / Conventional
+Epistemic Basis / Pragmatic
+
+EPISTEMIC BASIS / CENTRAL QUESTION
+
+Epistemic Basis / On what grounds or by what method do we establish,
+                 justify, or evaluate the claim that a relationship holds?

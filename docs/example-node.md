@@ -37,6 +37,6 @@ The seed. A sentence or two — it is fine to leave it half-written.
 
   ## Gravitas
      Structural strength backed by evidence: each `source` note that
-     `lends-gravitas-to` this one, scaled by its `source-kind`. An
+     `epistemic/evidence` this one, scaled by its `source-kind`. An
      unprovenanced note shows 0%, which is honest rather than broken.
 -->

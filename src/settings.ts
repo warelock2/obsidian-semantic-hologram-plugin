@@ -1,8 +1,9 @@
 import { App, Modal, Notice, PluginSettingTab, Setting, TextComponent } from 'obsidian';
 import { migrateRelationship, restoreRelationship, migrateNodeType, restoreNodeType, renameRelationship, renameNodeType } from './migration';
+import { derivedRelTypes } from './relTypesDerived';
 import type SemanticHologramPlugin from './main';
 
-export type HologramMode = '2d' | '3d';
+export type HologramMode = '2d' | '3d' | 'nd';
 export type HologramTool = 'navigate' | 'select' | 'rotate';
 export type ProjectionMode = 'perspective' | 'orthographic';
 
@@ -138,9 +139,11 @@ export interface SemanticHologramSettings {
 	/** Injection source for the scan, as a note path. Empty means no injection. */
 	scanSource: string;
 	selectedHolograms: string[];
+	displayMode: 'cognitive' | 'perceptive';
 	incomingFolderPath: string;
 
 	separationDistance: number;
+	ndLayerSeparation: number;
 	gifMode: 'full' | 'time' | 'continuous';
 	gifDuration: number;
 }
@@ -217,13 +220,7 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 		{ id: 'source/social', name: 'Social media', percent: 10 },
 		{ id: 'source/unverified', name: 'Opinion / anecdote', percent: 0, description: 'Not rooted in objective reality or fact — lends no gravitas.' },
 	],
-	relTypes: [
-		{ id: 'logic/supports', color: '#4D9DE0', description: 'Provides support for the target.', enabled: true },
-		{ id: 'logic/contradicts', color: '#E76F51', description: 'Contradicts the target.', enabled: true },
-		{ id: 'structural/depends-on', color: '#43AA8B', description: 'Depends on the target.', enabled: true },
-		{ id: 'structural/subsumed-by', color: '#9B5DE5', description: 'Lower-order concept is subsumed by higher-order concept.', enabled: true },
-		{ id: 'related', color: '#C0C0C0', description: 'General relatedness.', enabled: true },
-	],
+	relTypes: derivedRelTypes,
 	defaultRelStrength: 0.5,
 	defaultConfidence: 0.5,
 	showGravitasColor: true,
@@ -237,8 +234,10 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	},
 	scanSource: '',
 	selectedHolograms: [],
+	displayMode: 'cognitive',
 
 	separationDistance: 500,
+	ndLayerSeparation: 0,
 	gifMode: 'full',
 	gifDuration: 10,
 };
@@ -1127,7 +1126,7 @@ export class SemanticHologramSettingTab extends PluginSettingTab {
 	private renderSourceKinds(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName('Gravitas source kinds')
-			.setDesc('Credibility modifier (%) for each kind of evidence note. An evidence note\'s `source-kind` frontmatter value picks a row here; the percent multiplies the amount it lends (lends-gravitas-to). 0% = rooted in nothing objective — lends no gravitas.')
+			.setDesc('Credibility modifier (%) for each kind of evidence note. An evidence note\'s `source-kind` frontmatter value picks a row here; the percent multiplies the amount it lends (epistemic/evidence). 0% = rooted in nothing objective — lends no gravitas.')
 			.setHeading();
 
 		const headerRow = containerEl.createDiv({ cls: 'sh-glossary-row sh-glossary-header' });

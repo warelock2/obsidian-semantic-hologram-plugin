@@ -1,5 +1,7 @@
 # DAG Layer Rules
 
+> **Status:** SPEC — normative. Wave 2026-10-20. Authoritative on the level ladder, the direction rules, and layer-crossing. See [`docs/README.md`](../README.md).
+
 ## Layer hierarchy
 
 Nodes are organized into a layered DAG by abstraction level. Lower levels are less abstract (raw data, observations); higher levels are more abstract (groupings, domains).

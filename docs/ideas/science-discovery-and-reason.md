@@ -1,5 +1,7 @@
 # Science, Discovery, and Reason: The Epistemological Architecture of Semantic Holograms
 
+> **Status:** IDEA — metaphor. Wave 2026-09-27. Its diagram uses its own numbering, not the DAG ladder (see [`dag-layer-rules.md`](../core/dag-layer-rules.md)). See [`docs/README.md`](../README.md).
+
 ## Introduction
 The Obsidian Semantic Hologram plugin is not merely a note-taking tool or a strict database; it is structured around a rigorous epistemology. Understanding this structure helps explain why the system is built the way it is, how it handles truth and validity, and how much freedom you have to explore, brainstorm, and invent.
 

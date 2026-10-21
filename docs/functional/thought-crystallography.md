@@ -1,5 +1,7 @@
 # Diffraction
 
+> **Status:** SPEC + implementation status. Wave 2026-10-04/05. Authoritative on what the diffractometer actually does. See [`docs/README.md`](../README.md).
+
 ## What this is
 
 A note is a record of something you already understood. The *structure* between

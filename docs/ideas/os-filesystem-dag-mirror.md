@@ -1,5 +1,7 @@
 # OS Filesystem as DAG Mirror & World-Space Root
 
+> **Status:** IDEA — superseded. Wave 2026-10-15. Superseded by [`hologram-emulsification.md`](../functional/hologram-emulsification.md). See [`docs/README.md`](../README.md).
+
 ## Ideation Summary (from session-bb36dd71-668c-4bb2-a205-2002c94048f4.md)
 
 This document captures the recent ideation discussion about using the **operating system filesystem** (not the Obsidian vault filesystem) as the primary mirror of a DAG (Directed Acyclic Graph) structure, and how note paths relative to a current working directory (CWD) identify the root of world space being rendered in the hologram plugin.

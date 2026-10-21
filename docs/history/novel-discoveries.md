@@ -1,5 +1,7 @@
 # Novel Structural Discoveries: Topological Analysis of the Linux Kernel Internals Hologram
 
+> **Status:** HISTORICAL — results snapshot. Wave 2026-09-27. Its counts describe that vault state, not the current one. See [`docs/README.md`](../README.md).
+
 ## Introduction
 By applying the semantic diffractometer (energy diffusion and topological scanning) to the **Linux Kernel Internals** hologram, we transition from reading static markdown notes to observing the living architecture of operating system mechanics. The topology reveals how kernel subsystems couple, where optimization triads form, and how memory and execution pathways interact under load.
 

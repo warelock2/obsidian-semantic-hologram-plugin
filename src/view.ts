@@ -2884,6 +2884,50 @@ export class SemanticHologramView extends ItemView {
 			}
 		}
 
+		// nD layer separation opens the plane stack about the centroid of the
+		// visible nodes, along the layer axis (y) only. The previous form was
+		// `level * sep`, which pinned level 0 at y=0 and drove every higher
+		// level upward from there — so raising the separation slid the whole
+		// hologram off in +y instead of expanding it. Offsets measured from the
+		// level centroid sum to zero, so mean y is preserved exactly and the
+		// planes part symmetrically about the middle of the hologram. Note this
+		// is also independent of `sep`: the centroid term carries no `sep`, so
+		// moving the slider can never drag the graph with it.
+		let ndLayers = false;
+		let ndSep = 0;
+		let layerOriginY = 0;
+		let layerOriginLevel = 0;
+		let layerYBound = R;
+		if (this.plugin.settings.hologramMode === 'nd') {
+			ndLayers = true;
+			ndSep = this.plugin.settings.ndLayerSeparation ?? 0;
+			let sumY = 0;
+			let sumLevel = 0;
+			let minLevel = Infinity;
+			let maxLevel = -Infinity;
+			let count = 0;
+			for (let i = 0; i < nodes.length; i++) {
+				if (!visible[i]) {
+					continue;
+				}
+				const lvl = this.nodeLevel(nodes[i]!);
+				sumY += nodes[i]!.y;
+				sumLevel += lvl;
+				minLevel = Math.min(minLevel, lvl);
+				maxLevel = Math.max(maxLevel, lvl);
+				count++;
+			}
+			if (count > 0) {
+				layerOriginY = sumY / count;
+				layerOriginLevel = sumLevel / count;
+				// How far the widest plane sits from the origin plane. The world
+				// radius clamp has to allow this much past R, otherwise the
+				// outermost planes get sheared flat onto the radius and expansion
+				// reads as a collapse at large separation.
+				const half = Math.max(layerOriginLevel - minLevel, maxLevel - layerOriginLevel) * Math.abs(ndSep);
+				layerYBound = Math.abs(layerOriginY) + half + R;
+			}
+		}
 		let energy = 0;
 		let visibleCount = 0;
 		for (let i = 0; i < nodes.length; i++) {
@@ -2924,23 +2968,18 @@ export class SemanticHologramView extends ItemView {
 			if (is3D) {
 				node.z += node.vz;
 			}
-			// nD layer plane offset
-			if (this.plugin.settings.hologramMode === 'nd') {
-				const sep = this.plugin.settings.ndLayerSeparation ?? 0;
+			// nD layer plane offset: force y to this node's plane, expressed
+			// relative to the centroid so the stack expands/contracts about the
+			// middle rather than climbing from level 0. vy is zeroed so physics
+			// cannot fight the plane; x/z carry the within-plane layout, and
+			// separation 0 therefore reads as a flat 2D arrangement in space.
+			if (ndLayers) {
 				const level = this.nodeLevel(node);
-				const yTarget = level * sep;
-				// Force y to plane; reset velocity so physics doesn't fight plane offset
-				node.y = yTarget;
+				node.y = layerOriginY + (level - layerOriginLevel) * ndSep;
 				node.vy = 0;
-				// Preserve informal 2D vertical (before plane offset) as z for within-plane layout
-				// But here we want to keep physics z intact; just override y.
-				// To preserve 2D layout vertical in z: we rely on 2D physics (is3D false for repulsion).
-				// Actually, for proper nD mapping: z should hold 2D vertical; but since 3D physics is active,
-				// we use z as physics depth. The user wants separation = 0 to look like 2D in 3D space,
-				// so for now we just pin y to plane and rely on x/z physics for spread.
 			}
 			node.x = Math.min(R, Math.max(-R, node.x));
-			node.y = Math.min(R, Math.max(-R, node.y));
+			node.y = Math.min(layerYBound, Math.max(-layerYBound, node.y));
 			if (is3D) {
 				node.z = Math.min(R, Math.max(-R, node.z));
 			}
@@ -5751,18 +5790,20 @@ export class SemanticHologramView extends ItemView {
 		if (this.peekActive) {
 			return this.peekTags.includes(this.ownerOf(node) ?? '');
 		}
-		// Perceptive mode: show ALL nodes including sources, plus percept edges.
-		const mode = this.plugin.settings.displayMode ?? 'cognitive';
-		if (mode === 'perceptive') {
-			return this.nodeMatchesSelectedHolograms(node);
-		}
-		// Cognitive (default): hide source nodes.
-		if (node.nodeType === 'source') return false;
-		return this.nodeMatchesSelectedHolograms(node);
-		// 2D layer stepping (Shift+scroll): -1 shows every layer.
+		// The selected holograms gate everything below: that decides which nodes
+		// exist in this view at all.
+		if (!this.nodeMatchesSelectedHolograms(node)) return false;
+		// An explicitly stepped-to DAG layer (Shift+scroll in 2D) takes
+		// precedence over the display-mode rules underneath. Layer 0 *is* the
+		// sources, so cognitive's "hide sources" would paint that layer blank and
+		// make the stepping control look broken.
 		if (!this.is3D && this.ndLayerStep >= 0) {
 			return this.nodeLevel(node) === this.ndLayerStep;
 		}
+		// Perceptive mode shows ALL nodes including sources; cognitive (the
+		// default) hides them.
+		const mode = this.plugin.settings.displayMode ?? 'cognitive';
+		if (mode === 'cognitive' && node.nodeType === 'source') return false;
 		return true;
 	}
 
@@ -7103,18 +7144,42 @@ private selectHovered(): void {
 
 		// 2D: Shift+scroll steps through DAG layers (nD layer stepping)
 		if (e.shiftKey) {
-			const maxLevel = Math.max(6, ...this.plugin.settings.nodeTypes.map(t => typeof t.level === 'number' ? t.level : 0));
+			// Clamp to the highest layer that actually carries nodes. A fixed
+			// floor (this used to be `Math.max(6, …)`) lets you scroll into
+			// layers that are guaranteed empty, which reads as the control being
+			// broken rather than as a layer being absent.
+			let maxLevel = 0;
+			for (const n of this.nodes) {
+				const L = this.nodeLevel(n);
+				if (L > maxLevel) maxLevel = L;
+			}
 			const delta = dy > 0 ? 1 : -1;
 			let newStep = this.ndLayerStep + delta;
 			if (newStep < -1) newStep = -1; // -1 = all (unified)
 			if (newStep > maxLevel) newStep = maxLevel;
+			if (newStep === this.ndLayerStep) {
+				// Already clamped at the end of the range: say so, but do not
+				// yank the camera for a no-op.
+				this.showToast(newStep >= 0 ? 'Layer ' + newStep : 'All layers');
+				return;
+			}
 			this.ndLayerStep = newStep;
+			// Name the node types that live on this layer, so the toast reads
+			// "Layer 1: Concept" rather than a bare number.
+			const typeNames = this.plugin.settings.nodeTypes
+				.filter((t) => t.level === newStep)
+				.map((t) => t.name);
 			if (newStep >= 0) {
-				this.showToast('Layer ' + newStep);
+				this.showToast('Layer ' + newStep + ': ' + typeNames.join(', '));
 			} else {
 				this.showToast('All layers');
 			}
 			this.requestRedraw();
+			// A layer is usually a handful of nodes left wherever the full layout
+			// parked them — often off-canvas, and a lone survivor keeps drifting
+			// while the layout re-settles. Reframe on the visible set, otherwise a
+			// layer reads as empty when it is merely out of shot.
+			this.fitToView();
 			return;
 		}
 		// 2D is a flat canvas, magnification anchors on focal point.

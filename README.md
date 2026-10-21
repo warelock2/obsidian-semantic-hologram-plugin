@@ -52,7 +52,7 @@ Zettelkasten](https://zettelkasten.de/introduction/), or read the overview on
 - **Map a body of knowledge as a dependency DAG.** Model a technical domain (for
   example, Linux kernel internals) as concepts, ideas, and patterns linked by
   `depends-on` / `supports` edges; find the clusters and the bridges. See
-  [`docs/novel-discoveries.md`](docs/novel-discoveries.md).
+  [`docs/history/novel-discoveries.md`](docs/history/novel-discoveries.md).
 - **Ground your abstractions.** Link high-level ideas down to percepts, data, and
   sources, so every claim has a path to evidence and no abstraction "floats".
 - **Brainstorm without polluting rigor.** Capture raw associations as `Thought`
@@ -61,7 +61,7 @@ Zettelkasten](https://zettelkasten.de/introduction/), or read the overview on
   node to reveal resonance clusters and a bottom-up study path.
 - **Explore epistemics.** The system is built around a concrete → abstract →
   concrete reasoning cycle for science, engineering, and invention. See
-  [`docs/science-discovery-and-reason.md`](docs/science-discovery-and-reason.md).
+  [`docs/ideas/science-discovery-and-reason.md`](docs/ideas/science-discovery-and-reason.md).
 - **Let tools and AI read the structure.** An optional MCP server exposes the graph
   to external agents.
 
@@ -137,7 +137,7 @@ Three options for creating notes:
 
 - Command **“Create hologram node”** creates a correctly formatted note in
   `hologram/` and opens it.
-- Start from the template at [`docs/example-node.md`](docs/example-node.md). It uses
+- Start from the template at [`docs/functional/example-node.md`](docs/functional/example-node.md). It uses
   the Obsidian core **Templates** plugin variables `{{date}}` and `{{title}}`, so you
   can register it as your template for new notes.
 - Write the Markdown by hand — the format is small and human-friendly.
@@ -232,9 +232,9 @@ Every note also has a **`## Incoming relationships (read only)`** section. It is
 generated from other notes' outgoing edges by the **“Refresh incoming
 relationships”** command; you do not have to maintain it manually.
 
-A ready-to-use template is at [`docs/example-node.md`](docs/example-node.md), and a
+A ready-to-use template is at [`docs/functional/example-node.md`](docs/functional/example-node.md), and a
 longer specification (abstraction hierarchy, frontmatter schema, and relationship
-semantics) is at [`docs/semantic-structure.md`](docs/semantic-structure.md).
+semantics) is at [`docs/core/semantic-structure.md`](docs/core/semantic-structure.md).
 
 ---
 
@@ -252,7 +252,7 @@ Node types are defined in settings and each may carry a **level**. The default s
 | `topic` | 4 | A broader topical grouping. |
 | `domain` | 5 | A subject domain or field of study. |
 | `field` | 6 | A high-level academic or professional field. |
-| `source` | — | A source document: book, paper, video, interview, article. |
+| `source` | 0 | A source document: book, paper, video, interview, article. |
 | `authority` | — | A subject-matter expert lending authority as evidence. |
 | `data` | — | A measurement of objectively existing things. |
 
@@ -285,17 +285,17 @@ Semantic Hologram applies the DAG in four ways:
    implying support.
 3. **`groups` roll nodes upward.** A node's `groups` field lists the parent nodes it
    contributes to, so membership links climb the hierarchy toward hologram roots.
-4. **Evidence anchors the base, and nothing floats.** `source`, `authority`, and
-   `data` nodes sit beneath the abstraction ladder. A claim whose support ultimately
-   rests on nothing is a floating abstraction — structurally visible, and structurally
-   discouraged.
+4. **Evidence anchors the base, and nothing floats.** `source` nodes sit at level 0,
+   alongside `percept`; `authority` and `data` carry no level. A claim whose support
+   ultimately rests on nothing is a floating abstraction — structurally visible, and
+   structurally discouraged.
 
 `thought` nodes sit **outside** the DAG by design: they may link to anything, at any
 level or none, and only become part of the rigorous structure when you promote them.
 
 The reasoning model behind this layering — science and discovery as the soil,
 engineering and invention as the trees it feeds, and thought nodes as the sandbox —
-is described in [`docs/science-discovery-and-reason.md`](docs/science-discovery-and-reason.md).
+is described in [`docs/ideas/science-discovery-and-reason.md`](docs/ideas/science-discovery-and-reason.md).
 
 ---
 
@@ -367,7 +367,7 @@ optional orthographic mode.
 
 The full specification — reference frames, panning, dollying, prime-frame rotation,
 projection maths, home position, and invariants — is in
-[`docs/untethered-trackball-pinhole-camera-system.md`](docs/untethered-trackball-pinhole-camera-system.md).
+[`docs/functional/untethered-trackball-pinhole-camera-system.md`](docs/functional/untethered-trackball-pinhole-camera-system.md).
 
 ---
 
@@ -391,14 +391,22 @@ Configuration lives under **Settings → Semantic Hologram**:
 
 | Document | Contents |
 | --- | --- |
-| [`docs/hologram-emulsification.md`](docs/hologram-emulsification.md) | Emulsification: how the filesystem subtree becomes a hologram. **Authoritative** on membership, CWD partitioning, and edge/physics scoping. |
-| [`docs/filesystem-hologram-management.md`](docs/filesystem-hologram-management.md) | Filesystem-hologram concepts, operations, and UI design. |
-| [`docs/untethered-trackball-pinhole-camera-system.md`](docs/untethered-trackball-pinhole-camera-system.md) | The camera model, in full. |
-| [`docs/semantic-structure.md`](docs/semantic-structure.md) | Abstraction hierarchy, frontmatter schema, topology. |
-| [`docs/example-node.md`](docs/example-node.md) | The new-note template. |
-| [`docs/science-discovery-and-reason.md`](docs/science-discovery-and-reason.md) | The epistemology: science, discovery, and invention. |
-| [`docs/novel-discoveries.md`](docs/novel-discoveries.md) | Worked example: topology of a Linux-kernel-internals hologram. |
-| [`docs/virtual-screen.md`](docs/virtual-screen.md) | Definition of the virtual screen. |
+| **[`docs/README.md`](docs/README.md)** | **The documentation index — status, scope, and precedence for every doc.** Start here. |
+| [`docs/core/dag-layer-rules.md`](docs/core/dag-layer-rules.md) | **Normative** for the level ladder, direction rules, and layer-crossing. |
+| [`docs/core/knowledge-substrate.md`](docs/core/knowledge-substrate.md) | **Normative** for the epistemic rationale: membrane & metabolism, the float zone, the AI interface, open work. |
+| [`docs/functional/semantic-hologram-user-guide.md`](docs/functional/semantic-hologram-user-guide.md) | How to author and audit hologram nodes. |
+| [`docs/functional/hologram-emulsification.md`](docs/functional/hologram-emulsification.md) | Emulsification: how the filesystem subtree becomes a hologram. **Authoritative** on membership, CWD partitioning, and edge/physics scoping. |
+| [`docs/functional/filesystem-hologram-management.md`](docs/functional/filesystem-hologram-management.md) | Filesystem-hologram concepts, operations, and UI design. |
+| [`docs/functional/untethered-trackball-pinhole-camera-system.md`](docs/functional/untethered-trackball-pinhole-camera-system.md) | The camera model, in full. |
+| [`docs/core/semantic-structure.md`](docs/core/semantic-structure.md) | Abstraction hierarchy, frontmatter schema, topology. |
+| [`docs/functional/example-node.md`](docs/functional/example-node.md) | The new-note template. |
+| [`docs/ideas/science-discovery-and-reason.md`](docs/ideas/science-discovery-and-reason.md) | The epistemology: science, discovery, and invention. |
+| [`docs/history/novel-discoveries.md`](docs/history/novel-discoveries.md) | Worked example: topology of a Linux-kernel-internals hologram. |
+| [`docs/functional/virtual-screen.md`](docs/functional/virtual-screen.md) | Definition of the virtual screen. |
+| [`docs/functional/2d-virtual-screen-frames.md`](docs/functional/2d-virtual-screen-frames.md) | The 2D view's reference frames, orientation, and gizmos. |
+| [`docs/functional/thought-crystallography.md`](docs/functional/thought-crystallography.md) | The diffractometer: what it is, and what is actually built. |
+| [`docs/functional/diffraction-methodology.md`](docs/functional/diffraction-methodology.md) | The diffraction physical model, justified edges, and channel trees. |
+| [`docs/core/relationships.txt`](docs/core/relationships.txt) | The candidate relationship-type catalogue. |
 
 ---
 

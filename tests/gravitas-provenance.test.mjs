@@ -121,8 +121,8 @@ test('entry totals equal Math.min(1, gravitasReal) — over the cap (scaling)', 
   }
 });
 
-test('docs/gravitas-provenance.md follows the live-vault format', () => {
-  const docPath = join(import.meta.dirname, '../docs/gravitas-provenance.md');
+test('docs/functional/gravitas-provenance.md follows the live-vault format', () => {
+  const docPath = join(import.meta.dirname, '../docs/functional/gravitas-provenance.md');
   const content = readFileSync(docPath, 'utf8');
 
   // Section order: Relationships → Incoming relationships → Gravitas Provenance → Confidence

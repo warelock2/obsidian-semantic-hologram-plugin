@@ -1,5 +1,7 @@
 # OS Filesystem as a Management Tool for Holograms
 
+> **Status:** SPEC — ops & data safety. Wave 2026-10-15. Current on positional membership. See [`docs/README.md`](../README.md).
+
 ## How the Obsidian Vault Filesystem Serves as the Management Layer for This Project
 
 **Author:** Semantic Hologram Plugin  

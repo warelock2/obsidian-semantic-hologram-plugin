@@ -1,5 +1,7 @@
 # DAG, Structured Networking & the Internet of Thought
 
+> **Status:** IDEA — metaphor. Wave 2026-10-15. Metaphor, not specification. See [`docs/README.md`](../README.md).
+
 ## Vision Statement
 
 A filesystem is a nested set of folders within folders — a hierarchy that can represent internets of internets. Each folder is structurally synonymous with an IPv6 subnet, which can itself contain further subnets. The entire filesystem is synonymous with IPv6: a vast, hierarchical address space where each level is a container for the next.
@@ -184,18 +186,18 @@ The hologram system forms a **Directed Acyclic Graph**:
 - **Nodes**: Anchors (directories) and sub-anchors (files/subdirectories)
 - **Edges**: Parent-child directory relationships, plus wikilink/relationship edges
 - **Root**: The vault root or top-level parent directory
-- **Acyclicity**: Enforced by the single-action reversal mechanism — the directory hierarchy cannot contain cycles
+- **Acyclicity**: Guaranteed by the level rules — no relationship points downward, and `structural/subsumed-by` only points upward between layers. A directory hierarchy cannot contain cycles; the *knowledge* graph could, and the level rules are what prevent it.
 
 ### 5.2 The Internet's Link Graph vs. Hologram DAG
 
 | Property | Internet Link Graph | Hologram DAG |
 |----------|---------------------|--------------|
-| **Cycles** | Many (A→B→A) | None (enforced by reversal) |
+| **Cycles** | Many (A→B→A) | None (enforced by the level rules) |
 | **Direction** | Directed | Directed |
 | **Scale** | Billions of nodes | Thousands of nodes |
 | **Structure** | Small-world, scale-free | Hierarchical, tree-like |
 | **Routing** | BGP/OSPF (dynamic) | Directory hierarchy (static, authoritative) |
-| **Reversal** | Version control / snapshots | Single-action un-emulsify |
+| **Reversal** | Version control / snapshots | A move in the filesystem |
 
 ### 5.3 Subnets as Folders — Structural Proof
 
@@ -226,8 +228,8 @@ Each relationship type is another layer of network cabling, carrying different t
 | 1 | `logic/supports` | Blue (#4D9DE0) | Logical support connections |
 | 2 | `logic/contradicts` | Red (#E76F51) | Contradiction/tension |
 | 3 | `structural/depends-on` | Green (#43AA8B) | Dependency chains |
-| 4 | `structural/subsumes` | Purple (#9B5DE5) | Taxonomic hierarchy |
-| 5 | `related` | Gray (#C0C0C0) | General association |
+| 4 | `structural/subsumed-by` | Purple (#9B5DE5) | Set membership, upward only |
+| 5 | `related` | Yellow (#FFD166) | General association |
 
 ### 6.2 Confidence and Gravitas as Signal Properties
 

@@ -1,5 +1,7 @@
 # 2D Virtual Screen — Reference Frames, Orientation, and Gizmos
 
+> **Status:** IMPLEMENTED. Wave 2026-10-16. See [`docs/README.md`](../README.md).
+
 This document covers the **2D mode** view: its coordinate frames, how they relate,
 where its focal point is, what panning and magnification mean, which gizmos are
 drawn, and what hides them.
@@ -322,14 +324,14 @@ Gizmos:
 A single existing control, `showRotationCenter`, labelled **"Show indicators"** in
 the controls panel (`controlsView.ts:767`).
 
-It is read at exactly one place today (view.ts:4107, inside the 3D branch), so both
-2D gizmos need their own checks rather than inheriting one.
+The toggle now covers:
 
-After this work the toggle covers:
+- 3D prime-frame gizmo — gated (`view.ts:4490`)
+- 2D prime reference frame gizmo — gated
+- 2D world reference frame gizmo — gated
 
-- 3D prime-frame gizmo — already gated
-- 2D prime reference frame gizmo — new gate
-- 2D world reference frame gizmo — new gate
+The 2D gizmos are gated as a pair at the head of `draw2DGizmos()` (`view.ts:4616`),
+which returns early when `showRotationCenter` is off.
 
 **No settings or schema change is needed** — the toggle already exists.
 

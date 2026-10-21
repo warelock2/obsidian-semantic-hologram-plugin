@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 import { buildHologramSkeleton } from '../src/skeleton.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = join(ROOT, 'docs', 'example-node.md');
+const OUT = join(ROOT, 'docs', 'functional', 'example-node.md');
 
 /**
  * The node the skeleton produces, with placeholder values standing in for a
@@ -86,7 +86,7 @@ if (check) {
 		console.error(`drift: ${OUT} is stale. Run: npm run gen:example`);
 		process.exit(1);
 	}
-	console.log('ok: docs/example-node.md matches src/skeleton.ts');
+	console.log('ok: docs/functional/example-node.md matches src/skeleton.ts');
 } else {
 	await writeFile(OUT, content, 'utf8');
 	console.log(`wrote ${OUT}`);

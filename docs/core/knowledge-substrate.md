@@ -1,8 +1,9 @@
 # The Knowledge Substrate — an Epistemological Foundation
 
-Status: philosophical foundation for the hologram graph. Companion to
-`dag-layer-rules.md`, which is the normative *format* spec; this document is
-the *why*. Distilled from a design conversation, 2026-10-19.
+**Status:** FOUNDATION — rationale. Wave 2026-10-20. Companion to
+[`dag-layer-rules.md`](dag-layer-rules.md), which is the normative *format*
+spec; this document is the *why*. Distilled from a design conversation,
+2026-10-19. See [`docs/README.md`](../README.md).
 
 Throughout, claims are marked by their epistemic status, as the system itself
 demands: **established** (defended in conversation), or **floating** (a

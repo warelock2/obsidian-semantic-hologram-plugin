@@ -1,5 +1,7 @@
 # Filesystem-Hologram Management: Concepts & UI Design
 
+> **Status:** SPEC — concepts & UI. Wave 2026-10-15, revised 2026-10-18. Emulsification is specified in [`hologram-emulsification.md`](hologram-emulsification.md); where they disagree, that one wins. See [`docs/README.md`](../README.md).
+
 ## Vision Statement
 
 The OS filesystem serves as both **data store** and **structural mirror** for the hologram DAG. The directory tree is the authoritative state — the 3D hologram view is a rendering of that tree, with operations on the tree propagating naturally from the OS level down to the plugin's visual rendering.

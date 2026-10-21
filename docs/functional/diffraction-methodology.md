@@ -1,5 +1,7 @@
 # Diffraction Methodology: Queries, Descent, and the Epistemic Loop
 
+> **Status:** SPEC — phase one. Wave 2026-10-18. Implemented scope is gated on [`thought-crystallography.md`](thought-crystallography.md). See [`docs/README.md`](../README.md).
+
 > Status: design direction. Phase one implementation is specified in §§1–6. Phase two elements (delay, capacitors, bistable zones, transistors, gradients) are parked. Nothing here is implemented unless [docs/thought-crystallography.md](thought-crystallography.md) says so.
 
 ---
@@ -38,7 +40,7 @@ To read an argument rather than a graph walk, every relation line carries a huma
 ```
 
 ### Parsing and Constraints
-1. **Grammar:** Parsed by an extension of the relation line regex (see [semantic-structure.md](semantic-structure.md) §3). The tail `:: ...` is optional, trimmed, and evaluates to undefined when absent. Existing notes parse byte-identically.
+1. **Grammar:** Parsed by an extension of the relation line regex (see [semantic-structure.md](../core/semantic-structure.md) §3). The tail `:: ...` is optional, trimmed, and evaluates to undefined when absent. Existing notes parse byte-identically.
 2. **Mirroring:** The raw line text must be preserved verbatim in `RelationEdge.raw` so round-trip vault writes never drop justifications.
 3. **Provenance:** Accepted AI-suggested edges must be marked with `authoredFrom: 'inferred'` rather than authored, preserving the epistemic boundary required by Rule 3 of the system architecture.
 

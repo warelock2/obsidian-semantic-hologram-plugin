@@ -1,5 +1,7 @@
 # Prompt — Audit + Gravitas Provenance + Perceptual/Cognitive Toggle
 
+> **Status:** ARTIFACT — session handover. Wave 2026-10-19. Written for a *different repo* (`linuxresearch`) — not a spec. Its "plugin settings verified" line is a 2026-10-19 snapshot and is now stale. See [`docs/README.md`](../README.md).
+
 Useful if loaded verbatim into a new session. Context and constraints below.
 
 ## Session identity / rules

@@ -26,8 +26,9 @@ covers the broader concepts, operations, and UI; and alongside
 which covers how a hologram is rendered once it exists. This document covers only
 **which nodes are in which hologram**.
 
-> **Status:** settled design (implemented). Section 10 lists what it
-> replaces and Section 11 lists what is still open.
+> **Status:** SPEC — settled design, **not implemented**. Wave 2026-10-18.
+> Section 10 lists what it replaces; Section 11 lists what is still open. The
+> code still implements the older model — see §10. See [`docs/README.md`](../README.md).
 >
 > **Reconciliation:** `filesystem-hologram-management.md` previously described a
 > superseded emulsification model — a reversible visual overlay in which a parent

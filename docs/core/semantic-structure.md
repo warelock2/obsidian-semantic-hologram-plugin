@@ -1,5 +1,7 @@
 # Semantic Structure Specification: Hologram Topology & Abstraction Hierarchy
 
+> **Status:** SPEC — format. Wave 2026-09-15, revised 2026-10-18. Authoritative on **file format**; **superseded on levels and direction** by [`dag-layer-rules.md`](dag-layer-rules.md) (2026-10-20). See [`docs/README.md`](../README.md).
+
 This document describes how Semantic Hologram files are structured and how the
 knowledge graph is organised. It reflects the plugin's shipped defaults; every node
 type, relationship type, and level is configurable under **Settings → Semantic
@@ -23,13 +25,14 @@ beneath it.
 | 5 | `domain` | A subject domain or field of study. | `Operating Systems` |
 | 6 | `field` | A high-level academic or professional field. | `Computer Science` |
 
-**Evidence types** carry no level but anchor the base of the ladder:
+**Evidence types** anchor the base of the ladder. `source` sits at **level 0**,
+alongside `percept`; `authority` and `data` carry no level:
 
-| Node type | Role |
-| --- | --- |
-| `source` | A source document: book, paper, video, interview, article. |
-| `authority` | A subject-matter expert lending authority as evidence. |
-| `data` | A measurement of objectively existing things. |
+| Node type | Level | Role |
+| --- | --- | --- |
+| `source` | 0 | A source document: book, paper, video, interview, article. |
+| `authority` | — | A subject-matter expert lending authority as evidence. |
+| `data` | — | A measurement of objectively existing things. |
 
 Every level, node type, colour, and its enabled state is editable in settings. The
 ladder above is the shipped default, not a hard constraint.
@@ -75,6 +78,9 @@ heading is also accepted):
 - **Direction.** Every edge is directed, from the note that declares it to its
   target. Arrowheads show the direction. The `## Incoming relationships` section is
   generated from other notes' edges and is read-only.
+- **Layer direction.** Which relationships may cross which layers is specified in
+  [`dag-layer-rules.md`](dag-layer-rules.md), which is normative for this. In
+  short: **no relationship goes downward.**
 
 All relationship types can be added, renamed, recoloured, enabled, disabled, or
 deleted in settings, so you can model your graph with whatever vocabulary your domain
@@ -95,7 +101,7 @@ needs.
 ## 5. Standard Node Template
 
 The shipped template for a new semantic node is
-[`example-node.md`](example-node.md):
+[`example-node.md`](../functional/example-node.md):
 
 ```markdown
 ---

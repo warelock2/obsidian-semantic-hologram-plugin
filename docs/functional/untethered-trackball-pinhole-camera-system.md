@@ -1,5 +1,7 @@
 # Untethered Trackball Pinhole Camera System
 
+> **Status:** IMPLEMENTED. Wave 2026-10-03, revised 2026-10-16. Supersedes the deleted `…-camera-system-with-orthographic-projection.md` and `virtual-camera-system.md`. See [`docs/README.md`](../README.md).
+
 ## 1. Introduction and Core Concept
 
 The **Untethered Trackball Pinhole Camera System** is the camera model used by the

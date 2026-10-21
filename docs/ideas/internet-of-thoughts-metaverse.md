@@ -1,5 +1,7 @@
 # Internet of Thoughts / Metaverse of Thoughts
 
+> **Status:** IDEA — vision. Wave 2026-10-15. "A vision document, not a technical specification." See [`docs/README.md`](../README.md).
+
 ## A Conceptual Vision for the Semantic Hologram as a Navigable Knowledge Cosmos
 
 **Author:** Semantic Hologram Plugin  

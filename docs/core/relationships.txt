@@ -1,3 +1,8 @@
+# CATALOGUE — candidate relationship types. Not the authority: a type is legal
+# only if it is enabled in the plugin's settings. Wave 2026-10-19.
+# src/relTypesDerived.ts is this file slugified, plus `functional/supports`.
+# See docs/README.md §4.
+
 FAMILY / RELATIONSHIP-TYPE
 
 Logical / Identity

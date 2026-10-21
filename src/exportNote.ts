@@ -22,7 +22,7 @@ function stripFrontmatter(content: string): string {
 }
 
 /**
- * Turn `- logic/supports [[Target]] (0.70)` back into a `[[Target]]` wikilink.
+ * Turn `- logical/supports [[Target]] (0.70)` back into a `[[Target]]` wikilink.
  *
  * Only typed relation lines become links; prose that merely mentions a note is
  * left alone. Lines that are already bare links are skipped, so exporting twice

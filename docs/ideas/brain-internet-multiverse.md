@@ -1,5 +1,7 @@
 # Brain as Internet, DAG as Multiverse
 
+> **Status:** IDEA — metaphor. Wave 2026-10-15. Metaphor, not specification. Its gravitas and confidence formulas were corrected on 2026-10-20 to match `src/gravitas.ts`. See [`docs/README.md`](../README.md).
+
 ## Ideation Summary (from session-bb36dd71-668c-4bb2-a205-2002c94048f4.md)
 
 This document captures the conceptual discussion about how the collection of interrelated thoughts in a human brain is synonymous to the web — with the brain being the internet. The DAG (Directed Acyclic Graph) structure lets each level be its own "internet" with levels of "internet" above others varying in levels of abstraction, yet related between levels. If the "internet" is the "universe", then the DAG is a "multiverse". The discussion also related this to computer networking: each node is a "router", the data flowing over the network is gravitas and confidence, and different relationship types form network cabling connecting some, but not all, nodes between layers. Networking techniques like ping and traceroute in the form of hologram scans can reveal hidden truths we "knew", but were not aware of.
@@ -71,13 +73,13 @@ Different relationship types are different physical/cable types, each with diffe
 | `structural/depends-on` | Shielded copper | Moderate bandwidth, some interference possible |
 | `related` | Wireless ethernet | Variable bandwidth, less reliable |
 | `logic/contradicts` | Lightning/warning cable | Carries "anti-signal" — bidirectional conflict |
-| `structural/subsumed-by` | Branch/splitter | Divides flow, distributes to sub-nodes |
+| `structural/subsumed-by` | Riser / uplink | Carries a child's gravitas and confidence **up** to its parent set |
 
 **Not all nodes are connected by all cable types.** Some node pairs have fiber (strong logical support), others have wireless (weak related), and some have no cable at all (no relationship). The mixture of cable types between any two nodes forms their unique "network topology."
 
 ### 4.3 Data Flowing = Gravitas and Confidence
-- **Gravitas** = accumulated authority, the "signal power" of a node. High-gravitas nodes are like high-power routers that boost the signal for everything downstream.
-- **Confidence** = signal quality, the "reception quality" at the receiving end. `local-confidence` (user-set, 0–1) and `gravitasReal` (computed from edge strengths and neighbor gravitas).
+- **Gravitas** = accumulated authority, the "signal power" of a node: the direct evidence backing it, plus whatever its `structural/subsumed-by` children lend it. High-gravitas nodes boost the signal for everything **upward**, toward their parent sets.
+- **Confidence** = signal quality, the "reception quality" at the receiving end. `local-confidence` (user-set, 0–1) plus the unweighted totals of its `structural/subsumed-by` children. Capped at 1 for display.
 - When a diffraction scan "activates" a node, it's like sending a pulse through the network — the pulse travels along edges, weakening with distance and strengthening at high-gravitas waypoints.
 
 ### 4.4 Ping = Hologram Scan (Diffraction)
@@ -128,8 +130,10 @@ The plugin's diffraction scan functions as a suite of network diagnostic tools:
 
 ## 6. Gravitas, Confidence & Signal Processing
 
-- **Gravitas** = path credibility / accumulated authority. Computed as the sum of edge strengths leading to a node, decaying with distance. High-gravitas nodes are the "major routers" of the network — they boost everything downstream.
-- **Confidence** = signal strength / reception quality. `confidenceTotal` = sum of incoming edge strengths. `confidenceLocal` = user-set (0–1). `confidenceInherited` = inherited from connected nodes.
+- **Gravitas** = accumulated authority. `gravitasReal` = direct evidence (each `epistemic/evidence` amount scaled by the source's `source-kind` percent) **plus** the sum over `structural/subsumed-by` children of `gravitasReal(child) × edge strength`. Displayed as `Math.min(1, gravitasReal)`.
+- **Confidence** = reception quality. `confidenceTotalReal` = `local-confidence` **plus** the unweighted sum of its `structural/subsumed-by` children's totals. `confidenceLocal` is user-set (0–1); `confidenceInherited` is the children's share. Displayed as `Math.min(1, total)`.
+
+No other relationship type feeds either quantity: `related`, `functional/supports`, and the rest contribute to layout and to the diffraction field only.
 - **Different relationship types modulate signal**:
   - `logic/supports` — boosts/gates the signal (allows it through)
   - `logic/contradicts` — attenuates/inverts the signal

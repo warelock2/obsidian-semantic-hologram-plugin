@@ -9,7 +9,7 @@ import { ANY_HEADER, CONFIDENCE_HEADER, GRAVITAS_HEADER, GRAVITAS_PROVENANCE_HEA
 export interface RelationEdge {
 	source: string; // path of the source note
 	target: string; // path of the target note
-	relId: string; // 'logic/supports' or 'related'
+	relId: string; // 'logical/supports replaces as logical/supports' or 'related'
 	strength: number; // 0..1
 	reversed: boolean; // authored with {R}
 	authoredFrom: string; // path of the note containing the line
@@ -66,7 +66,7 @@ export interface NoteFrontmatter {
 
 export { ANY_HEADER, CONFIDENCE_HEADER, GRAVITAS_HEADER, GRAVITAS_PROVENANCE_HEADER, INCOMING_HEADER, PROVENANCE_HEADER, RELATION_HEADER, sectionHeader } from './headers';
 
-// - logic/supports [[Target]] {R}? (0.5) :: optional justification
+// - logical/supports [[Target]] {R}? (0.5) :: optional justification
 // - related [[Target]] (0.5)
 // - structural/subsumed-by [[Target]] (0.75)
 const REL_LINE =

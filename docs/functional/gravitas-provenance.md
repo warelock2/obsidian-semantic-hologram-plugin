@@ -1,11 +1,13 @@
 ---
 hologram-node: true
-node-type: mechanism
+node-type: concept
 groups: []
 created: 2026-10-19
 ---
 
 # Gravitas Provenance
+
+> **Status:** REFERENCE — example. Wave 2026-10-19. See [`docs/README.md`](../README.md).
 
 Plug-in-derived provenance section (replaces the legacy `## Gravitas` header on mechanism nodes; evidence notes keep their authored `## Gravitas` content, only the header migrates to `## Gravitas Provenance`). Lists source notes that lend gravitas to this node, with amounts scaled so the listed entries sum to `Math.min(1, gravitasReal)`. Direct entries are unmarked; inherited entries carry `(inherited)` after the strength value (weighted propagated share via `structural/subsumed-by`).
 

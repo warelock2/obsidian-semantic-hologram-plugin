@@ -5801,9 +5801,13 @@ export class SemanticHologramView extends ItemView {
 			return this.nodeLevel(node) === this.ndLayerStep;
 		}
 		// Perceptive mode shows ALL nodes including sources; cognitive (the
-		// default) hides them.
+		// default) shows concepts only. A concept is a level >= 1 node
+		// (concept, idea, pattern, topic, domain, field). Level 0 is the
+		// perceptive stratum - percepts and sources - and those are not
+		// concepts, so cognitive mode drops the whole level 0 plane rather
+		// than one node type, and perceptive mode renders it.
 		const mode = this.plugin.settings.displayMode ?? 'cognitive';
-		if (mode === 'cognitive' && node.nodeType === 'source') return false;
+		if (mode === 'cognitive' && this.nodeLevel(node) < 1) return false;
 		return true;
 	}
 

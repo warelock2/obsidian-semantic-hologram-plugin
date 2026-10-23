@@ -14,9 +14,18 @@ function wikiLink(path: string): string {
 	return `[[${base}]]`;
 }
 
-/** Mirror line: `- (source note) relates (0.5)` on the target note's own section. */
+/**
+ * Mirror line: `- (source note) relates (0.5)` on the target note's own section.
+ *
+ * When the source authored a `::` justification for the edge, that text is
+ * imported verbatim: the target then carries the *reason* for the link, not
+ * just a pointer to where the reason lives. Without a justification the line
+ * stays a bare pointer, and the gap is visible rather than silently absent.
+ */
 function formatIncomingLine(e: RelationEdge): string {
-	return `- (${wikiLink(e.source)}) ${relVerb(e.relId)} (${formatStrength(e.strength)})`;
+	const base = `- (${wikiLink(e.source)}) ${relVerb(e.relId)} (${formatStrength(e.strength)})`;
+	const justification = e.justification?.trim();
+	return justification ? `${base} :: ${justification}` : base;
 }
 
 export interface IncomingSyncResult {

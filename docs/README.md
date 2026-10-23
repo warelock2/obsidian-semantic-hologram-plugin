@@ -81,6 +81,8 @@ metaphor and vision. It is marked as such and should not be cited as a spec.
 | [`internet-of-thoughts-metaverse.md`](ideas/internet-of-thoughts-metaverse.md) | 2026-10-15 | **IDEA — vision** | What it means to navigate knowledge as space. Explicitly "a vision document, not a technical specification." |
 | [`os-filesystem-dag-mirror.md`](ideas/os-filesystem-dag-mirror.md) | 2026-10-15 | **IDEA — superseded** | The first filesystem-as-DAG sketch. Superseded by `hologram-emulsification.md`. |
 | [`science-discovery-and-reason.md`](ideas/science-discovery-and-reason.md) | 2026-09-27 | **IDEA — metaphor** | Bedrock, soil, trees, fruit, sandbox. Its diagram uses its own numbering, not the DAG ladder. |
+| [`discovery-space-framework.md`](ideas/discovery-space-framework.md) | 2026-10-22 | **IDEA — system-level framework** | System-level framework definitions: Node/Hologram/Table spread/Discovery space, two-layer equation, emulsification, fractal self-similarity, path crossing/cross product, Binswangerization, honest limits.
+| [`luhmann-to-digital-mapping.md`](ideas/luhmann-to-digital-mapping.md) | 2026-10-22 | **IDEA — design decision** | Modern replacements table (Luhmann paper → digital equivalents) + decision that full-text search dominates hand-written register.
 | [`novel-discoveries.md`](history/novel-discoveries.md) | 2026-09-27 | **HISTORICAL — results snapshot** | Diffraction findings from 2026-09-27. Its counts describe that vault state, not the current one. |
 | [`audit-gravitas-provenance.md`](history/audit-gravitas-provenance.md) | 2026-10-19 | **ARTIFACT — session handover** | A prompt written for a *different repo* (`linuxresearch`). Not a spec. Its "plugin settings verified" line is a snapshot of 2026-10-19 and is now stale. |
 

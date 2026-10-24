@@ -23,7 +23,7 @@ export class SemanticHologramControlsView extends ItemView {
 		const levelSlider = this.containerEl.querySelector('.sh-level-slider') as HTMLInputElement | null;
 		if (levelSlider) {
 			levelSlider.value = String(this.plugin.settings.levelHighlight);
-			const levelNames = ['Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'];
+			const levelNames = ['Source', 'Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'];
 			const levelRow = levelSlider.parentElement;
 			const label = levelRow?.querySelector('.sh-controls-label');
 			const levelName = levelNames[this.plugin.settings.levelHighlight];
@@ -155,7 +155,7 @@ export class SemanticHologramControlsView extends ItemView {
 	public onCameraChange(): void {
 		const view = this.getView();
 		if (!view) return;
-		const is3D = this.plugin.settings.hologramMode === '3d' || this.plugin.settings.hologramMode === 'nd';
+		const is3D = this.plugin.settings.hologramMode === '3d' || this.plugin.settings.hologramMode === 'nd-planar' || this.plugin.settings.hologramMode === 'nd-spherical';
 
 		const state = view.getCameraState();
 		if (this.cameraInputs[0]) {
@@ -333,7 +333,7 @@ export class SemanticHologramControlsView extends ItemView {
 
 		const view = this.getView();
 		const state = view ? view.getCameraState() : { elevation: 0, azimuth: 0, distance: 1000 };
-		const is3D = this.plugin.settings.hologramMode === '3d' || this.plugin.settings.hologramMode === 'nd';
+		const is3D = this.plugin.settings.hologramMode === '3d' || this.plugin.settings.hologramMode === 'nd-planar' || this.plugin.settings.hologramMode === 'nd-spherical';
 
 		const header = contentEl.createDiv({ cls: 'sh-controls-header' });
 		header.createEl('h4', { text: 'Semantic Hologram', attr: { style: 'margin-bottom: 6px;' } });
@@ -926,15 +926,16 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 		const modeRow = contentEl.createDiv({ cls: 'sh-controls-row' });
 		modeRow.createSpan({ text: 'Mode', cls: 'sh-controls-label' });
 		const toggle = modeRow.createEl('button', {
-			cls: mode === '3d' || mode === 'nd' ? 'mod-cta sh-mode-toggle' : 'sh-mode-toggle',
-			text: mode === 'nd' ? 'nD' : mode === '3d' ? '3D' : '2D',
+			cls: mode === '3d' || mode === 'nd-planar' || mode === 'nd-spherical' ? 'mod-cta sh-mode-toggle' : 'sh-mode-toggle',
+			text: mode === 'nd-planar' ? 'nD-planar' : mode === 'nd-spherical' ? 'nD-sph' : mode === '3d' ? '3D' : '2D',
 		});
 		toggle.title = 'Toggle 2D / 3D / nD';
 		toggle.addEventListener('click', () => {
 			let next: import('./settings').HologramMode = '2d';
 			if (mode === '2d') next = '3d';
-			else if (mode === '3d') next = 'nd';
-			else if (mode === 'nd') next = '2d';
+			else if (mode === '3d') next = 'nd-planar';
+			else if (mode === 'nd-planar') next = 'nd-spherical';
+			else if (mode === 'nd-spherical') next = '2d';
 			void this.plugin.setMode(next);
 			this.render();
 		});
@@ -1030,12 +1031,12 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 
 		// Level Highlight Slider
 		const levelRow = contentEl.createDiv({ cls: 'sh-controls-row' });
-		const levelNames = ['Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'];
+		const levelNames = ['Source', 'Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'];
 		levelRow.createSpan({ text: `Level: ${levelNames[this.plugin.settings.levelHighlight]}`, cls: 'sh-controls-label' });
 		const levelSlider = levelRow.createEl('input', {
 			cls: 'sh-level-slider',
 			type: 'range',
-			attr: { min: '0', max: '5', step: '1', value: String(this.plugin.settings.levelHighlight), dir: 'rtl' },
+			attr: { min: '0', max: '6', step: '1', value: String(this.plugin.settings.levelHighlight), dir: 'rtl' },
 		});
 		levelSlider.addEventListener('input', () => {
 			const v = parseInt(levelSlider.value, 10);
@@ -1106,7 +1107,7 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 
 		const hint = contentEl.createDiv({ cls: 'sh-controls-hint' });
 		hint.setText(
-			mode === 'nd' ? 'n dimensions mode — layered DAG along Y (Shift+scroll steps layers). Click mode button to cycle.'
+			mode === 'nd-planar' || mode === 'nd-spherical' ? 'n dimensions mode — layered DAG along Y (Shift+scroll steps layers). Click mode button to cycle.'
 			: mode === '3d'
 				? '3D mode — Shift+drag to rotate about the focal point, drag to pan, scroll to dolly. Nodes live in full 3D physics.'
 				: '2D canvas mode. Toggle to 3D / nD for depth.',

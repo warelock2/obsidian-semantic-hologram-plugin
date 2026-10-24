@@ -792,7 +792,7 @@ export default class SemanticHologramPlugin extends Plugin {
 		const saved = savedRaw as Partial<SemanticHologramSettings> | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {});
 		// Phase 5: Cognitive mode default on load/reload
-		this.settings.displayMode = 'cognitive';
+		this.settings.hologramMode = (this.settings.hologramMode as string) === 'nd' ? 'nd-planar' : this.settings.hologramMode;
 		// `Object.assign` is shallow: a saved `nodeTypes` array replaces the default
 		// one wholesale, so anything derived from the defaults (e.g. `locked`) is
 		// absent on any vault that already had settings saved. Permanent types are

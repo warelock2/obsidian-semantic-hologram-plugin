@@ -3,7 +3,7 @@ import { migrateRelationship, restoreRelationship, migrateNodeType, restoreNodeT
 import { derivedRelTypes } from './relTypesDerived';
 import type SemanticHologramPlugin from './main';
 
-export type HologramMode = '2d' | '3d' | 'nd';
+export type HologramMode = '2d' | '3d' | 'nd-planar' | 'nd-spherical';
 export type HologramTool = 'navigate' | 'select' | 'rotate';
 export type ProjectionMode = 'perspective' | 'orthographic';
 

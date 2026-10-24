@@ -303,8 +303,8 @@ const ICON_MODE_2D =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/></svg>';
 const ICON_MODE_3D =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8l-9-5-9 5v8l9 5 9-5z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></svg>';
-const ICON_MODE_ND =
-	'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" fill="#fff"/><rect x="9" y="6" width="3" height="3"/><rect x="9" y="15" width="3" height="3"/><rect x="6" y="9" width="3" height="3"/><rect x="15" y="9" width="3" height="3"/><rect x="9" y="9" width="6" height="6"/></g></svg>';
+const ICON_MODE_ND_PLANAR = '<?xml version="1.0" standalone="no"?> <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 20010904//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd"> <svg version="1.0" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 512.000000 512.000000" preserveAspectRatio="xMidYMid meet"> <metadata> Created by potrace 1.16, written by Peter Selinger 2001-2019 </metadata> <g transform="translate(0.000000,512.000000) scale(0.100000,-0.100000)" fill="currentColor" stroke="currentColor" stroke-width="2"> <path d="M2490 4511 c-30 -10 -588 -221 -1240 -470 -1338 -509 -1250 -469 -1250 -576 0 -104 -83 -62 1292 -650 950 -406 1236 -525 1268 -525 31 0 318 119 1268 525 1375 588 1292 546 1292 650 0 108 92 66 -1285 589 -672 255 -1236 467 -1255 470 -22 3 -56 -2 -90 -13z m1083 -662 c551 -210 1007 -384 1014 -388 6 -3 -447 -202 -1008 -442 l-1019 -437 -1019 437 c-561 240 -1018 437 -1016 439 6 7 2021 771 2033 772 7 0 463 -171 1015 -381z"/> <path d="M73 2776 c-47 -21 -73 -70 -73 -134 0 -48 4 -58 32 -86 26 -26 287 -141 1268 -561 679 -291 1246 -529 1260 -529 14 0 581 238 1260 529 981 420 1242 535 1268 561 28 28 32 38 32 85 0 90 -55 149 -138 149 -16 0 -564 -229 -1223 -511 -657 -280 -1201 -508 -1209 -506 -8 2 -544 230 -1190 507 -706 302 -1191 504 -1215 507 -22 2 -55 -3 -72 -11z"/> <path d="M0 2396 c0 -9 5 -16 10 -16 6 0 10 4 10 9 0 6 -4 13 -10 16 -5 3 -10 -1 -10 -9z"/> <path d="M39 1881 c-36 -35 -39 -43 -39 -92 0 -67 24 -109 75 -134 21 -9 589 -253 1262 -541 l1223 -523 1224 523 c673 288 1240 532 1261 542 51 24 75 66 75 133 0 49 -3 57 -39 92 -73 73 10 102 -1330 -471 l-1191 -509 -1191 509 c-1340 573 -1257 544 -1330 471z"/> </g> </svg>';
+const ICON_MODE_ND_SPHERICAL = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="3"/></g></svg>';
 const ICON_TOOL_NAVIGATE =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/></svg>';
 const ICON_TOOL_SELECT =
@@ -731,7 +731,7 @@ export class SemanticHologramView extends ItemView {
 
 	private get is3D(): boolean {
 		const m = this.plugin.settings.hologramMode;
-		return m === '3d' || m === 'nd';
+		return m === '3d' || m === 'nd-planar' || m === 'nd-spherical';
 	}
 
 	/**
@@ -919,13 +919,15 @@ export class SemanticHologramView extends ItemView {
 		const focalBefore = this.focalPointInMode(fromMode);
 
 		if (this.modeBanner) {
-			this.modeBanner.innerHTML = mode === 'nd' ? ICON_MODE_ND : (mode === '3d' ? ICON_MODE_3D : ICON_MODE_2D);
-			this.modeBanner.title = mode === 'nd'
-				? 'n dimensions — layered DAG (Shift+scroll to step layers)'
-				: mode === '3d'
+			this.modeBanner.innerHTML = mode === 'nd-planar' ? ICON_MODE_ND_PLANAR : mode === 'nd-spherical' ? ICON_MODE_ND_SPHERICAL : (mode === '3d' ? ICON_MODE_3D : ICON_MODE_2D);
+			this.modeBanner.title = mode === 'nd-planar'
+				? 'nD-planar — stacked layers (Shift+scroll)'
+				: mode === 'nd-spherical'
+					? 'nD-spherical — sphere layers (Ctrl+scroll sep)'
+					: mode === '3d'
 					? '3 dimensions — click (or press M) for n dimensions'
 					: '2 dimensions — click (or press M) for 3 dimensions';
-			this.modeBanner.classList.toggle('is-3d', mode === '3d' || mode === 'nd');
+			this.modeBanner.classList.toggle('is-3d', mode === '3d' || mode === 'nd-planar' || mode === 'nd-spherical');
 		}
 		if (this.toolDock && mode === '2d' && this.tool === 'rotate') {
 			void this.plugin.setTool('navigate');
@@ -1556,8 +1558,9 @@ export class SemanticHologramView extends ItemView {
 			const m = this.plugin.settings.hologramMode;
 			let next: HologramMode = '2d';
 			if (m === '2d') next = '3d';
-			else if (m === '3d') next = 'nd';
-			else if (m === 'nd') next = '2d';
+			else if (m === '3d') next = 'nd-planar';
+			else if (m === 'nd-planar') next = 'nd-spherical';
+		else if (m === 'nd-spherical') next = '2d';
 			void this.plugin.setMode(next);
 		});
 		this.setMode(this.plugin.settings.hologramMode);
@@ -2898,7 +2901,7 @@ export class SemanticHologramView extends ItemView {
 		let layerOriginY = 0;
 		let layerOriginLevel = 0;
 		let layerYBound = R;
-		if (this.plugin.settings.hologramMode === 'nd') {
+		if (this.plugin.settings.hologramMode === 'nd-planar') {
 			ndLayers = true;
 			ndSep = this.plugin.settings.ndLayerSeparation ?? 0;
 			let sumY = 0;
@@ -2968,6 +2971,35 @@ export class SemanticHologramView extends ItemView {
 			if (is3D) {
 				node.z += node.vz;
 			}
+			// Spherical projection: nodes on sphere surfaces. Higher DAG levels
+			// → closer to anchor (smaller sphere). Level 0 (sources) = outermost.
+			// Radius = base + (maxLevel - level) * ndSep, where ndSep is
+			// adjustable via Ctrl+scroll. Perceptive mode shows layer-0
+			// (percept/sources) = outermost sphere; cognitive hides them.
+			if (this.plugin.settings.hologramMode === 'nd-spherical') {
+				const lvl = this.nodeLevel(node);
+				const baseR = 0;
+				const ndSep = this.plugin.settings.ndLayerSeparation ?? 0;
+				// Higher DAG levels → closer to anchor (smaller sphere).
+				// Compute max level from visible nodes so outermost = level 0.
+				let maxLevel = 0;
+				for (let j = 0; j < nodes.length; j++) {
+					if (!visible[j]) continue;
+					const n = nodes[j];
+					if (!n) continue;
+					const l = this.nodeLevel(n);
+					if (l > maxLevel) maxLevel = l;
+				}
+				const radius = baseR + (maxLevel - lvl) * ndSep;
+				const dx = node.x - 0;
+				const dy = node.y - 0;
+				const dz = node.z - 0;
+				const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) || 1;
+				const s = radius / dist;
+				node.x = 0 + dx * s;
+				node.y = 0 + dy * s;
+				node.z = 0 + dz * s;
+			}
 			// nD layer plane offset: force y to this node's plane, expressed
 			// relative to the centroid so the stack expands/contracts about the
 			// middle rather than climbing from level 0. vy is zeroed so physics
@@ -2978,10 +3010,12 @@ export class SemanticHologramView extends ItemView {
 				node.y = layerOriginY + (level - layerOriginLevel) * ndSep;
 				node.vy = 0;
 			}
-			node.x = Math.min(R, Math.max(-R, node.x));
-			node.y = Math.min(layerYBound, Math.max(-layerYBound, node.y));
-			if (is3D) {
-				node.z = Math.min(R, Math.max(-R, node.z));
+			if (this.plugin.settings.hologramMode !== 'nd-spherical') {
+				node.x = Math.min(R, Math.max(-R, node.x));
+				node.y = Math.min(layerYBound, Math.max(-layerYBound, node.y));
+				if (is3D) {
+					node.z = Math.min(R, Math.max(-R, node.z));
+				}
 			}
 			energy += node.vx * node.vx + node.vy * node.vy + (is3D ? node.vz * node.vz : 0);
 		}
@@ -3443,7 +3477,7 @@ export class SemanticHologramView extends ItemView {
 	private focalPointInMode(fromMode?: HologramMode): { x: number; y: number; z: number } {
 		const w = this.canvas?.clientWidth ?? 0;
 		const h = this.canvas?.clientHeight ?? 0;
-		if (fromMode ? (fromMode === '3d' || fromMode === 'nd') : this.is3D) {
+		if (fromMode ? (fromMode === '3d' || fromMode === 'nd-planar') : this.is3D) {
 			return { x: this.target[0], y: this.target[1], z: this.target[2] };
 		}
 		// In 2D, translate screen center to world coordinates
@@ -3650,9 +3684,12 @@ export class SemanticHologramView extends ItemView {
 					continue;
 				}
 				const f = (PHYS.repulsion * this.scale * (1 - d / cellSize)) / d;
-				const fx = (dx / d) * f;
-				const fy = (dy / d) * f;
-				const fz = (dz / d) * f;
+				// In spherical mode, double repulsion between nodes on the same level
+				const sameLevel = this.plugin.settings.hologramMode === 'nd-spherical' && this.nodeLevel(a) === this.nodeLevel(b);
+				const mult = sameLevel ? 4 : 1;
+				const fx = (dx / d) * f * mult;
+				const fy = (dy / d) * f * mult;
+				const fz = (dz / d) * f * mult;
 				a.vx -= fx;
 				a.vy -= fy;
 				a.vz -= fz;
@@ -3676,11 +3713,14 @@ export class SemanticHologramView extends ItemView {
 			if (a.pinned || a.selected || b.pinned || b.selected) {
 				continue;
 			}
+			// In spherical mode, inter-layer springs apply at reduced strength (0.1x)
+			// to preserve layer separation while maintaining some connectivity.
 			const dx = b.x - a.x;
 			const dy = b.y - a.y;
 			const dz = b.z - a.z;
 			const d = Math.hypot(dx, dy, dz) || 0.001;
-			const f = PHYS.spring * (d - l.restLen * this.scale);
+			const springMult = (this.plugin.settings.hologramMode === 'nd-spherical' && this.nodeLevel(a) !== this.nodeLevel(b)) ? 0.1 : 1;
+			const f = PHYS.spring * springMult * (d - l.restLen * this.scale);
 			const fx = (dx / d) * f;
 			const fy = (dy / d) * f;
 			const fz = (dz / d) * f;
@@ -3794,6 +3834,50 @@ export class SemanticHologramView extends ItemView {
 					ctx.lineTo(w / 2 + pC.x * sC, h / 2 + pC.y * sC);
 					ctx.closePath();
 					ctx.fill();
+				}
+			}
+
+			// Layer spheres: translucent shaded sphere for the level selected
+			// by the level slider. Opacity driven by levelHighlightOpacity.
+			// Only in nd-spherical mode.
+			if (this.plugin.settings.hologramMode === 'nd-spherical') {
+				const ndSep = this.plugin.settings.ndLayerSeparation ?? 0;
+				const highlightLevel = this.plugin.settings.levelHighlight ?? 0;
+				let maxLevel = 0;
+				for (let i = 0; i < this.nodes.length; i++) {
+					const n = this.nodes[i];
+					if (!n || !this.isNodeVisible(n)) continue;
+					const l = this.nodeLevel(n);
+					if (l > maxLevel) maxLevel = l;
+				}
+				// Source (level 0 / slider 0) → outermost sphere
+				// Other levels → sphere at that level's radius
+				const radius = (highlightLevel === 0)
+					? maxLevel * ndSep
+					: (maxLevel - highlightLevel) * ndSep;
+				if (radius > 0) {
+					const center = this.rotatePoint(0, 0, 0, this.target[0], this.target[1], this.target[2]);
+					const s = this.projectionScale(center.z);
+					if (Number.isFinite(s)) {
+						const screenR = radius * s;
+						const sx = w / 2 + center.x * s;
+						const sy = h / 2 + center.y * s;
+						const opacity = this.plugin.settings.levelHighlightOpacity ?? 0.5;
+						const color = this.plugin.settings.facesColor;
+						const grad = ctx.createRadialGradient(sx - screenR * 0.3, sy - screenR * 0.3, 0, sx, sy, screenR);
+						grad.addColorStop(0, this.withAlpha(color, opacity * 0.6));
+						grad.addColorStop(0.7, this.withAlpha(color, opacity * 0.25));
+						grad.addColorStop(1, this.withAlpha(color, 0));
+						ctx.fillStyle = grad;
+						ctx.beginPath();
+						ctx.arc(sx, sy, screenR, 0, Math.PI * 2);
+						ctx.fill();
+						ctx.strokeStyle = this.withAlpha(color, opacity * 0.4);
+						ctx.lineWidth = 1;
+						ctx.beginPath();
+						ctx.arc(sx, sy, screenR, 0, Math.PI * 2);
+						ctx.stroke();
+					}
 				}
 			}
 
@@ -6488,6 +6572,12 @@ export class SemanticHologramView extends ItemView {
 			return;
 		}
 		const key = e.key.toLowerCase();
+		if (e.key === 'Escape' && !e.repeat && this.helpOverlay) {
+			e.preventDefault();
+			this.hideHelp();
+			this.wake();
+			return;
+		}
 		if (e.key === 'Escape' && this.clipboard.action === 'cut' && !e.repeat) {
 			e.preventDefault();
 			this.clipboard = { action: null, targetType: null, paths: new Set(), anchorDir: null };
@@ -6508,7 +6598,7 @@ export class SemanticHologramView extends ItemView {
 			this.updateCameraMatrix();
 		} else if (key === 'h' && !e.repeat) {
 			e.preventDefault();
-			this.showHelp();
+			this.toggleHelp();
 		} else if (key === 'p' && !e.repeat) {
 			e.preventDefault();
 			this.toggleProjection();
@@ -7006,7 +7096,7 @@ private selectHovered(): void {
 		el.innerHTML =
 			'<div class="sh-help-title">Semantic Hologram</div>' +
 			'<div class="sh-help-section">Keyboard</div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">h</span><span class="sh-help-desc">hold: show help</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">h / Esc</span><span class="sh-help-desc">toggle help popup (hold h to show, Esc / Shift to dismiss)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+f</span><span class="sh-help-desc">focus node search</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+a</span><span class="sh-help-desc">select all visible nodes</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+h</span><span class="sh-help-desc">create new hologram from selected nodes</span></div>' +
@@ -7044,6 +7134,7 @@ private selectHovered(): void {
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+hover</span><span class="sh-help-desc">preview node / relationship card</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">scroll</span><span class="sh-help-desc">magnify / demagnify (standoff, focal-point centred)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+scroll</span><span class="sh-help-desc">dolly the camera along the line of sight (3D)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+scroll (nD)</span><span class="sh-help-desc">adjust layer separation distance (planar &amp; spherical)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">click bg</span><span class="sh-help-desc">clear selection</span></div>' +
 			'<div class="sh-help-section">Modes</div>' +
 			'<div class="sh-help-desc">2D canvas / 3D projected — toggle via the upper-left icon or side panel.</div>' +
@@ -7071,6 +7162,9 @@ private selectHovered(): void {
 		}
 		if (e.key === 'Shift') {
 			this.shiftDown = false;
+			if (this.helpOverlay) {
+				this.hideHelp();
+			}
 			this.updateCursor();
 		}
 		if (e.key === 'h') {
@@ -7129,6 +7223,22 @@ private selectHovered(): void {
 			const newDepth = Math.max(0, Math.min(5, this.plugin.settings.maxDepth + delta));
 			void this.plugin.setMaxDepth(newDepth);
 			this.showToast(`Max Depth: ${newDepth}`);
+			return;
+		}
+
+		// Control+scroll: adjust layer separation distance in both nD modes
+		if (e.ctrlKey && (this.plugin.settings.hologramMode === 'nd-planar' || this.plugin.settings.hologramMode === 'nd-spherical')) {
+			const delta = dy > 0 ? 40 : -40;
+			let v = Math.max(0, Math.min(500, (this.plugin.settings.ndLayerSeparation ?? 0) + delta));
+			this.plugin.settings.ndLayerSeparation = v;
+			void this.plugin.saveSettings();
+			this.showToast('Layer separation: ' + v);
+			// Live slider update via controls panel render
+			for (const leaf of this.app.workspace.getLeavesOfType('semantic-hologram-controls')) {
+				const ctrl = leaf.view as any;
+				if (ctrl && typeof ctrl.render === 'function') ctrl.render();
+			}
+			this.markViewAdjusted();
 			return;
 		}
 

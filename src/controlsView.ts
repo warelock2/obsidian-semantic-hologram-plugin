@@ -1068,8 +1068,8 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 
 		// Repulsion / Edge strength sliders
 		const physRow = contentEl.createDiv({ cls: 'sh-controls-row' });
-		physRow.createSpan({ text: 'Node Repulsion: ' + 900, cls: 'sh-controls-label' });
-		const repValue = physRow.createSpan({ text: ' 900', cls: 'sh-slider-value' });
+		physRow.createSpan({ text: 'Node Repulsion: ' + 9000, cls: 'sh-controls-label' });
+		const repValue = physRow.createSpan({ text: ' 9000', cls: 'sh-slider-value' });
 		const repSlider = physRow.createEl('input', { type: 'range', attr: { min: '1000', max: '20000', step: '500', value: '9000' } });
 		repSlider.addEventListener('input', () => {
 			const v = parseInt(repSlider.value, 10);
@@ -1082,11 +1082,12 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 		});
 
 		const springRow = contentEl.createDiv({ cls: 'sh-controls-row' });
-		springRow.createSpan({ text: 'Edge Strength: ' + 20 + '/1000', cls: 'sh-controls-label' });
+		springRow.createSpan({ text: 'Edge Strength: ' + 200 + '/1000', cls: 'sh-controls-label' });
+		const springValue = springRow.createSpan({ text: ' 200', cls: 'sh-slider-value' });
 		const springSlider = springRow.createEl('input', { type: 'range', attr: { min: '0', max: '5000', step: '100', value: '200' } });
 		springSlider.addEventListener('input', () => {
 			const v = parseInt(springSlider.value, 10) / 1000;
-			PHYS.spring = v / 1000;
+			PHYS.spring = v;
 			const label = springRow.querySelector('.sh-controls-label');
 			if (label) label.textContent = 'Edge Strength: ' + Math.round(v * 1000) + '/1000';
 			const springValue = springRow.querySelector('.sh-slider-value');

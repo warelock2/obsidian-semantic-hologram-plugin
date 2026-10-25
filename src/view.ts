@@ -194,7 +194,6 @@ const PHYS = {
 	repulsion: 900,
 	spring: 0.02,
 	restLength: 150,
-	homeSpring: 0.02,
 	center: 0.0008,
 	damping: 0.85,
 	maxSpeed: 8,
@@ -2865,20 +2864,12 @@ export class SemanticHologramView extends ItemView {
 		}
 
 		if (this.settled) {
-			// After the first settle the origin-centering force is switched OFF:
-			// each node's home now holds the layout, so there is nothing to pull
-			// the graph inward. Re-enabling it would fight every anchor drag and
-			// drag the whole graph back to the origin.
-			for (let i = 0; i < nodes.length; i++) {
-				const node = nodes[i]!;
-				if (!visible[i] || node.pinned || node.selected) {
-					continue;
-				}
-				node.vx += (node.homeX - node.x) * PHYS.homeSpring;
-				node.vy += (node.homeY - node.y) * PHYS.homeSpring;
-				if (is3D) {
-					node.vz += (node.homeZ - node.z) * PHYS.homeSpring;
-				}
+			// Settled: repulsion already applied above. Apply edges too so slider
+			// changes take effect immediately. No home spring, no centering.
+			if (is3D) {
+				this.applySprings3D(visible);
+			} else {
+				this.applySprings(visible);
 			}
 		} else {
 			if (is3D) {
@@ -3666,10 +3657,10 @@ export class SemanticHologramView extends ItemView {
 						const dx = b.x - a.x;
 						const dy = b.y - a.y;
 						const d = Math.hypot(dx, dy);
-						if (d < 0.001 || d > cellSize) {
+						if (d < 0.001) {
 							continue;
 						}
-						const f = (PHYS.repulsion * this.scale * (1 - d / cellSize)) / d;
+						const f = (PHYS.repulsion * this.scale) / d;
 						const fx = (dx / d) * f;
 						const fy = (dy / d) * f;
 						a.vx -= fx;
@@ -3724,7 +3715,6 @@ export class SemanticHologramView extends ItemView {
 
 	private applyRepulsion3D(visible: boolean[]): void {
 		const { nodes } = this;
-		const cellSize = PHYS.cellSize * this.scale;
 		for (let i = 0; i < nodes.length; i++) {
 			const a = nodes[i]!;
 			if (!visible[i] || a.pinned || a.selected) {
@@ -3740,10 +3730,10 @@ export class SemanticHologramView extends ItemView {
 				const dy = b.y - a.y;
 				const dz = b.z - a.z;
 				const d = Math.hypot(dx, dy, dz);
-				if (d < 0.001 || d > cellSize) {
+				if (d < 0.001) {
 					continue;
 				}
-				const f = (PHYS.repulsion * this.scale * (1 - d / cellSize)) / d;
+				const f = (PHYS.repulsion * this.scale) / d;
 				// In spherical mode, double repulsion between nodes on the same level
 				const sameLevel = this.plugin.settings.hologramMode === 'nd-spherical' && this.nodeLevel(a) === this.nodeLevel(b);
 				const mult = sameLevel ? 4 : 1;
@@ -3773,14 +3763,11 @@ export class SemanticHologramView extends ItemView {
 			if (a.pinned || a.selected || b.pinned || b.selected) {
 				continue;
 			}
-			// In spherical mode, inter-layer springs apply at reduced strength (0.1x)
-			// to preserve layer separation while maintaining some connectivity.
 			const dx = b.x - a.x;
 			const dy = b.y - a.y;
 			const dz = b.z - a.z;
 			const d = Math.hypot(dx, dy, dz) || 0.001;
-			const springMult = (this.plugin.settings.hologramMode === 'nd-spherical' && this.nodeLevel(a) !== this.nodeLevel(b)) ? 0.1 : 1;
-			const f = PHYS.spring * springMult * (d - l.restLen * this.scale);
+			const f = PHYS.spring * (d - l.restLen * this.scale);
 			const fx = (dx / d) * f;
 			const fy = (dy / d) * f;
 			const fz = (dz / d) * f;

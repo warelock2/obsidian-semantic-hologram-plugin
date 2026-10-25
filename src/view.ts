@@ -3542,6 +3542,9 @@ export class SemanticHologramView extends ItemView {
 		}
 	}
 
+	public setRepulsion(v: number): void { (PHYS as any).repulsion = v; }
+	public setSpring(v: number): void { (PHYS as any).spring = v; }
+
 	private nodeLevel(node: GraphNode): number {
 		const meta = this.plugin.settings.nodeTypes.find(t => t.id === node.nodeType);
 		const lvl = meta?.level;

@@ -1,5 +1,6 @@
 import { ItemView, WorkspaceLeaf, setIcon, TFolder, TFile } from 'obsidian';
 import type SemanticHologramPlugin from './main';
+import { PHYS } from './view';
 import { SemanticHologramView, VIEW_TYPE_HOLOGRAM, buildNodePreviewModel } from './view';
 import { descendantDirs, displayedHolograms } from './hologramDirs';
 import type { SearchIndexEntry } from './view';
@@ -30,6 +31,13 @@ export class SemanticHologramControlsView extends ItemView {
 			if (label && levelName) {
 				label.textContent = `Level: ${levelName}`;
 			}
+		}
+	}
+
+	public updateLayerDisplayToggle(): void {
+		const toggle = this.containerEl.querySelector('.sh-layer-display-toggle') as HTMLInputElement | null;
+		if (toggle) {
+			toggle.checked = this.plugin.settings.layerDisplayEnabled !== false;
 		}
 	}
 
@@ -1045,6 +1053,48 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 			if (label) label.textContent = `Level: ${levelNames[v]}`;
 		});
 
+		// Layer display toggle checkmark
+		const layerToggleRow = contentEl.createDiv({ cls: 'sh-controls-row' });
+		const layerToggleLabel = layerToggleRow.createSpan({ text: 'Level rendering', cls: 'sh-controls-label' });
+		const layerToggle = layerToggleRow.createEl('input', { type: 'checkbox', cls: 'sh-layer-display-toggle' });
+		layerToggle.checked = this.plugin.settings.layerDisplayEnabled !== false;
+		layerToggle.addEventListener('change', () => {
+			this.plugin.settings.layerDisplayEnabled = layerToggle.checked;
+			void this.plugin.saveSettings();
+			this.getView()?.requestRedraw();
+			const status = layerToggle.checked ? 'Level rendering on' : 'Level rendering off';
+			this.getView()?.requestRedraw(); // toast omitted (private)status);
+		});
+
+		// Repulsion / Edge strength sliders
+		const physRow = contentEl.createDiv({ cls: 'sh-controls-row' });
+		physRow.createSpan({ text: 'Node Repulsion: ' + 900, cls: 'sh-controls-label' });
+		const repValue = physRow.createSpan({ text: ' 900', cls: 'sh-slider-value' });
+		const repSlider = physRow.createEl('input', { type: 'range', attr: { min: '100', max: '2000', step: '50', value: '900' } });
+		repSlider.addEventListener('input', () => {
+			const v = parseInt(repSlider.value, 10);
+			PHYS.repulsion = v;
+			const label = physRow.querySelector('.sh-controls-label');
+			if (label) label.textContent = 'Node Repulsion: ' + v;
+			if (repValue) repValue.textContent = ' ' + v;
+			this.getView()?.requestRedraw();
+			this.getView()?.requestRedraw(); // toast omitted (private)'Repulsion: ' + v);
+		});
+
+		const springRow = contentEl.createDiv({ cls: 'sh-controls-row' });
+		springRow.createSpan({ text: 'Edge Strength: ' + 20 + '/1000', cls: 'sh-controls-label' });
+		const springSlider = springRow.createEl('input', { type: 'range', attr: { min: '0', max: '500', step: '10', value: '20' } });
+		springSlider.addEventListener('input', () => {
+			const v = parseInt(springSlider.value, 10) / 1000;
+			PHYS.spring = v;
+			const label = springRow.querySelector('.sh-controls-label');
+			if (label) label.textContent = 'Edge Strength: ' + Math.round(v * 1000) + '/1000';
+			const springValue = springRow.querySelector('.sh-slider-value');
+			if (springValue) springValue.textContent = ' ' + Math.round(v * 1000);
+			this.getView()?.requestRedraw();
+			this.getView()?.requestRedraw(); // toast omitted (private)'Spring: ' + Math.round(v * 1000));
+		});
+
 		// Opacity/Translucence Slider
 		const opacityRow = contentEl.createDiv({ cls: 'sh-controls-row' });
 		opacityRow.createSpan({ text: `Level Opacity: ${Math.round(this.plugin.settings.levelHighlightOpacity * 100)}%`, cls: 'sh-controls-label' });
@@ -1195,3 +1245,4 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 		});
 	}
 }
+export { PHYS } from './view';

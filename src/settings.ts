@@ -116,6 +116,7 @@ export interface SemanticHologramSettings {
 	depthBase: number;
 	levelHighlight: number;
 	levelHighlightOpacity: number;
+	layerDisplayEnabled: boolean;
 	mcpEnabled: boolean;
 	mcpWriteAccess: boolean;
 	mcpKeyHash?: string;
@@ -181,6 +182,7 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	depthBase: 0.55,
 	levelHighlight: 0,
 	levelHighlightOpacity: 0.3,
+	layerDisplayEnabled: true,
 	levels: [
 		{ id: 'level-6', name: 'Field', level: 6 },
 		{ id: 'level-5', name: 'Domain', level: 5 },

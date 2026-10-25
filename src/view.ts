@@ -310,6 +310,8 @@ const ICON_TOOL_NAVIGATE =
 const ICON_TOOL_SELECT =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-11.39 11.39-2.51L3 3z" fill="currentColor"/></svg>';
 
+export { PHYS };
+
 export class SemanticHologramView extends ItemView {
 	plugin: SemanticHologramPlugin;
 	public currentCwd: string = '';
@@ -957,6 +959,7 @@ export class SemanticHologramView extends ItemView {
 		}
 
 		this.refreshAfterModeSwitch();
+		this.reinitializeNodePositionsForMode(mode);
 	}
 
 	/**
@@ -3485,6 +3488,60 @@ export class SemanticHologramView extends ItemView {
 	}
 
 	
+
+	private reinitializeNodePositionsForMode(mode: HologramMode, fromMode?: HologramMode): void {
+		const anchorX = this.target[0] ?? 0;
+		const anchorY = this.target[1] ?? 0;
+		const anchorZ = this.target[2] ?? 0;
+		const maxLevel = Math.max(...this.nodes.map(n => n ? this.nodeLevel(n) : 0), 0);
+		const ndSep = this.plugin.settings.ndLayerSeparation ?? 0;
+		const spread = 60;
+		if (mode === '2d' || mode === '3d') {
+			for (let i = 0; i < this.nodes.length; i++) {
+				const n = this.nodes[i];
+				if (!n || n.pinned) continue;
+				n.x = anchorX + (Math.random() - 0.5) * spread;
+				n.y = anchorY + (Math.random() - 0.5) * spread;
+				n.z = mode === '3d' ? anchorZ + (Math.random() - 0.5) * spread : 0;
+				n.vx = 0; n.vy = 0; n.vz = 0;
+				n.homeX = n.x; n.homeY = n.y; n.homeZ = n.z;
+			}
+			this.settled = false; this.settleCount = 0; this.layoutFrames = 0; this.frameEnergy = Infinity; this.wake();
+			return;
+		}
+		if (mode === 'nd-planar') {
+			for (let i = 0; i < this.nodes.length; i++) {
+				const n = this.nodes[i];
+				if (!n || n.pinned) continue;
+				const lvl = this.nodeLevel(n);
+				n.y = anchorY + (lvl - (maxLevel / 2)) * ndSep;
+				n.x = anchorX + (Math.random() - 0.5) * spread;
+				n.z = anchorZ + (Math.random() - 0.5) * spread;
+				n.vx = 0; n.vy = 0; n.vz = 0;
+				n.homeX = n.x; n.homeY = n.y; n.homeZ = n.z;
+			}
+			this.settled = false; this.settleCount = 0; this.layoutFrames = 0; this.frameEnergy = Infinity; this.wake();
+			return;
+		}
+		if (mode === 'nd-spherical') {
+			for (let i = 0; i < this.nodes.length; i++) {
+				const n = this.nodes[i];
+				if (!n || n.pinned) continue;
+				const lvl = this.nodeLevel(n);
+				const radius = (maxLevel - lvl) * ndSep + (ndSep > 0 ? ndSep * 0.2 : 0);
+				const theta = Math.random() * 2 * Math.PI;
+				const phi = Math.acos(2 * Math.random() - 1);
+				n.x = anchorX + radius * Math.sin(phi) * Math.cos(theta);
+				n.y = anchorY + radius * Math.sin(phi) * Math.sin(theta);
+				n.z = anchorZ + radius * Math.cos(phi);
+				n.vx = 0; n.vy = 0; n.vz = 0;
+				n.homeX = n.x; n.homeY = n.y; n.homeZ = n.z;
+			}
+			this.settled = false; this.settleCount = 0; this.layoutFrames = 0; this.frameEnergy = Infinity; this.wake();
+			return;
+		}
+	}
+
 	private nodeLevel(node: GraphNode): number {
 		const meta = this.plugin.settings.nodeTypes.find(t => t.id === node.nodeType);
 		const lvl = meta?.level;
@@ -6632,6 +6689,11 @@ export class SemanticHologramView extends ItemView {
 			this.plugin.settings.facesEnabled = !this.plugin.settings.facesEnabled;
 			void this.plugin.saveSettings();
 			this.showToast(this.plugin.settings.facesEnabled ? 'Faces on' : 'Faces off');
+		} else if (key === 'q' && !e.repeat) {
+			e.preventDefault();
+			this.reinitializeNodePositionsForMode(this.plugin.settings.hologramMode);
+			this.showToast('Resettled nodes');
+			return;
 		} else if (key === 'r' && e.shiftKey) {
 			this.resetView();
 		} else if (key === 'r' && !e.repeat && this.is3D) {

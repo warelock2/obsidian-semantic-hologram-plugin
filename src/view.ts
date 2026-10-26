@@ -3884,10 +3884,10 @@ export class SemanticHologramView extends ItemView {
 				}
 			}
 
-			// Layer spheres: translucent shaded sphere for the level selected
-			// by the level slider. Opacity driven by levelHighlightOpacity.
-			// Only in nd-spherical mode.
-			if (this.plugin.settings.hologramMode === 'nd-spherical') {
+			// Layer spheres: translucent shaded sphere + wireframe globe for the
+console.log('TEST_MARKER_SPHERE_CODE_REACHED');
+			// level selected by the level slider. Only in nd-spherical mode.
+			if (this.plugin.settings.hologramMode === 'nd-spherical' && this.plugin.settings.layerDisplayEnabled !== false) {
 				const ndSep = this.plugin.settings.ndLayerSeparation ?? 0;
 				const highlightLevel = this.plugin.settings.levelHighlight ?? 0;
 				let maxLevel = 0;
@@ -3903,27 +3903,115 @@ export class SemanticHologramView extends ItemView {
 					? maxLevel * ndSep
 					: (maxLevel - highlightLevel) * ndSep;
 				if (radius > 0) {
-					const center = this.rotatePoint(0, 0, 0, this.target[0], this.target[1], this.target[2]);
-					const s = this.projectionScale(center.z);
+					// Layer color: average node type colors for this level
+					const matchingTypes = this.plugin.settings.nodeTypes.filter((t) => t.level === highlightLevel);
+					let color = this.plugin.settings.facesColor;
+					if (matchingTypes.length > 0) {
+						let r = 0, g = 0, b = 0;
+						for (const t of matchingTypes) {
+							const c = t.color ?? this.nodeColor;
+							const m = c.match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+							if (m) {
+								r += parseInt(m[1]!, 16);
+								g += parseInt(m[2]!, 16);
+								b += parseInt(m[3]!, 16);
+							}
+						}
+						r = Math.round(r / matchingTypes.length);
+						g = Math.round(g / matchingTypes.length);
+						b = Math.round(b / matchingTypes.length);
+						color = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+					}
+					const opacity = this.plugin.settings.levelHighlightOpacity ?? 0.5;
+					const center = { x: 0, y: 0, z: 0 };
+					const centerProj = this.rotatePoint(center.x, center.y, center.z, this.target[0], this.target[1], this.target[2]);
+					const s = this.projectionScale(centerProj.z);
 					if (Number.isFinite(s)) {
 						const screenR = radius * s;
-						const sx = w / 2 + center.x * s;
-						const sy = h / 2 + center.y * s;
-						const opacity = this.plugin.settings.levelHighlightOpacity ?? 0.5;
-						const color = this.plugin.settings.facesColor;
+						const sx = w / 2 + centerProj.x * s;
+						const sy = h / 2 + centerProj.y * s;
+
+						// Translucent shaded sphere fill
 						const grad = ctx.createRadialGradient(sx - screenR * 0.3, sy - screenR * 0.3, 0, sx, sy, screenR);
-						grad.addColorStop(0, this.withAlpha(color, opacity * 0.6));
-						grad.addColorStop(0.7, this.withAlpha(color, opacity * 0.25));
+						grad.addColorStop(0, this.withAlpha(color, opacity * 0.3));
+						grad.addColorStop(0.7, this.withAlpha(color, opacity * 0.12));
 						grad.addColorStop(1, this.withAlpha(color, 0));
 						ctx.fillStyle = grad;
 						ctx.beginPath();
 						ctx.arc(sx, sy, screenR, 0, Math.PI * 2);
 						ctx.fill();
+
+						// Wireframe globe: 5 latitude + 12 longitude lines
+						const N = 36; // segments per line
 						ctx.strokeStyle = this.withAlpha(color, opacity * 0.4);
 						ctx.lineWidth = 1;
+
+						// Latitude lines (5: -60, -30, 0, 30, 60)
+						const latAngles = [-60, -30, 0, 30, 60].map((d) => d * Math.PI / 180);
+						for (const lat of latAngles) {
+							const rLat = radius * Math.cos(lat);
+							const zLat = radius * Math.sin(lat);
+							ctx.beginPath();
+							let first = true;
+							for (let i = 0; i <= N; i++) {
+								const lon = (i / N) * Math.PI * 2;
+								const px = rLat * Math.cos(lon);
+								const py = rLat * Math.sin(lon);
+								const pz = zLat;
+								const rp = this.rotatePoint(px, py, pz, this.target[0], this.target[1], this.target[2]);
+								const sp = this.projectionScale(rp.z);
+								if (!Number.isFinite(sp)) { first = true; continue; }
+								const screenX = w / 2 + rp.x * sp;
+								const screenY = h / 2 + rp.y * sp;
+								if (first) { ctx.moveTo(screenX, screenY); first = false; }
+								else { ctx.lineTo(screenX, screenY); }
+							}
+							ctx.stroke();
+						}
+
+						// Longitude lines (12: every 30 degrees)
+						const lonAngles = Array.from({ length: 12 }, (_, i) => i * 30 * Math.PI / 180);
+						for (const lon of lonAngles) {
+							ctx.beginPath();
+							let first = true;
+							for (let i = 0; i <= N; i++) {
+								const lat = (i / N) * Math.PI - Math.PI / 2;
+								const px = radius * Math.cos(lat) * Math.cos(lon);
+								const py = radius * Math.cos(lat) * Math.sin(lon);
+								const pz = radius * Math.sin(lat);
+								const rp = this.rotatePoint(px, py, pz, this.target[0], this.target[1], this.target[2]);
+								const sp = this.projectionScale(rp.z);
+								if (!Number.isFinite(sp)) { first = true; continue; }
+								const screenX = w / 2 + rp.x * sp;
+								const screenY = h / 2 + rp.y * sp;
+								if (first) { ctx.moveTo(screenX, screenY); first = false; }
+								else { ctx.lineTo(screenX, screenY); }
+							}
+							ctx.stroke();
+						}
+
+						// Equator emphasis (slightly bolder)
+						ctx.strokeStyle = this.withAlpha(color, opacity * 0.6);
+						ctx.lineWidth = 1.5;
 						ctx.beginPath();
-						ctx.arc(sx, sy, screenR, 0, Math.PI * 2);
+						const rLat = radius;
+						const zLat = 0;
+						let first = true;
+						for (let i = 0; i <= N; i++) {
+							const lon = (i / N) * Math.PI * 2;
+							const px = rLat * Math.cos(lon);
+							const py = rLat * Math.sin(lon);
+							const pz = zLat;
+							const rp = this.rotatePoint(px, py, pz, this.target[0], this.target[1], this.target[2]);
+							const sp = this.projectionScale(rp.z);
+							if (!Number.isFinite(sp)) { first = true; continue; }
+							const screenX = w / 2 + rp.x * sp;
+							const screenY = h / 2 + rp.y * sp;
+							if (first) { ctx.moveTo(screenX, screenY); first = false; }
+							else { ctx.lineTo(screenX, screenY); }
+						}
 						ctx.stroke();
+						ctx.lineWidth = 1;
 					}
 				}
 			}
@@ -6670,6 +6758,11 @@ export class SemanticHologramView extends ItemView {
 			if (next !== cur) {
 				void this.plugin.setLevelHighlight(next);
 				this.showToast(`Layer: ${['Source', 'Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'][next] ?? next}`);
+				// Sync controls panel slider
+				for (const leaf of this.app.workspace.getLeavesOfType('semantic-hologram-controls')) {
+					const ctrl = leaf.view as any;
+					if (ctrl && typeof ctrl.updateLevelSlider === 'function') ctrl.updateLevelSlider();
+				}
 			}
 		} else if (key === ']' && !e.repeat) {
 			e.preventDefault();
@@ -6678,6 +6771,11 @@ export class SemanticHologramView extends ItemView {
 			if (next !== cur) {
 				void this.plugin.setLevelHighlight(next);
 				this.showToast(`Layer: ${['Source', 'Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'][next] ?? next}`);
+				// Sync controls panel slider
+				for (const leaf of this.app.workspace.getLeavesOfType('semantic-hologram-controls')) {
+					const ctrl = leaf.view as any;
+					if (ctrl && typeof ctrl.updateLevelSlider === 'function') ctrl.updateLevelSlider();
+				}
 			}
 		} else if (key === 'l' && !e.repeat) {
 			e.preventDefault();
@@ -7169,7 +7267,7 @@ private selectHovered(): void {
 		const toast = this.contentEl.createDiv({ cls: 'sh-toast' });
 		toast.setText(text);
 		this.toastEl = toast;
-		window.setTimeout(() => this.hideToast(), 1500);
+		window.setTimeout(() => this.hideToast(), 3000);
 	}
 
 	private hideToast(): void {

@@ -5256,6 +5256,11 @@ export class SemanticHologramView extends ItemView {
 
 	private onPointerDown = (e: PointerEvent): void => {
 		this.wake();
+		// Dismiss help overlay on any canvas interaction
+		if (this.helpOverlay) {
+			this.hideHelp();
+			this.wake();
+		}
 		if (this.peekActive) {
 			return;
 		}
@@ -6639,13 +6644,47 @@ export class SemanticHologramView extends ItemView {
 		} else if (e.key === 'PrintScreen' && !e.repeat) {
 			e.preventDefault();
 			void this.takeScreenshot();
-		} else if (key === '1' && !e.repeat) {
-			const R_x = this.getRotationMatrixAboutAxis([1, 0, 0], Math.PI);
-			this.rotM = this.multiplyMatrices(this.rotM, R_x);
-			this.updateCameraMatrix();
+		} else if (key === '2' && !e.repeat) {
+			e.preventDefault();
+			void this.plugin.setMode('2d');
+			this.showToast('Mode: 2D');
+		} else if (key === '3' && !e.repeat) {
+			e.preventDefault();
+			void this.plugin.setMode('3d');
+			this.showToast('Mode: 3D');
+		} else if (key === '4' && !e.repeat) {
+			e.preventDefault();
+			void this.plugin.setMode('nd-planar');
+			this.showToast('Mode: nD-planar');
+		} else if (key === '5' && !e.repeat) {
+			e.preventDefault();
+			void this.plugin.setMode('nd-spherical');
+			this.showToast('Mode: nD-spherical');
 		} else if (key === 'h' && !e.repeat) {
 			e.preventDefault();
 			this.toggleHelp();
+		} else if (key === '[' && !e.repeat) {
+			e.preventDefault();
+			const cur = this.plugin.settings.levelHighlight ?? 0;
+			const next = Math.max(0, cur - 1);
+			if (next !== cur) {
+				void this.plugin.setLevelHighlight(next);
+				this.showToast(`Layer: ${['Source', 'Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'][next] ?? next}`);
+			}
+		} else if (key === ']' && !e.repeat) {
+			e.preventDefault();
+			const cur = this.plugin.settings.levelHighlight ?? 0;
+			const next = Math.min(6, cur + 1);
+			if (next !== cur) {
+				void this.plugin.setLevelHighlight(next);
+				this.showToast(`Layer: ${['Source', 'Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'][next] ?? next}`);
+			}
+		} else if (key === 'l' && !e.repeat) {
+			e.preventDefault();
+			this.plugin.settings.layerDisplayEnabled = !this.plugin.settings.layerDisplayEnabled;
+			void this.plugin.saveSettings();
+			this.showToast(this.plugin.settings.layerDisplayEnabled ? 'Layer rendering on' : 'Layer rendering off');
+			this.requestRedraw();
 		} else if (key === 'p' && !e.repeat) {
 			e.preventDefault();
 			this.toggleProjection();
@@ -7140,6 +7179,8 @@ private selectHovered(): void {
 		}
 	}
 
+	private helpDismissHandler: ((e: MouseEvent) => void) | null = null;
+
 	private showHelp(): void {
 		if (this.helpOverlay || !this.contentEl) {
 			return;
@@ -7160,7 +7201,13 @@ private selectHovered(): void {
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+Shift+z / Ctrl+y</span><span class="sh-help-desc">redo</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">c</span><span class="sh-help-desc">center hovered / selected node(s) on rotation origin</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Delete</span><span class="sh-help-desc">delete selected nodes (notes to trash, confirmed twice)</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">1</span><span class="sh-help-desc">flip view 180°</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">2</span><span class="sh-help-desc">switch to 2D mode</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">3</span><span class="sh-help-desc">switch to 3D mode</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">4</span><span class="sh-help-desc">switch to nD-planar mode</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">5</span><span class="sh-help-desc">switch to nD-spherical mode</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">[</span><span class="sh-help-desc">decrease layer highlight (level)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">]</span><span class="sh-help-desc">increase layer highlight (level)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">l</span><span class="sh-help-desc">toggle layer rendering on/off</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">f</span><span class="sh-help-desc">toggle faces (3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+f</span><span class="sh-help-desc">fit graph to view; while previewing a hologram: keep that view</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">r</span><span class="sh-help-desc">cycle rotation: off → clockwise → counter-clockwise</span></div>' +
@@ -7192,12 +7239,28 @@ private selectHovered(): void {
 			'<div class="sh-help-desc">2D canvas / 3D projected — toggle via the upper-left icon or side panel.</div>' +
 			'<div class="sh-help-desc">Projection (3D) perspective / orthographic — toggle via the second upper-left icon or P.</div>';
 		this.helpOverlay = el;
+		// Dismiss help when clicking outside the popup (e.g., on the canvas)
+		this.helpDismissHandler = (e: MouseEvent) => {
+			const target = e.target as HTMLElement;
+			if (this.helpOverlay && !this.helpOverlay.contains(target)) {
+				this.hideHelp();
+				this.wake();
+			}
+		};
+		// Use setTimeout to avoid the click that opened help from immediately closing it
+		window.setTimeout(() => {
+			document.addEventListener('mousedown', this.helpDismissHandler!, true);
+		}, 0);
 	}
 
 	private hideHelp(): void {
 		if (this.helpOverlay) {
 			this.helpOverlay.remove();
 			this.helpOverlay = null;
+		}
+		if (this.helpDismissHandler) {
+			document.removeEventListener('mousedown', this.helpDismissHandler, true);
+			this.helpDismissHandler = null;
 		}
 	}
 

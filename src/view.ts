@@ -2949,6 +2949,16 @@ export class SemanticHologramView extends ItemView {
 			if (is3D) {
 				node.vz *= PHYS.damping;
 			}
+			// Direct high-speed damping: stop 2D vibration at extreme spring
+			const v2d = Math.hypot(node.vx, node.vy);
+			const v3d = is3D ? Math.hypot(node.vx, node.vy, node.vz) : v2d;
+			const v = v3d;
+			if (v > 0) {
+				const extraDamp = 0.7; // kill all residual wobble at extreme spring
+				node.vx *= (1 - extraDamp);
+				node.vy *= (1 - extraDamp);
+				if (is3D) node.vz *= (1 - extraDamp);
+			}
 			const sp = is3D
 				? Math.hypot(node.vx, node.vy, node.vz)
 				: Math.hypot(node.vx, node.vy);
@@ -3692,8 +3702,12 @@ export class SemanticHologramView extends ItemView {
 			const dy = b.y - a.y;
 			const d = Math.hypot(dx, dy) || 0.001;
 			const f = PHYS.spring * (d - l.restLen * this.scale);
-			const fx = (dx / d) * f;
-			const fy = (dy / d) * f;
+			const speedA = Math.hypot(a.vx, a.vy);
+			const speedB = Math.hypot(b.vx, b.vy);
+			const speed = Math.max(speedA, speedB);
+			const dynamicDamping = Math.max(0.5, Math.min(1.0, PHYS.damping + speed * 0.001));
+			const fx = (dx / d) * f * dynamicDamping;
+			const fy = (dy / d) * f * dynamicDamping;
 			a.vx += fx;
 			a.vy += fy;
 			b.vx -= fx;
@@ -3768,9 +3782,13 @@ export class SemanticHologramView extends ItemView {
 			const dz = b.z - a.z;
 			const d = Math.hypot(dx, dy, dz) || 0.001;
 			const f = PHYS.spring * (d - l.restLen * this.scale);
-			const fx = (dx / d) * f;
-			const fy = (dy / d) * f;
-			const fz = (dz / d) * f;
+			const speedA = Math.hypot(a.vx, a.vy, a.vz);
+			const speedB = Math.hypot(b.vx, b.vy, b.vz);
+			const speed = Math.max(speedA, speedB);
+			const dynamicDamping = Math.max(0.5, Math.min(1.0, PHYS.damping + speed * 0.001));
+			const fx = (dx / d) * f * dynamicDamping;
+			const fy = (dy / d) * f * dynamicDamping;
+			const fz = (dz / d) * f * dynamicDamping;
 			a.vx += fx;
 			a.vy += fy;
 			a.vz += fz;
@@ -3950,14 +3968,14 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 						const latAngles = [-60, -30, 0, 30, 60].map((d) => d * Math.PI / 180);
 						for (const lat of latAngles) {
 							const rLat = radius * Math.cos(lat);
-							const zLat = radius * Math.sin(lat);
+							const yLat = radius * Math.sin(lat);
 							ctx.beginPath();
 							let first = true;
 							for (let i = 0; i <= N; i++) {
 								const lon = (i / N) * Math.PI * 2;
 								const px = rLat * Math.cos(lon);
-								const py = rLat * Math.sin(lon);
-								const pz = zLat;
+								const py = yLat;
+								const pz = rLat * Math.sin(lon);
 								const rp = this.rotatePoint(px, py, pz, this.target[0], this.target[1], this.target[2]);
 								const sp = this.projectionScale(rp.z);
 								if (!Number.isFinite(sp)) { first = true; continue; }
@@ -3977,8 +3995,8 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 							for (let i = 0; i <= N; i++) {
 								const lat = (i / N) * Math.PI - Math.PI / 2;
 								const px = radius * Math.cos(lat) * Math.cos(lon);
-								const py = radius * Math.cos(lat) * Math.sin(lon);
-								const pz = radius * Math.sin(lat);
+								const py = radius * Math.sin(lat);
+								const pz = radius * Math.cos(lat) * Math.sin(lon);
 								const rp = this.rotatePoint(px, py, pz, this.target[0], this.target[1], this.target[2]);
 								const sp = this.projectionScale(rp.z);
 								if (!Number.isFinite(sp)) { first = true; continue; }
@@ -3990,28 +4008,8 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 							ctx.stroke();
 						}
 
-						// Equator emphasis (slightly bolder)
-						ctx.strokeStyle = this.withAlpha(color, opacity * 0.6);
-						ctx.lineWidth = 1.5;
-						ctx.beginPath();
-						const rLat = radius;
-						const zLat = 0;
-						let first = true;
-						for (let i = 0; i <= N; i++) {
-							const lon = (i / N) * Math.PI * 2;
-							const px = rLat * Math.cos(lon);
-							const py = rLat * Math.sin(lon);
-							const pz = zLat;
-							const rp = this.rotatePoint(px, py, pz, this.target[0], this.target[1], this.target[2]);
-							const sp = this.projectionScale(rp.z);
-							if (!Number.isFinite(sp)) { first = true; continue; }
-							const screenX = w / 2 + rp.x * sp;
-							const screenY = h / 2 + rp.y * sp;
-							if (first) { ctx.moveTo(screenX, screenY); first = false; }
-							else { ctx.lineTo(screenX, screenY); }
-						}
-						ctx.stroke();
-						ctx.lineWidth = 1;
+						// Equator is already drawn as lat=0 in the latitude loop above
+						// (no separate emphasis — all sphere wireframe lines identical)
 					}
 				}
 			}

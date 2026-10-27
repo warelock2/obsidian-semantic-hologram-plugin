@@ -691,6 +691,9 @@ export class SemanticHologramView extends ItemView {
 	private touchTappedNode = -1;
 	private touchGesture: 'none' | 'pan' | 'pin' | 'group' | 'select' | 'rotate' = 'none';
 	private candidateNodes: Set<string> = new Set();
+	/** Freeze other nodes until dragged node settles (post-drag unlock). */
+	private freezeOthersUntilSettled = false;
+	private draggedNodeIndex = -1;
 	private lastSearchPickPath: string | null = null;
 	private peekActive = false;
 	private peekTags: string[] = [];
@@ -2943,6 +2946,13 @@ export class SemanticHologramView extends ItemView {
 			if (node.pinned || node.selected) {
 				continue;
 			}
+			// Lock settled nodes: freeze position/velocity unless being dragged
+			const beingDragged = (this.draggedNodeIndex >= 0 && this.draggedNodeIndex === i);
+			if (this.settled && !node.selected && !beingDragged) {
+				node.vx = 0; node.vy = 0;
+				if (is3D) node.vz = 0;
+				continue;
+			}
 			visibleCount++;
 			node.vx *= PHYS.damping;
 			node.vy *= PHYS.damping;
@@ -2954,7 +2964,7 @@ export class SemanticHologramView extends ItemView {
 			const v3d = is3D ? Math.hypot(node.vx, node.vy, node.vz) : v2d;
 			const v = v3d;
 			if (v > 0) {
-				const extraDamp = 0.7; // kill all residual wobble at extreme spring
+				const extraDamp = 0.85; // full wobble kill at extreme spring
 				node.vx *= (1 - extraDamp);
 				node.vy *= (1 - extraDamp);
 				if (is3D) node.vz *= (1 - extraDamp);
@@ -5380,6 +5390,10 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 			this.downX = e.clientX;
 			this.downY = e.clientY;
 			this.toggleIndex = this.hitTest(e);
+			if (this.toggleIndex >= 0) {
+				this.freezeOthersUntilSettled = true;
+				this.draggedNodeIndex = this.toggleIndex;
+			}
 			this.clearOnUp = this.toggleIndex < 0 && (this.selected.size > 0 || this.candidateNodes.size > 0);
 			this.selectAnchorX = e.clientX - (rect?.left ?? 0);
 			this.selectAnchorY = e.clientY - (rect?.top ?? 0);
@@ -5885,7 +5899,7 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 				node.z = orig.z + inv.z;
 			} else {
 				node.x = orig.x + dsx;
-				node.y = orig.y + dsy;
+				node.y = orig.y - dsy; // drag up = world up (reversed)
 			}
 			node.vx = 0;
 			node.vy = 0;
@@ -6801,6 +6815,19 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 			}
 		} else if (key === 'c') {
 			this.centerSelectedOnOrigin();
+		} else if (key === 'u') {
+			e.preventDefault();
+			if (this.selected.size > 0) {
+				let anyLocked = false;
+				for (const idx of this.selected) {
+					const n = this.nodes[idx];
+					if (n) { anyLocked = !n.pinned; n.pinned = !n.pinned; }
+				}
+				this.showToast(anyLocked ? 'Nodes unlocked' : 'Nodes locked');
+			} else if (this.hoverIndex >= 0) {
+				const n = this.nodes[this.hoverIndex];
+				if (n) { n.pinned = !n.pinned; this.showToast(n.pinned ? 'Nodes locked' : 'Nodes unlocked'); }
+			}
 		} else if (e.key === 'Delete' && !e.repeat) {
 			e.preventDefault();
 			void this.deleteSelectedNodes();

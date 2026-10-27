@@ -145,6 +145,12 @@ export interface SemanticHologramSettings {
 
 	separationDistance: number;
 	ndLayerSeparation: number;
+	/**
+	 * Render smoothing window: average rendered node x/y over this many cycles
+	 * before drawing, to kill residual 2D vibration at extreme spring values.
+	 * 0 disables smoothing. Pure render-layer; physics is untouched.
+	 */
+	stabilizationWindow: number;
 	gifMode: 'full' | 'time' | 'continuous';
 	gifDuration: number;
 }
@@ -240,6 +246,7 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 
 	separationDistance: 500,
 	ndLayerSeparation: 0,
+	stabilizationWindow: 5000,
 	gifMode: 'full',
 	gifDuration: 10,
 };

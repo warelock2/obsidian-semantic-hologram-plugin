@@ -1096,6 +1096,22 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 			this.getView()?.requestRedraw(); // toast omitted (private)'Spring: ' + Math.round(v * 1000));
 		});
 
+		// Stabilization / Smoothing slider (render-layer only)
+		const stabRow = contentEl.createDiv({ cls: 'sh-controls-row' });
+		stabRow.createSpan({ text: 'Stabilization: ' + (this.plugin.settings.stabilizationWindow ?? 5), cls: 'sh-controls-label' });
+		const stabValue = stabRow.createSpan({ text: ' ' + (this.plugin.settings.stabilizationWindow ?? 5), cls: 'sh-slider-value' });
+		const stabSlider = stabRow.createEl('input', { type: 'range', attr: { min: '0', max: '3000', step: '1', value: String(this.plugin.settings.stabilizationWindow ?? 5) } });
+		stabSlider.addEventListener('input', () => {
+			const v = parseInt(stabSlider.value, 10);
+			this.plugin.settings.stabilizationWindow = v;
+			const label = stabRow.querySelector('.sh-controls-label');
+			if (label) label.textContent = 'Stabilization: ' + v;
+			const vSpan = stabRow.querySelector('.sh-slider-value');
+			if (vSpan) vSpan.textContent = ' ' + v;
+			void this.plugin.saveSettings();
+			this.getView()?.requestRedraw();
+		});
+
 		// Opacity/Translucence Slider
 		const opacityRow = contentEl.createDiv({ cls: 'sh-controls-row' });
 		opacityRow.createSpan({ text: `Level Opacity: ${Math.round(this.plugin.settings.levelHighlightOpacity * 100)}%`, cls: 'sh-controls-label' });

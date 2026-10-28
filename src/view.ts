@@ -19,6 +19,7 @@ import { buildAdjacency, explainConnection, findNodeByRef, runScan } from './dif
 import type { ScanLayerSettings } from './settings';
 import { HOLOGRAM_FOLDER } from './settings';
 import { descendantDirs, displayedHolograms, moveDirInto, notesInDir, reportMoveResult } from './hologramDirs';
+import { handleTableSpreadClick } from './tableSpread';
 
 export const VIEW_TYPE_HOLOGRAM = 'semantic-hologram-view';
 
@@ -5748,6 +5749,10 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 					node.pinned = false;
 				}
 				if (moved < 6) {
+					if (e.ctrlKey && e.shiftKey) {
+						e.preventDefault();
+						void handleTableSpreadClick(this.app);
+					}
 					this.openNode(this.pinnedIndex);
 				}
 				if (this.freezeOthersUntilSettled && this.draggedNodeIndex >= 0 &&

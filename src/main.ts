@@ -32,6 +32,7 @@ import { HologramService } from './hologramService';
 import { migrateToDirectories } from './migrate';
 import { unEmulsifyAll, reportMoveResult } from './hologramDirs';
 import { ExportNoteModal } from './exportNote';
+import { handleTableSpreadClick, handleTableSpreadBacktrack } from './tableSpread';
 
 /** Vault file the MCP server writes to ask the plugin to run something. */
 const COMMAND_FILE = '.hologram-command.json';
@@ -104,6 +105,33 @@ export default class SemanticHologramPlugin extends Plugin {
 		this.hologramService = new HologramService(this);
 		await this.hologramService.loadCache();
 		this.startCommandListener();
+
+		this.registerDomEvent(
+			document,
+			'click',
+			(event: MouseEvent) => {
+				if (!event.ctrlKey || !event.shiftKey || event.button !== 0) return;
+
+				const target = event.target;
+				if (!(target instanceof Element)) return;
+
+				const link = target.closest('a.internal-link') as HTMLAnchorElement | null;
+				if (!link) return;
+
+				const destination = link.dataset.href;
+				if (!destination) return;
+
+				event.preventDefault();
+				event.stopPropagation();
+
+				void handleTableSpreadClick(this.app).then(() => {
+					if (destination) {
+						void this.app.workspace.openLinkText(destination, '');
+					}
+				});
+			},
+			true
+		);
 
 		this.registerEvent(
 			this.app.vault.on('modify', async (file) => {
@@ -335,6 +363,22 @@ export default class SemanticHologramPlugin extends Plugin {
 			name: 'Audit and fix hologram nodes',
 			callback: () => {
 				void this.activateAuditView();
+			},
+		});
+
+		this.addCommand({
+			id: 'table-spread-backtrack',
+			name: 'Backtrack table spread',
+			callback: () => {
+				void handleTableSpreadBacktrack(this.app);
+			},
+		});
+
+		this.addCommand({
+			id: 'table-spread-start',
+			name: 'Start table spread',
+			callback: () => {
+				void handleTableSpreadClick(this.app);
 			},
 		});
 

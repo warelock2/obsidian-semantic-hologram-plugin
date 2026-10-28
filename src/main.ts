@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Plugin, Setting, TFile, TFolder, View, WorkspaceLeaf } from 'obsidian';
+import { App, MarkdownView, Modal, Notice, Plugin, Setting, TFile, TFolder, View, WorkspaceLeaf } from 'obsidian';
 import { readFileSync, watch, writeFileSync } from 'fs';
 import { join } from 'path';
 import {
@@ -32,7 +32,7 @@ import { HologramService } from './hologramService';
 import { migrateToDirectories } from './migrate';
 import { unEmulsifyAll, reportMoveResult } from './hologramDirs';
 import { ExportNoteModal } from './exportNote';
-import { handleTableSpreadClick, handleTableSpreadBacktrack } from './tableSpread';
+import { handleTableSpreadClick, handleTableSpreadBacktrack, playbackTableSpread, TableSpreadChooseModal, TableSpreadModal, recordTableSpreadStep } from './tableSpread';
 
 /** Vault file the MCP server writes to ask the plugin to run something. */
 const COMMAND_FILE = '.hologram-command.json';
@@ -49,6 +49,12 @@ const CACHE_REFRESH_DEBOUNCE_MS = 250;
 /** `DataAdapter.getBasePath` exists at runtime but is absent from the typings. */
 type BasePathAdapter = { getBasePath(): string };
 
+/** Minimal shape of CodeMirror 6's EditorView, exposed via Obsidian's `editor.cm`. */
+interface CMEditorView {
+	posAtCoords(coords: { x: number; y: number }): number | null;
+	state: { doc: { toString(): string } };
+}
+
 export default class SemanticHologramPlugin extends Plugin {
 	settings!: SemanticHologramSettings;
 	hologramService!: HologramService;
@@ -56,6 +62,11 @@ export default class SemanticHologramPlugin extends Plugin {
 	private cacheRefreshTimer: number | null = null;
 	private renameRebuildTimer: number | null = null;
 	private lastCommandStamp = '';
+	/** Table spread mode (runtime only, not persisted). */
+	public tableSpreadMode = false;
+	public tableSpreadModeName: string | null = null;
+	private tableSpreadStatusBar: HTMLElement | null = null;
+	private tableSpreadBanner: HTMLElement | null = null;
 
 	/**
 	 * Coalesce hologram-tag cache reloads into a single pass.
@@ -106,11 +117,13 @@ export default class SemanticHologramPlugin extends Plugin {
 		await this.hologramService.loadCache();
 		this.startCommandListener();
 
+		// Reading/preview mode: internal links render as a.internal-link.
 		this.registerDomEvent(
 			document,
 			'click',
 			(event: MouseEvent) => {
-				if (!event.ctrlKey || !event.shiftKey || event.button !== 0) return;
+				if (!this.tableSpreadMode) return;
+				if (!event.altKey || event.button !== 0) return;
 
 				const target = event.target;
 				if (!(target instanceof Element)) return;
@@ -124,10 +137,55 @@ export default class SemanticHologramPlugin extends Plugin {
 				event.preventDefault();
 				event.stopPropagation();
 
-				void handleTableSpreadClick(this.app).then(() => {
+				const targetFile = this.app.metadataCache.getFirstLinkpathDest(destination, this.app.workspace.getActiveFile()?.path ?? '');
+				void handleTableSpreadClick(this.app, { targetFile: targetFile ?? undefined, spreadName: this.tableSpreadMode ? (this.tableSpreadModeName ?? undefined) : undefined }).then(() => {
 					if (destination) {
 						void this.app.workspace.openLinkText(destination, '');
 					}
+				});
+			},
+			true
+		);
+
+		// Editing mode (source + live preview): wikilinks live in CodeMirror,
+		// not as a.internal-link, so resolve them via the editor view.
+		this.registerDomEvent(
+			document,
+			'mousedown',
+			(event: MouseEvent) => {
+				if (!this.tableSpreadMode) return;
+				if (!event.altKey || event.button !== 0) return;
+
+				const target = event.target;
+				if (!(target instanceof Element)) return;
+
+				const editorElement = target.closest('.markdown-source-view');
+				if (!editorElement) return;
+
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!view) return;
+
+				// Obsidian does not expose editor.cm in its public types; cast through unknown.
+				const cm = (view.editor as unknown as { cm?: CMEditorView }).cm;
+				if (!cm) return;
+
+				const pos = cm.posAtCoords({ x: event.clientX, y: event.clientY });
+				if (pos === null) return;
+
+				const text = cm.state.doc.toString();
+				const open = text.lastIndexOf('[[', pos);
+				const close = text.indexOf(']]', pos);
+				if (open === -1 || close === -1 || close < open) return;
+
+				const destination = (text.slice(open + 2, close).split('|')[0] ?? '').trim();
+				if (!destination || destination.includes('[[') || destination.includes(']]')) return;
+
+				event.preventDefault();
+				event.stopPropagation();
+
+				const targetFile = this.app.metadataCache.getFirstLinkpathDest(destination, view?.file?.path ?? '');
+				void handleTableSpreadClick(this.app, { targetFile: targetFile ?? undefined, spreadName: this.tableSpreadMode ? (this.tableSpreadModeName ?? undefined) : undefined }).then(() => {
+					void this.app.workspace.openLinkText(destination, '');
 				});
 			},
 			true
@@ -369,16 +427,22 @@ export default class SemanticHologramPlugin extends Plugin {
 		this.addCommand({
 			id: 'table-spread-backtrack',
 			name: 'Backtrack table spread',
+			hotkeys: [{ modifiers: ['Alt'], key: 'ArrowLeft' }],
 			callback: () => {
-				void handleTableSpreadBacktrack(this.app);
+				void handleTableSpreadBacktrack(this.app).then((wasSeed) => {
+					if (wasSeed && this.tableSpreadMode) {
+						this.setTableSpreadMode(false);
+					}
+				});
 			},
 		});
 
 		this.addCommand({
-			id: 'table-spread-start',
-			name: 'Start table spread',
+			id: 'table-spread',
+			name: 'Table spread',
+			hotkeys: [{ modifiers: ['Alt'], key: 'T' }],
 			callback: () => {
-				void handleTableSpreadClick(this.app);
+				void this.toggleTableSpreadMode();
 			},
 		});
 
@@ -776,9 +840,96 @@ export default class SemanticHologramPlugin extends Plugin {
 		await workspace.revealLeaf(leaf);
 	}
 
+	/** Turn table spread mode on/off. */
+	setTableSpreadMode(on: boolean, name: string | null = null): void {
+		this.tableSpreadMode = on;
+		this.tableSpreadModeName = on ? name : null;
+		if (!this.tableSpreadStatusBar) {
+			this.tableSpreadStatusBar = this.addStatusBarItem();
+		}
+		if (!this.tableSpreadBanner) {
+			this.tableSpreadBanner = document.body.createDiv({ cls: 'sh-table-spread-banner' });
+		}
+		if (on && name) {
+			this.tableSpreadStatusBar.setText(`\u{1F534} Table spread: ${name}`);
+			this.tableSpreadStatusBar.addClass('sh-table-spread-active');
+			this.tableSpreadBanner.setText(`TABLE SPREAD MODE: ${name}  (Ctrl+Shift+Z to backtrack, Ctrl+Shift+T to exit)`);
+			this.tableSpreadBanner.addClass('sh-table-spread-banner--visible');
+			document.body.classList.add('sh-table-spread-mode');
+			new Notice(`Table spread mode ON: ${name}`);
+		} else {
+			this.tableSpreadStatusBar.setText('');
+			this.tableSpreadStatusBar.removeClass('sh-table-spread-active');
+			this.tableSpreadBanner.removeClass('sh-table-spread-banner--visible');
+			document.body.classList.remove('sh-table-spread-mode');
+			new Notice('Table spread mode OFF');
+		}
+	}
+
+	async toggleTableSpreadMode(): Promise<void> {
+		if (this.tableSpreadMode) {
+			this.setTableSpreadMode(false);
+			return;
+		}
+		const activeFile = this.app.workspace.getActiveFile();
+		if (!activeFile) {
+			new Notice('Open a note first.');
+			return;
+		}
+		// Ensure no leading blank lines, which break frontmatter detection.
+		const raw = await this.app.vault.read(activeFile);
+		const cleaned = raw.replace(/^\n+/, '');
+		if (cleaned !== raw) {
+			await this.app.vault.modify(activeFile, cleaned);
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		const metadata = this.app.metadataCache.getFileCache(activeFile);
+		const fm = (metadata?.frontmatter ?? {}) as Record<string, unknown>;
+		const spreads = Object.keys((fm.tableSpreadIndexes ?? {}) as Record<string, number>);
+
+		if (spreads.length === 0) {
+			await new Promise<void>((resolve) => {
+				new TableSpreadModal(this.app, (name) => {
+					const spreadName = name.replace(/[^a-zA-Z0-9-_]/g, '-');
+					if (spreadName) {
+						void recordTableSpreadStep(this.app, spreadName, activeFile).then((seq) => {
+							new Notice(`Table Spread [${spreadName}]: Step ${seq} recorded.`);
+							this.setTableSpreadMode(true, spreadName);
+						});
+					}
+					resolve();
+				}).open();
+			});
+			return;
+		}
+
+		await new Promise<void>((resolve) => {
+			new TableSpreadChooseModal(this.app, spreads, (choice) => {
+				if (choice === null) {
+					new TableSpreadModal(this.app, (name) => {
+						const spreadName = name.replace(/[^a-zA-Z0-9-_]/g, '-');
+						if (spreadName) {
+							void recordTableSpreadStep(this.app, spreadName, activeFile).then((seq) => {
+								new Notice(`Table Spread [${spreadName}]: Step ${seq} recorded.`);
+								this.setTableSpreadMode(true, spreadName);
+							});
+						}
+						resolve();
+					}).open();
+				} else {
+					const spreadName = choice;
+					this.setTableSpreadMode(true, spreadName);
+					void playbackTableSpread(this.app, `table-spread-${spreadName}`, activeFile);
+					resolve();
+				}
+			}).open();
+		});
+	}
+
 	onunload() {
 		
 		
+		if (this.tableSpreadBanner) { this.tableSpreadBanner.remove(); this.tableSpreadBanner = null; }
 		if (this.ribbonIcon) {
 			this.ribbonIcon.remove();
 			this.ribbonIcon = null;

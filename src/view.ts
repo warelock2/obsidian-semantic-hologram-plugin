@@ -5749,9 +5749,11 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 					node.pinned = false;
 				}
 				if (moved < 6) {
-					if (e.ctrlKey && e.shiftKey) {
+					if (e.altKey && this.plugin.tableSpreadMode) {
 						e.preventDefault();
-						void handleTableSpreadClick(this.app);
+						const node = this.nodes[this.pinnedIndex];
+						const tf = node ? this.app.vault.getAbstractFileByPath(node.path) : null;
+						void handleTableSpreadClick(this.app, { targetFile: tf instanceof TFile ? tf : undefined, spreadName: this.plugin.tableSpreadModeName ?? undefined });
 					}
 					this.openNode(this.pinnedIndex);
 				}
@@ -7425,6 +7427,11 @@ private selectHovered(): void {
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+scroll</span><span class="sh-help-desc">dolly the camera along the line of sight (3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Ctrl+scroll (nD)</span><span class="sh-help-desc">adjust layer separation distance (planar &amp; spherical)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">click bg</span><span class="sh-help-desc">clear selection</span></div>' +
+			'<div class="sh-help-section">Table Spread</div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Alt+T</span><span class="sh-help-desc">toggle table spread mode on/off (status bar + red banner)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Alt+click</span><span class="sh-help-desc">record next step on the destination note (while mode is on)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">Alt+Left</span><span class="sh-help-desc">backtrack: remove current step + navigate back (exits mode on seed)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-desc">Alt+T on a tagged note offers its spreads; pick one to replay the trail to its end.</span></div>' +
 			'<div class="sh-help-section">Modes</div>' +
 			'<div class="sh-help-desc">2D canvas / 3D projected — toggle via the upper-left icon or side panel.</div>' +
 			'<div class="sh-help-desc">Projection (3D) perspective / orthographic — toggle via the second upper-left icon or P.</div>';
@@ -7707,7 +7714,12 @@ private selectHovered(): void {
 		if (!node) {
 			return;
 		}
-		void this.app.workspace.openLinkText(node.label, '');
+		const file = this.app.vault.getAbstractFileByPath(node.path);
+		if (file instanceof TFile) {
+			void this.app.workspace.getLeaf(false).openFile(file);
+		} else {
+			void this.app.workspace.openLinkText(node.label, '');
+		}
 	}
 
 	setCandidateNodes(paths: string[]): void {

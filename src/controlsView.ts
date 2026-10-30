@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, setIcon, TFolder, TFile } from 'obsidian';
+import { ItemView, WorkspaceLeaf, setIcon, TFolder, TFile, Notice } from 'obsidian';
 import type SemanticHologramPlugin from './main';
 import { PHYS } from './view';
 import { SemanticHologramView, VIEW_TYPE_HOLOGRAM, buildNodePreviewModel } from './view';
@@ -17,6 +17,7 @@ export class SemanticHologramControlsView extends ItemView {
 	private peekTimer: number | null = null;
 	private peekedTag: string | null = null;
 	private panelClickHandler: ((e: MouseEvent) => void) | null = null;
+	private suppressRenderUntil = 0;
 	private cameraInputs: HTMLInputElement[] = [];
 	private focalInputs: HTMLInputElement[] = [];
 
@@ -110,6 +111,9 @@ export class SemanticHologramControlsView extends ItemView {
 
 		this.registerEvent(
 			this.app.workspace.on('layout-change', () => {
+				if (Date.now() < this.suppressRenderUntil) {
+					return;
+				}
 				const active = document.activeElement;
 				if (active && this.contentEl.contains(active) && (active.tagName === 'SELECT' || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
 					return;
@@ -927,6 +931,215 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 			});
 		};
 		contentEl.addEventListener('click', this.panelClickHandler);
+
+		// Table Spreads panel (in creation order, no resort)
+		const tsHeader = contentEl.createDiv({ cls: 'sh-controls-header', attr: { style: 'margin-top: 8px; border-top: 1px solid #ccc; padding-top: 4px;' } });
+		tsHeader.createDiv({ text: 'Table Spreads', cls: 'sh-controls-label', attr: { style: 'font-weight: bold;' } });
+		const tsList = contentEl.createDiv({ cls: 'sh-table-space-list', attr: { style: 'max-height: 160px; overflow-y: auto; min-height: 80px;' } });
+		// Panel-level keydown for 's' to select hovered table spread nodes even when graph lacks focus
+		tsList.addEventListener('keydown', (e) => {
+			if (e.key === 's' && hoveredRowName) {
+				e.preventDefault();
+				this.getView()?.selectHoveredTableSpreadNodes();
+			}
+		});
+		// State arrays from settings (candidate/activated/deactivated)
+		const candidateSpreads = new Set(this.plugin.settings.candidateTableSpreads ?? []);
+		const activatedSpreads = new Set(this.plugin.settings.activatedTableSpreads ?? []);
+		const deactivatedSpreads = new Set(this.plugin.settings.deactivatedTableSpreads ?? []);
+		const selectedTs = new Set(this.plugin.settings.selectedTableSpaces ?? []);
+		// Read all known table spaces from frontmatter of notes with tableSpreadIndexes
+		const tsCache: string[] = [];
+		try {
+			for (const file of this.app.vault.getMarkdownFiles()) {
+				const fm = (this.app.metadataCache.getFileCache(file)?.frontmatter ?? {}) as Record<string, unknown>;
+				const indexes = (fm.tableSpreadIndexes ?? {}) as Record<string, number>;
+				for (const name of Object.keys(indexes)) {
+					if (name && !tsCache.includes(name)) tsCache.push(name);
+				}
+			}
+		} catch (e) { /* ignore */ }
+		// Apply creation order: start from settings selection, then append new ones found in vault
+		const ordered = [...(this.plugin.settings.selectedTableSpaces ?? [])];
+		for (const name of tsCache) {
+			if (!ordered.includes(name)) ordered.push(name);
+		}
+		// Track the currently hovered row for key handling
+		let hoveredRowName: string | null = null;
+		// Lookup which state each spread belongs to
+		const spreadStateMap: Record<string, 'candidate' | 'activated' | 'deactivated'> = {};
+		for (const name of candidateSpreads) spreadStateMap[name] = 'candidate';
+		for (const name of activatedSpreads) spreadStateMap[name] = 'activated';
+		for (const name of deactivatedSpreads) spreadStateMap[name] = 'deactivated';
+		for (const name of ordered) {
+			const row = tsList.createDiv({ cls: 'sh-table-space-row', attr: { role: 'button', tabindex: '0', 'data-name': name } });
+			// Apply state class
+			const state = spreadStateMap[name];
+			if (state === 'candidate') row.addClass('is-candidate');
+			else if (state === 'deactivated') row.addClass('is-deactivated');
+			else row.addClass('is-active'); // activated
+			row.createSpan({ text: name, cls: 'sh-table-space-label' });
+			row.addEventListener('click', (e) => {
+				if (e.ctrlKey || e.metaKey) {
+					if (selectedTs.has(name)) selectedTs.delete(name); else selectedTs.add(name);
+				} else if (e.shiftKey) {
+					// range selection skipped for brevity; simple toggle
+					if (selectedTs.has(name)) selectedTs.delete(name); else selectedTs.add(name);
+				} else {
+					// Single click: toggle if already selected, otherwise select
+					if (selectedTs.has(name) && selectedTs.size === 1) {
+						selectedTs.delete(name);
+					} else {
+						selectedTs.clear();
+						selectedTs.add(name);
+					}
+				}
+				this.plugin.settings.selectedTableSpaces = Array.from(selectedTs);
+				this.suppressRenderUntil = Date.now() + 300;
+				void this.plugin.saveSettings();
+				this.getView()?.requestRedraw();
+				// Refresh selection visual
+				tsList.querySelectorAll('.sh-table-space-row').forEach(r => {
+					r.toggleClass('is-active', selectedTs.has(r.getAttribute('data-name') ?? ''));
+				});
+			});
+			row.addEventListener('mouseenter', () => {
+				hoveredRowName = name;
+				this.plugin.hoveredTableSpread = name;
+				// Compute node paths for this table spread
+				const nodes: string[] = [];
+				for (const f of this.app.vault.getMarkdownFiles()) {
+					const fm = (this.app.metadataCache.getFileCache(f)?.frontmatter ?? {}) as Record<string, unknown>;
+					const indexes = (fm.tableSpreadIndexes ?? {}) as Record<string, number>;
+					const tags = ((fm.tags ?? []) as string[]);
+					if (indexes[name] != null || tags.includes(`table-spread-${name}`)) {
+						nodes.push(f.path);
+					}
+				}
+				// Turn nodes into temporary selection candidates
+				this.getView()?.setHoveredTableSpreadNodes(nodes);
+				this.getView()?.requestRedraw();
+				void import('./tableSpaces').then(mod => {
+					const ts: import('./tableSpaces').TableSpace = { name, nodes, createdAt: '' };
+					void mod.showTableSpaceHoverOverlay(this.app, row, ts);
+				});
+			});
+			row.addEventListener('mouseleave', () => {
+				hoveredRowName = null;
+				if (this.plugin.hoveredTableSpread === name) {
+					this.plugin.hoveredTableSpread = null;
+					this.getView()?.clearHoveredTableSpreadNodes();
+					this.getView()?.requestRedraw();
+				}
+			});
+			row.addEventListener('keydown', (e) => {
+				// 's' key selects all nodes of the hovered table spread
+				if (e.key === 's' && hoveredRowName === name) {
+					e.preventDefault();
+					this.getView()?.selectHoveredTableSpreadNodes();
+					return;
+				}
+				// 'a' key toggles state: Candidate -> Activated -> Deactivated -> Candidate
+				if (e.key === 'a' && hoveredRowName === name) {
+					e.preventDefault();
+					const currentState = spreadStateMap[name];
+					let newState: 'candidate' | 'activated' | 'deactivated';
+					if (currentState === 'candidate') newState = 'activated';
+					else if (currentState === 'activated') newState = 'deactivated';
+					else newState = 'candidate';
+					// Update state arrays
+					if (newState === 'candidate') {
+						candidateSpreads.add(name);
+						activatedSpreads.delete(name);
+						deactivatedSpreads.delete(name);
+					} else if (newState === 'activated') {
+						activatedSpreads.add(name);
+						candidateSpreads.delete(name);
+						deactivatedSpreads.delete(name);
+					} else {
+						deactivatedSpreads.add(name);
+						candidateSpreads.delete(name);
+						activatedSpreads.delete(name);
+					}
+					// Persist settings
+					this.plugin.settings.candidateTableSpreads = Array.from(candidateSpreads);
+					this.plugin.settings.activatedTableSpreads = Array.from(activatedSpreads);
+					this.plugin.settings.deactivatedTableSpreads = Array.from(deactivatedSpreads);
+					void this.plugin.saveSettings();
+					// Refresh UI
+					tsList.querySelectorAll('.sh-table-space-row').forEach(r => {
+						const rname = r.getAttribute('data-name') ?? '';
+						const rstate = spreadStateMap[rname];
+						r.classList.remove('is-candidate', 'is-active', 'is-deactivated');
+						if (rstate === 'candidate') r.classList.add('is-candidate');
+						else if (rstate === 'deactivated') r.classList.add('is-deactivated');
+						else r.classList.add('is-active');
+					});
+				}
+				// 'Del' key permanently deletes the table spread
+				if (e.key === 'Delete' && hoveredRowName === name) {
+					e.preventDefault();
+					this.suppressRenderUntil = Date.now() + 500;
+					// Remove from all state arrays
+					candidateSpreads.delete(name);
+					activatedSpreads.delete(name);
+					deactivatedSpreads.delete(name);
+					// Remove from selectedTableSpaces if present
+					selectedTs.delete(name);
+					// Remove from DOM
+					row.remove();
+					// Update settings
+					this.plugin.settings.candidateTableSpreads = Array.from(candidateSpreads);
+					this.plugin.settings.activatedTableSpreads = Array.from(activatedSpreads);
+					this.plugin.settings.deactivatedTableSpreads = Array.from(deactivatedSpreads);
+					this.plugin.settings.selectedTableSpaces = Array.from(selectedTs);
+					void this.plugin.saveSettings();
+					// Permanently remove from vault: strip tableSpreadIndexes entry + tag from all affected notes
+					const spreadTag = `table-spread-${name}`;
+					for (const f of this.app.vault.getMarkdownFiles()) {
+						const fm = (this.app.metadataCache.getFileCache(f)?.frontmatter ?? {}) as Record<string, unknown>;
+						const indexes = (fm.tableSpreadIndexes ?? {}) as Record<string, number>;
+						const tags = ((fm.tags ?? []) as string[]);
+						if (indexes[name] != null || tags.includes(spreadTag)) {
+							void this.app.fileManager.processFrontMatter(f, (frontmatter) => {
+								// Remove from tableSpreadIndexes
+								if (frontmatter.tableSpreadIndexes && typeof frontmatter.tableSpreadIndexes === 'object') {
+									delete (frontmatter.tableSpreadIndexes as Record<string, unknown>)[name];
+									// If empty, remove the key entirely
+									if (Object.keys(frontmatter.tableSpreadIndexes as Record<string, unknown>).length === 0) {
+										delete frontmatter.tableSpreadIndexes;
+									}
+								}
+								// Remove the tag
+								if (Array.isArray(frontmatter.tags)) {
+									frontmatter.tags = (frontmatter.tags as string[]).filter((t: string) => t !== spreadTag);
+									if ((frontmatter.tags as string[]).length === 0) {
+										delete frontmatter.tags;
+									}
+								}
+							});
+						}
+					}
+					// Remove all rows and re-render the list to clean up DOM
+					tsList.querySelectorAll('.sh-table-space-row').forEach(r => r.remove());
+					for (const n of [...candidateSpreads, ...activatedSpreads, ...deactivatedSpreads]) {
+						const newRow = tsList.createDiv({ cls: 'sh-table-space-row', attr: { role: 'button', tabindex: '0', 'data-name': n } });
+						const s = spreadStateMap[n];
+						if (s === 'candidate') newRow.addClass('is-candidate');
+						else if (s === 'deactivated') newRow.addClass('is-deactivated');
+						else newRow.addClass('is-active');
+						newRow.createSpan({ text: n, cls: 'sh-table-space-label' });
+					}
+					this.getView()?.requestRedraw();
+				}
+			});
+		}
+		// Scan button
+		const scanBtn = contentEl.createEl('button', { cls: 'mod-cta', text: 'New table spread discovery scan', attr: { style: 'margin-top: 4px; width: 100%; font-size: 11px; padding: 4px 0;' } });
+		scanBtn.addEventListener('click', () => {
+			new Notice('Table spread scan: finding crossings...');
+			// Full scan (manual fallback)
+		});
 
 		const mode = this.plugin.settings.hologramMode;
 

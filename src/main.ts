@@ -65,6 +65,8 @@ export default class SemanticHologramPlugin extends Plugin {
 	/** Table spread mode (runtime only, not persisted). */
 	public tableSpreadMode = false;
 	public tableSpreadModeName: string | null = null;
+	/** Table spread currently hovered in the controls panel (runtime only, not persisted). */
+	public hoveredTableSpread: string | null = null;
 	private tableSpreadStatusBar: HTMLElement | null = null;
 	private tableSpreadBanner: HTMLElement | null = null;
 
@@ -197,6 +199,12 @@ export default class SemanticHologramPlugin extends Plugin {
 					this.scheduleCacheRefresh();
 					// Only sync if it's a hologram note to avoid infinite loops and bloat
 					if (this.isInScope(file.path)) {
+						const cache = this.app.metadataCache.getFileCache(file);
+						const fm = (cache?.frontmatter ?? {}) as Record<string, unknown>;
+						if (fm.tableSpreadIndexes) {
+							// Skip gravitas sync on table-spread writes to prevent race conditions with frontmatter parsing
+							return;
+						}
 						await this.refreshIncomingRelationships();
 						await this.refreshGravitasSections();
 					}

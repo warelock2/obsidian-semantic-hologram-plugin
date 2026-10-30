@@ -133,7 +133,7 @@ export function applyGravitasProvenanceSection(
 	content: string,
 	stats: { gravitasDirect: number; gravitasReal: number; gravitasDisplay: number } | undefined,
 ): string {
-	const lines = content.split(/\r?\n/);
+	const lines = content.replace(/^\n+/, '').split(/\r?\n/);
 	const existing = findGravitasProvenanceSection(content);
 	const cleaned = existing
 		? [...lines.slice(0, existing.startLine), ...lines.slice(existing.endLine)]
@@ -183,7 +183,7 @@ export function applyEvidenceGravitasLevel(content: string, kindPercent: number)
 	if (!section) {
 		return content + '\n\n## Gravitas (generated)\n\n' + derived + '\n';
 	}
-	const lines = content.split(/\r?\n/);
+	const lines = content.replace(/^\n+/, '').split(/\r?\n/);
 	const out: string[] = [];
 	let inSection = false;
 	let wroteRows = false;

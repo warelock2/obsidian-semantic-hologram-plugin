@@ -692,6 +692,8 @@ export class SemanticHologramView extends ItemView {
 	private touchTappedNode = -1;
 	private touchGesture: 'none' | 'pan' | 'pin' | 'group' | 'select' | 'rotate' = 'none';
 	private candidateNodes: Set<string> = new Set();
+	/** Node paths temporarily highlighted as candidates when hovering a table spread entry. */
+	private hoveredTableSpreadNodes: Set<string> = new Set();
 	/** Freeze other nodes until dragged node settles (post-drag unlock). */
 	private freezeOthersUntilSettled = false;
 	private draggedNodeIndex = -1;
@@ -4081,7 +4083,7 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 				const sy = h / 2 + p.y * s;
 				const depth = (p.z + R) / (2 * R || 1);
 				const isHighlighted = this.hoverIndex === i || highlighted.has(i);
-				const isCandidate = this.candidateNodes.has(node.path);
+				const isCandidate = this.candidateNodes.has(node.path) || this.hoveredTableSpreadNodes.has(node.path);
 				const isFaded = (this.hoverIndex >= 0 && !isHighlighted) || this.isNodeFadedByAnchors(i);
 				const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
 				const isCut = this.clipboard.action === 'cut' && this.clipboard.paths.has(node.path);
@@ -4197,6 +4199,132 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 					this.edgeStroke(l, sel, highlighted, distances, edgeNormZ),
 				);
 			}
+
+			// Table-space multi-segment arrow (single polyline): drawn before nodes with arrowhead
+			// so it renders behind them; styled green (non-overlapping) / bright white (selected/overlapping).
+			const deactivated = new Set(this.plugin.settings.deactivatedTableSpreads ?? []);
+			const selectedTs = ((this.plugin.settings.selectedTableSpaces ?? []) as string[]).filter(name => !deactivated.has(name));
+			if (selectedTs.length > 0) {
+				for (const tsName of selectedTs) {
+					const nodesInTs: number[] = [];
+					const spreadTag = `table-spread-${tsName}`;
+					for (let ni = 0; ni < this.nodes.length; ni++) {
+						const node = this.nodes[ni];
+						if (!node) continue;
+						const file = this.app.vault.getAbstractFileByPath(node.path);
+						if (file && file instanceof TFile) {
+							const metaCache = this.app.metadataCache.getFileCache(file);
+							const fm = (metaCache?.frontmatter ?? {}) as Record<string, unknown>;
+							const indexes = (fm.tableSpreadIndexes ?? {}) as Record<string, number>;
+							const tags = ((fm.tags ?? []) as string[]);
+							if (indexes[tsName] != null || tags.includes(spreadTag)) {
+								nodesInTs.push(ni);
+							}
+						}
+					}
+					if (nodesInTs.length < 2) continue;
+					const isOverlapping = nodesInTs.some(i => {
+						const n = this.nodes[i];
+						return n && n.selected;
+					});
+					const strokeColor = isOverlapping ? '#ffffff' : '#00cc44';
+					ctx.save();
+					ctx.strokeStyle = strokeColor;
+					ctx.lineWidth = 2.5;
+					ctx.beginPath();
+					for (let k = 0; k < nodesInTs.length; k++) {
+						const idx = nodesInTs[k];
+						const rp = rotated[idx!];
+						if (!rp) continue;
+						const s = this.projectionScale(rp.z);
+						if (!Number.isFinite(s)) continue;
+						const sx = w / 2 + rp.x * s;
+						const sy = h / 2 + rp.y * s;
+						if (k === 0) {
+							ctx.moveTo(sx, sy);
+						} else {
+							ctx.lineTo(sx, sy);
+						}
+					}
+					ctx.stroke();
+					ctx.restore();
+					// Add an arrowhead at the end of the line
+					const lastIdx = nodesInTs[nodesInTs.length - 1]!;
+					const secondLastIdx = nodesInTs[nodesInTs.length - 2]!;
+					const rpLast = rotated[lastIdx];
+					const rpPrev = rotated[secondLastIdx];
+					if (rpLast && rpPrev) {
+						const sLast = this.projectionScale(rpLast.z);
+						const sPrev = this.projectionScale(rpPrev.z);
+						if (!Number.isFinite(sLast) || !Number.isFinite(sPrev)) continue;
+						const sxLast = w / 2 + rpLast.x * sLast;
+						const syLast = h / 2 + rpLast.y * sLast;
+						const sxPrev = w / 2 + rpPrev.x * sPrev;
+						const syPrev = h / 2 + rpPrev.y * sPrev;
+						const dx = sxLast - sxPrev;
+						const dy = syLast - syPrev;
+						const len = Math.sqrt(dx * dx + dy * dy);
+						if (len > 0) {
+							const arrowheadSize = 10;
+							const ux = dx / len;
+							const uy = dy / len;
+							ctx.save();
+							ctx.fillStyle = strokeColor;
+							ctx.beginPath();
+							ctx.moveTo(sxLast, syLast);
+							ctx.lineTo(sxLast - arrowheadSize * ux + arrowheadSize * 0.5 * uy, syLast - arrowheadSize * uy - arrowheadSize * 0.5 * ux);
+							ctx.lineTo(sxLast - arrowheadSize * ux - arrowheadSize * 0.5 * uy, syLast - arrowheadSize * uy + arrowheadSize * 0.5 * ux);
+							ctx.closePath();
+							ctx.fill();
+							ctx.restore();
+						}
+					}
+				}
+			}
+
+			// Hover preview: temporarily draw arrow + highlight nodes for hovered table spread
+			const hoveredTs = this.plugin.hoveredTableSpread;
+			if (hoveredTs && !deactivated.has(hoveredTs) && !selectedTs.includes(hoveredTs)) {
+				const nodesInHover: number[] = [];
+				const hoverTag = `table-spread-${hoveredTs}`;
+				for (let ni = 0; ni < this.nodes.length; ni++) {
+					const node = this.nodes[ni];
+					if (!node) continue;
+					const file = this.app.vault.getAbstractFileByPath(node.path);
+					if (file && file instanceof TFile) {
+						const metaCache = this.app.metadataCache.getFileCache(file);
+						const fm = (metaCache?.frontmatter ?? {}) as Record<string, unknown>;
+						const indexes = (fm.tableSpreadIndexes ?? {}) as Record<string, number>;
+						const tags = ((fm.tags ?? []) as string[]);
+						if (indexes[hoveredTs] != null || tags.includes(hoverTag)) {
+							nodesInHover.push(ni);
+						}
+					}
+				}
+				if (nodesInHover.length >= 2) {
+					ctx.save();
+					ctx.strokeStyle = '#00cc44';
+					ctx.lineWidth = 2.5;
+					ctx.setLineDash([6, 4]);
+					ctx.beginPath();
+					for (let k = 0; k < nodesInHover.length; k++) {
+						const idx = nodesInHover[k];
+						const rp = rotated[idx!];
+						if (!rp) continue;
+						const s = this.projectionScale(rp.z);
+						if (!Number.isFinite(s)) continue;
+						const sx = w / 2 + rp.x * s;
+						const sy = h / 2 + rp.y * s;
+						if (k === 0) ctx.moveTo(sx, sy);
+						else ctx.lineTo(sx, sy);
+					}
+					ctx.stroke();
+					ctx.setLineDash([]);
+					ctx.restore();
+					// Nodes are already marked as candidates via hoveredTableSpreadNodes (isCandidate check)
+				}
+			}
+
 			ctx.globalAlpha = 1;
 			if (this.edgeDraggingSourceNode && this.canvas) {
 				const canvasRect = this.canvas.getBoundingClientRect();
@@ -4228,13 +4356,154 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 			const sx = this.toScreenX(node.x);
 			const sy = this.toScreenY(node.y);
 			const isHighlighted = this.hoverIndex === i || highlighted.has(i);
-			const isCandidate = this.candidateNodes.has(node.path);
+			const isCandidate = this.candidateNodes.has(node.path) || this.hoveredTableSpreadNodes.has(node.path);
 			const isFaded = (this.hoverIndex >= 0 && !isHighlighted) || this.isNodeFadedByAnchors(i);
 			const isSpecial = node.pinned || node.selected || isHighlighted || isCandidate;
 			const isCut = this.clipboard.action === 'cut' && this.clipboard.paths.has(node.path);
 			if (isCut) ctx.globalAlpha = 0.4;
 			const r = Math.max(3, node.radius * this.viewScale * (isHighlighted ? 1.5 : 1.0));
 			
+			// Table-space multi-segment arrow (single polyline): drawn before nodes with arrowhead
+			// so it renders behind them; styled green (non-overlapping) / bright white (selected/overlapping).
+			// Uses the same screen-position pipeline as nodes (toScreenX/toScreenY in 2D,
+			// rotatePoint+projectionScale in 3D) so it tracks camera pan/dolly/zoom correctly.
+			const deactivated = new Set(this.plugin.settings.deactivatedTableSpreads ?? []);
+			const selectedTs = ((this.plugin.settings.selectedTableSpaces ?? []) as string[]).filter(name => !deactivated.has(name));
+			if (selectedTs.length > 0) {
+				for (const tsName of selectedTs) {
+					// Read nodes for this table space from frontmatter (check both tableSpreadIndexes and tags)
+					const nodesInTs: number[] = [];
+					const spreadTag = `table-spread-${tsName}`;
+					for (let ni = 0; ni < this.nodes.length; ni++) {
+						const node = this.nodes[ni];
+						if (!node) continue;
+						const file = this.app.vault.getAbstractFileByPath(node.path);
+						if (file && file instanceof TFile) {
+							const metaCache = this.app.metadataCache.getFileCache(file);
+							const fm = (metaCache?.frontmatter ?? {}) as Record<string, unknown>;
+							const indexes = (fm.tableSpreadIndexes ?? {}) as Record<string, number>;
+							const tags = ((fm.tags ?? []) as string[]);
+							if (indexes[tsName] != null || tags.includes(spreadTag)) {
+								nodesInTs.push(ni);
+							}
+						}
+					}
+					if (nodesInTs.length < 2) continue;
+					// Draw a multi-segment polyline through these nodes
+					const isOverlapping = nodesInTs.some(i => {
+						const n = this.nodes[i];
+						return n && n.selected;
+					});
+					const strokeColor = isOverlapping ? '#ffffff' : '#00cc44';
+					ctx.save();
+					ctx.strokeStyle = strokeColor;
+					ctx.lineWidth = 2.5;
+					ctx.beginPath();
+					for (let k = 0; k < nodesInTs.length; k++) {
+						const idx = nodesInTs[k];
+						const nodeObj2 = this.nodes[idx!];
+						if (!nodeObj2) continue;
+						let sx: number, sy: number;
+						if (this.is3D) {
+							const rp = this.rotatePoint(nodeObj2.x, nodeObj2.y, nodeObj2.z, this.target[0], this.target[1], this.target[2]);
+							sx = this.toScreenX(rp.x, rp.z);
+							sy = this.toScreenY(rp.y, rp.z);
+						} else {
+							sx = this.toScreenX(nodeObj2.x);
+							sy = this.toScreenY(nodeObj2.y);
+						}
+						if (k === 0) {
+							ctx.moveTo(sx, sy);
+						} else {
+							ctx.lineTo(sx, sy);
+						}
+					}
+					ctx.stroke();
+					ctx.restore();
+					// Add an arrowhead at the end of the line using screen coordinates
+					const lastIdx = nodesInTs[nodesInTs.length - 1]!;
+					const secondLastIdx = nodesInTs[nodesInTs.length - 2]!;
+					const lastNode = this.nodes[lastIdx];
+					const secondLastNode = this.nodes[secondLastIdx];
+					if (lastNode && secondLastNode) {
+						let sxLast: number, syLast: number, sxPrev: number, syPrev: number;
+						if (this.is3D) {
+							const rpLast = this.rotatePoint(lastNode.x, lastNode.y, lastNode.z, this.target[0], this.target[1], this.target[2]);
+							const rpPrev = this.rotatePoint(secondLastNode.x, secondLastNode.y, secondLastNode.z, this.target[0], this.target[1], this.target[2]);
+							sxLast = this.toScreenX(rpLast.x, rpLast.z);
+							syLast = this.toScreenY(rpLast.y, rpLast.z);
+							sxPrev = this.toScreenX(rpPrev.x, rpPrev.z);
+							syPrev = this.toScreenY(rpPrev.y, rpPrev.z);
+						} else {
+							sxLast = this.toScreenX(lastNode.x);
+							syLast = this.toScreenY(lastNode.y);
+							sxPrev = this.toScreenX(secondLastNode.x);
+							syPrev = this.toScreenY(secondLastNode.y);
+						}
+						const dx = sxLast - sxPrev;
+						const dy = syLast - syPrev;
+						const len = Math.sqrt(dx * dx + dy * dy);
+						if (len > 0) {
+							const arrowheadSize = 10;
+							const ux = dx / len;
+							const uy = dy / len;
+							ctx.save();
+							ctx.fillStyle = strokeColor;
+							ctx.beginPath();
+							ctx.moveTo(sxLast, syLast);
+							ctx.lineTo(sxLast - arrowheadSize * ux + arrowheadSize * 0.5 * uy, syLast - arrowheadSize * uy - arrowheadSize * 0.5 * ux);
+							ctx.lineTo(sxLast - arrowheadSize * ux - arrowheadSize * 0.5 * uy, syLast - arrowheadSize * uy + arrowheadSize * 0.5 * ux);
+							ctx.closePath();
+							ctx.fill();
+							ctx.restore();
+						}
+					}
+				}
+			}
+
+			// Hover preview: temporarily draw arrow + highlight nodes for hovered table spread
+			const deactivated2 = new Set(this.plugin.settings.deactivatedTableSpreads ?? []);
+			const hoveredTs2 = this.plugin.hoveredTableSpread;
+			const selectedTs2 = ((this.plugin.settings.selectedTableSpaces ?? []) as string[]).filter(name => !deactivated2.has(name));
+			if (hoveredTs2 && !deactivated2.has(hoveredTs2) && !selectedTs2.includes(hoveredTs2)) {
+				const nodesInHover2: number[] = [];
+				const hoverTag2 = `table-spread-${hoveredTs2}`;
+				for (let ni = 0; ni < this.nodes.length; ni++) {
+					const node = this.nodes[ni];
+					if (!node) continue;
+					const file = this.app.vault.getAbstractFileByPath(node.path);
+					if (file && file instanceof TFile) {
+						const metaCache = this.app.metadataCache.getFileCache(file);
+						const fm = (metaCache?.frontmatter ?? {}) as Record<string, unknown>;
+						const indexes = (fm.tableSpreadIndexes ?? {}) as Record<string, number>;
+						const tags = ((fm.tags ?? []) as string[]);
+						if (indexes[hoveredTs2] != null || tags.includes(hoverTag2)) {
+							nodesInHover2.push(ni);
+						}
+					}
+				}
+				if (nodesInHover2.length >= 2) {
+					ctx.save();
+					ctx.strokeStyle = '#00cc44';
+					ctx.lineWidth = 2.5;
+					ctx.setLineDash([6, 4]);
+					ctx.beginPath();
+					for (let k = 0; k < nodesInHover2.length; k++) {
+						const idx = nodesInHover2[k];
+						const nodeObj2 = this.nodes[idx!];
+						if (!nodeObj2) continue;
+						const sx = this.toScreenX(nodeObj2.x);
+						const sy = this.toScreenY(nodeObj2.y);
+						if (k === 0) ctx.moveTo(sx, sy);
+						else ctx.lineTo(sx, sy);
+					}
+					ctx.stroke();
+					ctx.setLineDash([]);
+					ctx.restore();
+					// Nodes are already marked as candidates via hoveredTableSpreadNodes (isCandidate check)
+				}
+			}
+
 			const viewSettings = this.plugin.settings;
 			const grav = node.gravitasDisplay;
 			const halo = node.confidenceTotal;
@@ -6835,7 +7104,7 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 		} else if (key === '[' && !e.repeat) {
 			e.preventDefault();
 			const cur = this.plugin.settings.levelHighlight ?? 0;
-			const next = Math.max(0, cur - 1);
+			const next = Math.min(6, cur + 1);
 			if (next !== cur) {
 				void this.plugin.setLevelHighlight(next);
 				this.showToast(`Layer: ${['Source', 'Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'][next] ?? next}`);
@@ -6848,7 +7117,7 @@ console.log('TEST_MARKER_SPHERE_CODE_REACHED');
 		} else if (key === ']' && !e.repeat) {
 			e.preventDefault();
 			const cur = this.plugin.settings.levelHighlight ?? 0;
-			const next = Math.min(6, cur + 1);
+			const next = Math.max(0, cur - 1);
 			if (next !== cur) {
 				void this.plugin.setLevelHighlight(next);
 				this.showToast(`Layer: ${['Source', 'Concept', 'Idea', 'Pattern', 'Topic', 'Domain', 'Field'][next] ?? next}`);
@@ -7397,8 +7666,8 @@ private selectHovered(): void {
 			'<div class="sh-help-row"><span class="sh-help-key">3</span><span class="sh-help-desc">switch to 3D mode</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">4</span><span class="sh-help-desc">switch to nD-planar mode</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">5</span><span class="sh-help-desc">switch to nD-spherical mode</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">[</span><span class="sh-help-desc">decrease layer highlight (level)</span></div>' +
-			'<div class="sh-help-row"><span class="sh-help-key">]</span><span class="sh-help-desc">increase layer highlight (level)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">[</span><span class="sh-help-desc">increase layer highlight (level)</span></div>' +
+			'<div class="sh-help-row"><span class="sh-help-key">]</span><span class="sh-help-desc">decrease layer highlight (level)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">l</span><span class="sh-help-desc">toggle layer rendering on/off</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">f</span><span class="sh-help-desc">toggle faces (3D)</span></div>' +
 			'<div class="sh-help-row"><span class="sh-help-key">Shift+f</span><span class="sh-help-desc">fit graph to view; while previewing a hologram: keep that view</span></div>' +
@@ -7481,7 +7750,7 @@ private selectHovered(): void {
 			if (!this.selectDragOccurred) {
 				if (this.peekActive) {
 					this.commitHologramPeek({ select: true });
-				} else if (this.hoverIndex < 0 && this.candidateNodes.size > 0) {
+				} else if (this.hoverIndex < 0 && (this.candidateNodes.size > 0 || this.hoveredTableSpreadNodes.size > 0)) {
 					this.selectCandidates();
 				} else {
 					this.selectHovered();
@@ -7722,6 +7991,19 @@ private selectHovered(): void {
 		}
 	}
 
+	setHoveredTableSpreadNodes(paths: string[]): void {
+		this.hoveredTableSpreadNodes = new Set(paths);
+		this.requestRedraw();
+	}
+
+	clearHoveredTableSpreadNodes(): void {
+		if (this.hoveredTableSpreadNodes.size === 0) {
+			return;
+		}
+		this.hoveredTableSpreadNodes.clear();
+		this.requestRedraw();
+	}
+
 	setCandidateNodes(paths: string[]): void {
 		this.candidateNodes = new Set(paths);
 		if (paths.length > 0) {
@@ -7875,18 +8157,24 @@ private selectHovered(): void {
 		this.wake();
 	}
 
+	public selectHoveredTableSpreadNodes(): void {
+		this.selectCandidates();
+	}
+
 	private selectCandidates(): void {
-		if (this.candidateNodes.size === 0) {
+		const hasCandidates = this.candidateNodes.size > 0 || this.hoveredTableSpreadNodes.size > 0;
+		if (!hasCandidates) {
 			return;
 		}
 		for (let i = 0; i < this.nodes.length; i++) {
 			const n = this.nodes[i];
-			if (n && this.candidateNodes.has(n.path)) {
+			if (n && (this.candidateNodes.has(n.path) || this.hoveredTableSpreadNodes.has(n.path))) {
 				n.selected = true;
 				this.selected.add(i);
 			}
 		}
 		this.candidateNodes.clear();
+		this.hoveredTableSpreadNodes.clear();
 		this.updateCursor();
 		this.wake();
 	}

@@ -140,6 +140,14 @@ export interface SemanticHologramSettings {
 	/** Injection source for the scan, as a note path. Empty means no injection. */
 	scanSource: string;
 	selectedHolograms: string[];
+	/** Names of table spaces currently selected in the panel (in creation order). */
+	selectedTableSpaces: string[];
+	/** Candidate table spreads (yellow, hover+A to activate). */
+	candidateTableSpreads: string[];
+	/** Activated table spreads (active, green/white arrows). */
+	activatedTableSpreads: string[];
+	/** Deactivated table spreads (greyed out, no arrows, excluded from scan). */
+	deactivatedTableSpreads: string[];
 	displayMode: 'cognitive' | 'perceptive';
 	incomingFolderPath: string;
 
@@ -242,6 +250,10 @@ export const DEFAULT_SETTINGS: SemanticHologramSettings = {
 	},
 	scanSource: '',
 	selectedHolograms: [],
+	selectedTableSpaces: [],
+	candidateTableSpreads: [],
+	activatedTableSpreads: [],
+	deactivatedTableSpreads: [],
 	displayMode: 'cognitive',
 
 	separationDistance: 500,

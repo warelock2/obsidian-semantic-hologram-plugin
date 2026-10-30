@@ -1041,6 +1041,36 @@
     color: var(--text-on-accent);
 }
 
+.sh-table-space-row {
+    display: flex;
+    align-items: center;
+    padding: 5px 8px;
+    margin-bottom: 2px;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.sh-table-space-row:hover {
+    background: var(--background-modifier-hover);
+}
+
+.sh-table-space-row.is-active {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent);
+}
+
+.sh-table-space-row.is-candidate {
+    background: var(--background-modifier-yellow);
+    border-left: 3px solid var(--text-yellow);
+}
+
+.sh-table-space-row.is-deactivated {
+    opacity: 0.5;
+    background: var(--background-modifier-gray);
+    border-left: 3px solid var(--text-muted);
+}
+
 .sh-hologram-label {
     overflow: hidden;
     text-overflow: ellipsis;

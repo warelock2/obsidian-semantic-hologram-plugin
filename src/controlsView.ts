@@ -1094,8 +1094,18 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 					this.plugin.settings.deactivatedTableSpreads = Array.from(deactivatedSpreads);
 					this.plugin.settings.selectedTableSpaces = Array.from(selectedTs);
 					void this.plugin.saveSettings();
-					// Permanently remove from vault: strip tableSpreadIndexes entry + tag from all affected notes
+					// Collect affected node paths for cleanup
+					const affectedPaths: string[] = [];
 					const spreadTag = `table-spread-${name}`;
+					for (const f of this.app.vault.getMarkdownFiles()) {
+						const fm = (this.app.metadataCache.getFileCache(f)?.frontmatter ?? {}) as Record<string, unknown>;
+						const indexes = (fm.tableSpreadIndexes ?? {}) as Record<string, number>;
+						const tags = ((fm.tags ?? []) as string[]);
+						if (indexes[name] != null || tags.includes(spreadTag)) {
+							affectedPaths.push(f.path);
+						}
+					}
+					// Permanently remove from vault: strip tableSpreadIndexes entry + tag from all affected notes
 					for (const f of this.app.vault.getMarkdownFiles()) {
 						const fm = (this.app.metadataCache.getFileCache(f)?.frontmatter ?? {}) as Record<string, unknown>;
 						const indexes = (fm.tableSpreadIndexes ?? {}) as Record<string, number>;
@@ -1130,6 +1140,8 @@ const initialIsLends = (this.plugin.settings as any).defaultRelType === 'epistem
 						else newRow.addClass('is-active');
 						newRow.createSpan({ text: n, cls: 'sh-table-space-label' });
 					}
+					// Clean up candidate/selection state for deleted spread's nodes
+					this.getView()?.cleanupDeletedTableSpread(affectedPaths);
 					this.getView()?.requestRedraw();
 				}
 			});

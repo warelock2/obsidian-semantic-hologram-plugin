@@ -8161,6 +8161,40 @@ private selectHovered(): void {
 		this.selectCandidates();
 	}
 
+	/**
+	 * Clean up candidate and selection state for nodes of a deleted table spread.
+	 * Removes them from candidateNodes, hoveredTableSpreadNodes, and selected.
+	 */
+	public cleanupDeletedTableSpread(nodePaths: string[]): void {
+		const pathSet = new Set(nodePaths);
+		// Remove from candidateNodes
+		for (const p of pathSet) {
+			this.candidateNodes.delete(p);
+		}
+		// Remove from hoveredTableSpreadNodes
+		for (const p of pathSet) {
+			this.hoveredTableSpreadNodes.delete(p);
+		}
+		// Deselect any selected nodes that belong to this spread
+		for (let i = 0; i < this.nodes.length; i++) {
+			const n = this.nodes[i];
+			if (n && pathSet.has(n.path) && this.selected.has(i)) {
+				n.selected = false;
+				this.selected.delete(i);
+			}
+		}
+		// Clear hoveredTableSpread if it was this spread
+		if (this.plugin.hoveredTableSpread && nodePaths.length > 0) {
+			// We can't easily check if hoveredTableSpread matches, so just clear hover state
+			// if the deleted spread's nodes were in hoveredTableSpreadNodes
+			if (this.hoveredTableSpreadNodes.size === 0) {
+				this.plugin.hoveredTableSpread = null;
+			}
+		}
+		this.updateCursor();
+		this.wake();
+	}
+
 	private selectCandidates(): void {
 		const hasCandidates = this.candidateNodes.size > 0 || this.hoveredTableSpreadNodes.size > 0;
 		if (!hasCandidates) {

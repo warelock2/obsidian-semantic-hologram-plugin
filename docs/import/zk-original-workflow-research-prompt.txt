@@ -1,0 +1,187 @@
+Your objective is to reconstruct, as accurately and comprehensively as possible, how Luhmann actually built, organized, maintained, and used his Zettelkasten.
+
+PRIORITY: PRIMARY SOURCES AND MACHINE-READABLE DATA
+
+Start with these resources, prioritizing structured data, searchable transcriptions, JSON, XML, and HTML over scanned documents and secondary summaries.
+
+1. NIKLAS LUHMANN ARCHIVE
+   https://niklas-luhmann-archiv.de/bestand
+
+   This is the authoritative archival source for Luhmann's
+   Zettelkasten, manuscripts, bibliography, and related materials.
+
+   Explore the digital Zettelkasten collection, including:
+   - Individual note transcriptions.
+   - Original note identifiers and addresses.
+   - Folgezettel sequences.
+   - Cross-references.
+   - Bibliographic references.
+   - Indexes and organizational metadata.
+   - Relationships between notes.
+
+2. NIKLAS LUHMANN ARCHIVE API AND DOCUMENTATION
+   https://niklas-luhmann-archiv.de/projekt/dokumentation
+
+   Investigate the API and its machine-readable data formats.
+   Prefer JSON and TEI-XML wherever available.
+
+   Preserve original identifiers, references, addresses,
+   metadata, and relationships. Do not flatten the collection
+   into an unstructured collection of text documents.
+
+3. LUHMANN'S 1968 MANUSCRIPT:
+   TECHNIK DES ZETTELKASTENS
+
+   https://niklas-luhmann-archiv.de/bestand/manuskripte/manuskript/MS_2906_0004
+
+   Use the archival transcription and machine-readable versions
+   where available.
+
+   Treat this as a primary source describing the construction
+   and operation of his system.
+
+4. LUHMANN'S 1981 ESSAY:
+   COMMUNICATING WITH SLIP BOXES
+
+   English translation:
+   https://luhmann.surge.sh/communicating-with-slip-boxes
+
+   Analyze Luhmann's own explanation of the intellectual and
+   operational role of his Zettelkasten.
+
+5. ENGLISH TRANSLATIONS OF LUHMANN'S NOTES
+
+   https://zettelkasten.de/posts/luhmanns-zettel-translated/
+
+   Examine the translated notes as supplementary primary-source
+   material. Preserve their original note references where
+   possible.
+
+6. JOHANNES F. K. SCHMIDT (2015):
+   DER ZETTELKASTEN NIKLAS LUHMANNS ALS
+   ÜBERRASCHUNGSGENERATOR
+
+   https://www.uni-bielefeld.de/soz/luhmann-archiv/pdf/jschmidt_zettelkasten-als-uberraschungsgenerator.pdf
+
+   Use this scholarly analysis to understand the actual
+   organization and operation of Luhmann's collection.
+
+   This is a secondary source. Distinguish Schmidt's
+   interpretations from Luhmann's own statements and practices.
+
+7. SUPPLEMENTARY MACHINE-READABLE DATASET
+
+   https://github.com/martijnaslander/luhmann-zettelkasten
+
+   Investigate the scripts, JSON data, SQLite database,
+   and network-analysis material.
+
+   Treat this as a convenient data extraction and analysis
+   project, not as an authoritative archival source.
+
+RESEARCH REQUIREMENTS
+
+A. RECONSTRUCT THE ACTUAL WORKFLOW
+
+Determine how Luhmann:
+- Captured fleeting ideas.
+- Recorded observations and spontaneous thoughts.
+- Processed reading notes.
+- Recorded bibliographic information.
+- Formulated permanent notes.
+- Determined note granularity.
+- Assigned note addresses.
+- Created Folgezettel sequences.
+- Established cross-references.
+- Used indexes and retrieval mechanisms.
+- Maintained and expanded the collection.
+- Retrieved and combined notes when developing publications.
+
+B. RECONSTRUCT THE INFORMATION ARCHITECTURE
+
+Identify and distinguish:
+- Note identifiers and addresses.
+- Folgezettel sequences.
+- Cross-references.
+- Bibliographic records.
+- Index entries.
+- Topical relationships.
+- Logical dependencies.
+- Conceptual associations.
+- Continuations and developments of existing arguments.
+
+Do not assume that all these relationships represent
+the same kind of connection.
+
+C. DISTINGUISH FACT FROM INTERPRETATION
+
+For every significant conclusion:
+- Identify its source.
+- Prefer direct archival evidence.
+- Distinguish explicit instructions from observed practices.
+- Distinguish Luhmann's actual methodology from modern
+  Zettelkasten conventions.
+- Identify ambiguities and conflicting interpretations.
+- Do not invent procedures that the evidence does not support.
+
+In particular, do not automatically impose the popular
+modern three-stage workflow of fleeting notes, literature
+notes, and permanent notes onto Luhmann's actual practices.
+
+D. ANALYZE THE SYSTEM AS A WHOLE
+
+Treat the Zettelkasten as both:
+1. An information architecture.
+2. A human intellectual workflow.
+
+Determine which properties emerged from the physical
+limitations of paper cards and which represented deliberate
+intellectual or organizational design decisions.
+
+Identify the essential principles that would remain valuable
+in a modern digital implementation.
+
+E. PRODUCE A COMPREHENSIVE TECHNICAL DESCRIPTION
+
+Organize the research into:
+
+1. Historical background and evolution.
+2. Physical construction and organization.
+3. Note-taking and note-processing workflows.
+4. Note granularity and atomicity.
+5. Addressing and Folgezettel.
+6. Cross-referencing and relationships.
+7. Bibliographic management.
+8. Indexing and retrieval.
+9. Maintenance and long-term evolution.
+10. Luhmann's intellectual model of the system.
+11. Evidence-supported workflow reconstruction.
+12. Modern digital implementation considerations.
+13. Common misconceptions about the Zettelkasten.
+
+SOURCE HANDLING
+
+- Preserve source URLs and bibliographic details.
+- Cite archival note identifiers wherever possible.
+- Preserve original German terminology alongside English
+  translations.
+- Do not silently substitute machine translations for
+  published translations.
+- Identify whether a source is primary or secondary.
+- Record uncertainty rather than guessing.
+- Prefer downloadable machine-readable source material.
+- If a resource is inaccessible, report that limitation
+  and continue with the remaining sources.
+
+FINAL OBJECTIVE
+
+Produce an evidence-based reconstruction of how Niklas
+Luhmann's Zettelkasten actually worked.
+
+The objective is NOT to explain how someone should build
+a generic modern Zettelkasten.
+
+The objective is to understand Luhmann's actual system,
+its operational disciplines, its information architecture,
+and the intellectual mechanisms that made it productive.
+

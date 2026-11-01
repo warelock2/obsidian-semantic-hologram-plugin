@@ -1,0 +1,8 @@
+{
+  "title": "Linking: Incentives and Compliance",
+  "prompt": "Read the following text. Write a zettel that relates to your first note on authority. You MUST provide a thematic link context (2-5 word label) explaining how this connects to note 1. Run: zk link",
+  "text": "Barnard's theory of incentives emphasizes that organizational compliance is maintained through a system of inducements. When an order falls outside the 'zone of indifference,' the organization must offer sufficient incentives (material, social, or personal) to secure cooperation. This suggests that authority is not a static property of a position but a dynamic equilibrium between the demands of the system and the inducements offered to the participant. Without adequate incentives, the 'zone of indifference' shrinks to zero, and the system must rely on coercion.",
+  "ideal_synthesis": "Barnard's incentive theory complements Simon's zone of indifference: when orders fall outside the zone, organizations must offer inducements to maintain compliance. Authority is thus a dynamic equilibrium between system demands and participant incentives, not a static positional property. Without sufficient incentives, the zone of indifference collapses to zero.",
+  "citekey": "Barnard1938",
+  "hint": "Focus on how incentives relate to the 'zone of indifference' from your first note."
+}

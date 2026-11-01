@@ -1,0 +1,8 @@
+{
+  "title": "Query: Informal Resistance",
+  "prompt": "Read the following text. Write a zettel that conflicts with or complicates your previous notes on authority. You MUST add an entry to the Register under the keyword 'Authority' (max 3 entry points). Run: zk query",
+  "text": "Roethlisberger and Dickson's Hawthorne studies revealed that informal groups within organizations develop their own norms and resistances that override formal authority. Workers' output was not determined by managerial incentives or positional authority, but by the unwritten codes of their peer groups. This suggests that the 'zone of indifference' is not just an individual psychological threshold but a socially constructed boundary maintained by group norms. Formal authority exists only insofar as informal groups permit it.",
+  "ideal_synthesis": "Roethlisberger and Dickson's Hawthorne studies complicate both Simon and Barnard: informal peer groups develop norms that override formal authority. Output is determined by group codes, not managerial incentives. The 'zone of indifference' is socially constructed, not individually psychological. Formal authority exists only where informal groups permit it.",
+  "citekey": "Roethlisberger1939",
+  "hint": "Focus on how informal groups limit or redefine formal authority."
+}

@@ -1,0 +1,8 @@
+{
+  "title": "Intake: Organizational Authority",
+  "prompt": "Read the following text. Write ONE atomic zettel (100-200 words) in your own words. Identify the core surprise. Then run: zk intake",
+  "text": "Simon's theory of organizational authority posits that an individual's acceptance of authority is a function of their 'zone of indifference'—the range of decisions they accept without question. When an order falls outside this zone, the individual must either comply out of fear or reject it. Parsons adds that authority is not just about power but about the internalization of norms; the subordinate accepts the superior's decision because they believe the superior has the right to make it. However, this creates a paradox: authority requires the subordinate to surrender autonomy, yet the subordinate must retain enough autonomy to 'choose' to comply. If compliance is forced, it is no longer authority but coercion.",
+  "ideal_synthesis": "Authority in organizations depends on the subordinate's 'zone of indifference'—the range of decisions accepted without question. Beyond this zone, compliance becomes coerced, not authorized. Parsons adds that authority requires the internalization of norms, not just power. The paradox: authority requires surrendering autonomy, yet the subordinate must retain autonomy to 'choose' compliance. If forced, it ceases to be authority and becomes coercion.",
+  "citekey": "Simon1947",
+  "hint": "Focus on the paradox of authority: it requires both autonomy and its surrender."
+}

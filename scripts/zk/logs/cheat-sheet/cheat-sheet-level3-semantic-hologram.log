@@ -1,0 +1,644 @@
+Logging to: /home/warelock/projects/obsidian-semantic-hologram-plugin/scripts/zk/logs/cheat-sheet/cheat-sheet-level3-semantic-hologram.log
+
+============================================================
+  ZK Trainer — Level 3
+  Mode: semantic-hologram
+============================================================
+
+────────────────────────────────────────────────────────────
+Quote: "The hologram thinks in 3D. Connections that are invisible in text become visible in space."
+— Semantic Hologram project documentation
+────────────────────────────────────────────────────────────
+Principle: Spatial thinking: the 3D visualization reveals structure that linear text hides.
+────────────────────────────────────────────────────────────
+
+
+This level teaches the Zettelkasten through hands-on practice.
+You will be told exactly what to type at each step.
+Type '?' at any prompt to chat with the AI.
+Type 'resume' to continue after chatting.
+
+Loaded seed database: level3-semantic-hologram.db
+
+────────────────────────────────────────────────────────────
+  Dataset 1 of 3
+────────────────────────────────────────────────────────────
+
+>>> Step 1: Intake
+
+=== Intake: Organizational Authority ===
+
+Prompt: Read the following text. Write ONE atomic zettel in your own words.
+
+Text:
+Simon's theory of organizational authority posits that an individual's acceptance of authority is a function of their 'zone of indifference'—the range of decisions they accept without question. When an order falls outside this zone, the individual must either comply out of fear or reject it. Parsons adds that authority is not just about power but about the internalization of norms; the subordinate accepts the superior's decision because they believe the superior has the right to make it. However, this creates a paradox: authority requires the subordinate to surrender autonomy, yet the subordinate must retain enough autonomy to 'choose' to comply. If compliance is forced, it is no longer authority but coercion.
+
+Hint: Focus on the paradox of authority: it requires both autonomy and its surrender.
+
+Type this (or your own synthesis):
+> Authority in organizations depends on the subordinate zone of indifference. Beyond this zone compliance becomes coerced not authorized. Parsons adds that authority requires internalization of norms not just power. The paradox authority requires surrendering autonomy yet the subordinate must retain autonomy to choose compliance. If forced it ceases to be authority and becomes coercion.
+
+────────────────────────────────────────────────────────────
+Quote: "A zettel is an atomic unit of thought. One idea, one note, written in your own words."
+— Ahrens, 'How to Take Smart Notes' (2017)
+────────────────────────────────────────────────────────────
+Principle: Atomicity: each note holds one idea. This is shared with Luhmann's system.
+────────────────────────────────────────────────────────────
+
+
+Enter your synthesized zettel body: Authority in organizations depends on the subordinate zone of indifference. Beyond this zone compliance becomes coerced not authorized. Parsons adds that authority requires internalization of norms not just power. The paradox authority requires surrendering autonomy yet the subordinate must retain autonomy to choose compliance. If forced it ceases to be authority and becomes coercion.
+
+✓ Zettel 'zettel-1' created. Body: 54 words.
+Run 'zk trainer nextstep' to advance to Filing.
+
+>>> Advancing to Filing
+
+✓ Advanced to: filing
+
+>>> Step 2: Filing
+
+=== Filing: zettel-1 ===
+Current path: /1/
+Body: Authority in organizations depends on the subordinate zone of indifference. Beyond this zone complia...
+
+Existing zettels:
+  zettel-a  (/1/)
+  zettel-1  (/1/)
+  zettel-b  (/1/a/)
+  zettel-c  (/1/a/1/)
+  zettel-t  (/10/)
+  zettel-d  (/2/)
+  zettel-e  (/2/a/)
+  zettel-f  (/3/)
+  zettel-g  (/3/a/)
+  zettel-h  (/4/)
+  zettel-i  (/4/a/)
+  zettel-j  (/5/)
+  zettel-k  (/5/a/)
+  zettel-l  (/6/)
+  zettel-m  (/6/a/)
+  zettel-n  (/7/)
+  zettel-o  (/7/a/)
+  zettel-p  (/8/)
+  zettel-q  (/8/a/)
+  zettel-r  (/9/)
+  zettel-s  (/9/a/)
+  zettel-orphan  (/99/)
+
+Type this path: /1/
+
+────────────────────────────────────────────────────────────
+Quote: "Tags are not folders. A note can have many tags, and tags create emergent structure."
+— Ahrens, 'How to Take Smart Notes' (2017)
+────────────────────────────────────────────────────────────
+Principle: Tag-based filing: tags replace materialized paths, allowing multiple categorization.
+────────────────────────────────────────────────────────────
+
+
+Enter the materialized path (e.g., /1/a/1): /1/
+
+✓ Zettel 'zettel-1' filed at path '/1/'.
+Run 'zk trainer nextstep' to advance to Linking.
+
+>>> Advancing to Linking
+
+✓ Advanced to: linking
+
+>>> Step 3: Linking
+
+=== Linking: zettel-1 ===
+Your zettel: Authority in organizations depends on the subordinate zone of indifference. Beyond this zone complia...
+
+Available targets:
+  zettel-a  (/1/)
+  zettel-1  (/1/)
+  zettel-b  (/1/a/)
+  zettel-c  (/1/a/1/)
+  zettel-t  (/10/)
+  zettel-d  (/2/)
+  zettel-e  (/2/a/)
+  zettel-f  (/3/)
+  zettel-g  (/3/a/)
+  zettel-h  (/4/)
+  zettel-i  (/4/a/)
+  zettel-j  (/5/)
+  zettel-k  (/5/a/)
+  zettel-l  (/6/)
+  zettel-m  (/6/a/)
+  zettel-n  (/7/)
+  zettel-o  (/7/a/)
+  zettel-p  (/8/)
+  zettel-q  (/8/a/)
+  zettel-r  (/9/)
+  zettel-s  (/9/a/)
+  zettel-orphan  (/99/)
+
+────────────────────────────────────────────────────────────
+Quote: "Links should be meaningful. But the meaning can be implicit in the context of the note."
+— Semantic Hologram project documentation
+────────────────────────────────────────────────────────────
+Principle: Typed relationships: edges carry a family/type (e.g., causes/enables) instead of free-text context.
+────────────────────────────────────────────────────────────
+
+
+Type 'none' to skip (no targets yet).
+
+Target zettel ID (or 'none' to skip): none
+Skipped linking (no edges). Run 'zk trainer nextstep' to advance to Query.
+
+>>> Advancing to Query
+
+✓ Advanced to: query
+
+>>> Step 4: Query
+
+=== Query: zettel-1 ===
+Your zettel: Authority in organizations depends on the subordinate zone of indifference. Beyond this zone complia...
+
+Current Register:
+  Authority: zettel-a (rank 1)
+  Complexity: zettel-e (rank 1)
+  Knowledge: zettel-d (rank 4)
+  Leadership: zettel-c (rank 3)
+  Organization: zettel-b (rank 2)
+
+────────────────────────────────────────────────────────────
+Quote: "Search is the new register. Full-text search replaces hand-curated entry points."
+— Modern Zettelkasten practice (Roam, Obsidian)
+────────────────────────────────────────────────────────────
+Principle: Full-text search: the system finds relevant notes automatically, no register needed.
+────────────────────────────────────────────────────────────
+
+
+Type register keyword: Authority
+
+Register keyword: Authority
+Type priority rank: 1
+Priority rank (1-4): 1
+
+✓ Registered 'zettel-1' under 'Authority' (rank 1).
+Run 'zk trainer nextstep' to complete this dataset.
+
+>>> Completing dataset
+
+✓ Dataset 1 complete!
+Dataset 2 is ready. Run 'zk trainer intake' to begin.
+
+────────────────────────────────────────────────────────────
+  Dataset 2 of 3
+────────────────────────────────────────────────────────────
+
+>>> Step 1: Intake
+
+=== Linking: Incentives and Compliance ===
+
+Prompt: Read the following text. Write ONE atomic zettel in your own words.
+
+Text:
+Barnard's theory of incentives emphasizes that organizational compliance is maintained through a system of inducements. When an order falls outside the 'zone of indifference,' the organization must offer sufficient incentives (material, social, or personal) to secure cooperation. This suggests that authority is not a static property of a position but a dynamic equilibrium between the demands of the system and the inducements offered to the participant. Without adequate incentives, the 'zone of indifference' shrinks to zero, and the system must rely on coercion.
+
+Hint: Focus on how incentives relate to the 'zone of indifference' from your first note.
+
+Type this (or your own synthesis):
+> Barnard incentive theory complements Simon zone of indifference. When orders fall outside the zone organizations must offer inducements to maintain compliance. Authority is a dynamic equilibrium between system demands and participant incentives not a static positional property. Without sufficient incentives the zone of indifference collapses to zero.
+
+────────────────────────────────────────────────────────────
+Quote: "A zettel is an atomic unit of thought. One idea, one note, written in your own words."
+— Ahrens, 'How to Take Smart Notes' (2017)
+────────────────────────────────────────────────────────────
+Principle: Atomicity: each note holds one idea. This is shared with Luhmann's system.
+────────────────────────────────────────────────────────────
+
+
+Enter your synthesized zettel body: Barnard incentive theory complements Simon zone of indifference. When orders fall outside the zone organizations must offer inducements to maintain compliance. Authority is a dynamic equilibrium between system demands and participant incentives not a static positional property. Without sufficient incentives the zone of indifference collapses to zero.
+
+✓ Zettel 'zettel-2' created. Body: 47 words.
+Run 'zk trainer nextstep' to advance to Filing.
+
+>>> Advancing to Filing
+
+✓ Advanced to: filing
+
+>>> Step 2: Filing
+
+=== Filing: zettel-2 ===
+Current path: /2/
+Body: Barnard incentive theory complements Simon zone of indifference. When orders fall outside the zone o...
+
+Existing zettels:
+  zettel-a  (/1/)
+  zettel-1  (/1/)
+  zettel-b  (/1/a/)
+  zettel-c  (/1/a/1/)
+  zettel-t  (/10/)
+  zettel-d  (/2/)
+  zettel-2  (/2/)
+  zettel-e  (/2/a/)
+  zettel-f  (/3/)
+  zettel-g  (/3/a/)
+  zettel-h  (/4/)
+  zettel-i  (/4/a/)
+  zettel-j  (/5/)
+  zettel-k  (/5/a/)
+  zettel-l  (/6/)
+  zettel-m  (/6/a/)
+  zettel-n  (/7/)
+  zettel-o  (/7/a/)
+  zettel-p  (/8/)
+  zettel-q  (/8/a/)
+  zettel-r  (/9/)
+  zettel-s  (/9/a/)
+  zettel-orphan  (/99/)
+
+Type this path: /2/
+
+────────────────────────────────────────────────────────────
+Quote: "Tags are not folders. A note can have many tags, and tags create emergent structure."
+— Ahrens, 'How to Take Smart Notes' (2017)
+────────────────────────────────────────────────────────────
+Principle: Tag-based filing: tags replace materialized paths, allowing multiple categorization.
+────────────────────────────────────────────────────────────
+
+
+Enter the materialized path (e.g., /1/a/1): /1/a/
+
+✓ Zettel 'zettel-2' filed at path '/1/a/'.
+Run 'zk trainer nextstep' to advance to Linking.
+
+>>> Advancing to Linking
+
+✓ Advanced to: linking
+
+>>> Step 3: Linking
+
+=== Linking: zettel-2 ===
+Your zettel: Barnard incentive theory complements Simon zone of indifference. When orders fall outside the zone o...
+
+Available targets:
+  zettel-a  (/1/)
+  zettel-1  (/1/)
+  zettel-b  (/1/a/)
+  zettel-2  (/1/a/)
+  zettel-c  (/1/a/1/)
+  zettel-t  (/10/)
+  zettel-d  (/2/)
+  zettel-e  (/2/a/)
+  zettel-f  (/3/)
+  zettel-g  (/3/a/)
+  zettel-h  (/4/)
+  zettel-i  (/4/a/)
+  zettel-j  (/5/)
+  zettel-k  (/5/a/)
+  zettel-l  (/6/)
+  zettel-m  (/6/a/)
+  zettel-n  (/7/)
+  zettel-o  (/7/a/)
+  zettel-p  (/8/)
+  zettel-q  (/8/a/)
+  zettel-r  (/9/)
+  zettel-s  (/9/a/)
+  zettel-orphan  (/99/)
+
+────────────────────────────────────────────────────────────
+Quote: "Links should be meaningful. But the meaning can be implicit in the context of the note."
+— Semantic Hologram project documentation
+────────────────────────────────────────────────────────────
+Principle: Typed relationships: edges carry a family/type (e.g., causes/enables) instead of free-text context.
+────────────────────────────────────────────────────────────
+
+
+Type 'zettel-1' to link to your first note.
+
+Target zettel ID (or 'none' to skip): zettel-1
+
+Type thematic context: Grenze des Gehorsams
+
+────────────────────────────────────────────────────────────
+Quote: "Links should be meaningful. But the meaning can be implicit in the context of the note."
+— Semantic Hologram project documentation
+────────────────────────────────────────────────────────────
+Principle: Typed relationships: edges carry a family/type (e.g., causes/enables) instead of free-text context.
+────────────────────────────────────────────────────────────
+
+Thematic link context (2-5 words): Grenze des Gehorsams
+
+✓ Linked 'zettel-2' -> 'zettel-1' :: 'Grenze des Gehorsams'.
+Run 'zk trainer nextstep' to advance to Query.
+
+>>> Advancing to Query
+
+✓ Advanced to: query
+
+>>> Step 4: Query
+
+=== Query: zettel-2 ===
+Your zettel: Barnard incentive theory complements Simon zone of indifference. When orders fall outside the zone o...
+
+Current Register:
+  Authority: zettel-1 (rank 1)
+  Authority: zettel-a (rank 1)
+  Complexity: zettel-e (rank 1)
+  Knowledge: zettel-d (rank 4)
+  Leadership: zettel-c (rank 3)
+  Organization: zettel-b (rank 2)
+
+────────────────────────────────────────────────────────────
+Quote: "Search is the new register. Full-text search replaces hand-curated entry points."
+— Modern Zettelkasten practice (Roam, Obsidian)
+────────────────────────────────────────────────────────────
+Principle: Full-text search: the system finds relevant notes automatically, no register needed.
+────────────────────────────────────────────────────────────
+
+
+Type register keyword: Authority
+
+Register keyword: Authority
+Type priority rank: 2
+Priority rank (1-4): 2
+
+✓ Registered 'zettel-2' under 'Authority' (rank 2).
+Run 'zk trainer nextstep' to complete this dataset.
+
+>>> Completing dataset
+
+✓ Dataset 2 complete!
+Dataset 3 is ready. Run 'zk trainer intake' to begin.
+
+────────────────────────────────────────────────────────────
+  Dataset 3 of 3
+────────────────────────────────────────────────────────────
+
+>>> Step 1: Intake
+
+=== Query: Informal Resistance ===
+
+Prompt: Read the following text. Write ONE atomic zettel in your own words.
+
+Text:
+Roethlisberger and Dickson's Hawthorne studies revealed that informal groups within organizations develop their own norms and resistances that override formal authority. Workers' output was not determined by managerial incentives or positional authority, but by the unwritten codes of their peer groups. This suggests that the 'zone of indifference' is not just an individual psychological threshold but a socially constructed boundary maintained by group norms. Formal authority exists only insofar as informal groups permit it.
+
+Hint: Focus on how informal groups limit or redefine formal authority.
+
+Type this (or your own synthesis):
+> Roethlisberger and Dickson Hawthorne studies complicate both Simon and Barnard. Informal peer groups develop norms that override formal authority. Output is determined by group codes not managerial incentives. The zone of indifference is socially constructed not individually psychological. Formal authority exists only where informal groups permit it.
+
+────────────────────────────────────────────────────────────
+Quote: "A zettel is an atomic unit of thought. One idea, one note, written in your own words."
+— Ahrens, 'How to Take Smart Notes' (2017)
+────────────────────────────────────────────────────────────
+Principle: Atomicity: each note holds one idea. This is shared with Luhmann's system.
+────────────────────────────────────────────────────────────
+
+
+Enter your synthesized zettel body: Roethlisberger and Dickson Hawthorne studies complicate both Simon and Barnard. Informal peer groups develop norms that override formal authority. Output is determined by group codes not managerial incentives. The zone of indifference is socially constructed not individually psychological. Formal authority exists only where informal groups permit it.
+
+✓ Zettel 'zettel-3' created. Body: 47 words.
+Run 'zk trainer nextstep' to advance to Filing.
+
+>>> Advancing to Filing
+
+✓ Advanced to: filing
+
+>>> Step 2: Filing
+
+=== Filing: zettel-3 ===
+Current path: /3/
+Body: Roethlisberger and Dickson Hawthorne studies complicate both Simon and Barnard. Informal peer groups...
+
+Existing zettels:
+  zettel-a  (/1/)
+  zettel-1  (/1/)
+  zettel-b  (/1/a/)
+  zettel-2  (/1/a/)
+  zettel-c  (/1/a/1/)
+  zettel-t  (/10/)
+  zettel-d  (/2/)
+  zettel-e  (/2/a/)
+  zettel-f  (/3/)
+  zettel-3  (/3/)
+  zettel-g  (/3/a/)
+  zettel-h  (/4/)
+  zettel-i  (/4/a/)
+  zettel-j  (/5/)
+  zettel-k  (/5/a/)
+  zettel-l  (/6/)
+  zettel-m  (/6/a/)
+  zettel-n  (/7/)
+  zettel-o  (/7/a/)
+  zettel-p  (/8/)
+  zettel-q  (/8/a/)
+  zettel-r  (/9/)
+  zettel-s  (/9/a/)
+  zettel-orphan  (/99/)
+
+Type this path: /3/
+
+────────────────────────────────────────────────────────────
+Quote: "Tags are not folders. A note can have many tags, and tags create emergent structure."
+— Ahrens, 'How to Take Smart Notes' (2017)
+────────────────────────────────────────────────────────────
+Principle: Tag-based filing: tags replace materialized paths, allowing multiple categorization.
+────────────────────────────────────────────────────────────
+
+
+Enter the materialized path (e.g., /1/a/1): /1/a/1/
+
+✓ Zettel 'zettel-3' filed at path '/1/a/1/'.
+Run 'zk trainer nextstep' to advance to Linking.
+
+>>> Advancing to Linking
+
+✓ Advanced to: linking
+
+>>> Step 3: Linking
+
+=== Linking: zettel-3 ===
+Your zettel: Roethlisberger and Dickson Hawthorne studies complicate both Simon and Barnard. Informal peer groups...
+
+Available targets:
+  zettel-a  (/1/)
+  zettel-1  (/1/)
+  zettel-b  (/1/a/)
+  zettel-2  (/1/a/)
+  zettel-c  (/1/a/1/)
+  zettel-3  (/1/a/1/)
+  zettel-t  (/10/)
+  zettel-d  (/2/)
+  zettel-e  (/2/a/)
+  zettel-f  (/3/)
+  zettel-g  (/3/a/)
+  zettel-h  (/4/)
+  zettel-i  (/4/a/)
+  zettel-j  (/5/)
+  zettel-k  (/5/a/)
+  zettel-l  (/6/)
+  zettel-m  (/6/a/)
+  zettel-n  (/7/)
+  zettel-o  (/7/a/)
+  zettel-p  (/8/)
+  zettel-q  (/8/a/)
+  zettel-r  (/9/)
+  zettel-s  (/9/a/)
+  zettel-orphan  (/99/)
+
+────────────────────────────────────────────────────────────
+Quote: "Links should be meaningful. But the meaning can be implicit in the context of the note."
+— Semantic Hologram project documentation
+────────────────────────────────────────────────────────────
+Principle: Typed relationships: edges carry a family/type (e.g., causes/enables) instead of free-text context.
+────────────────────────────────────────────────────────────
+
+
+Type 'zettel-1' to link to your first note.
+
+Target zettel ID (or 'none' to skip): zettel-1
+
+Type thematic context: Informelle Widerstand
+
+────────────────────────────────────────────────────────────
+Quote: "Links should be meaningful. But the meaning can be implicit in the context of the note."
+— Semantic Hologram project documentation
+────────────────────────────────────────────────────────────
+Principle: Typed relationships: edges carry a family/type (e.g., causes/enables) instead of free-text context.
+────────────────────────────────────────────────────────────
+
+Thematic link context (2-5 words): Informelle Widerstand
+
+✓ Linked 'zettel-3' -> 'zettel-1' :: 'Informelle Widerstand'.
+Run 'zk trainer nextstep' to advance to Query.
+
+>>> Advancing to Query
+
+✓ Advanced to: query
+
+>>> Step 4: Query
+
+=== Query: zettel-3 ===
+Your zettel: Roethlisberger and Dickson Hawthorne studies complicate both Simon and Barnard. Informal peer groups...
+
+Current Register:
+  Authority: zettel-1 (rank 1)
+  Authority: zettel-2 (rank 2)
+  Authority: zettel-a (rank 1)
+  Complexity: zettel-e (rank 1)
+  Knowledge: zettel-d (rank 4)
+  Leadership: zettel-c (rank 3)
+  Organization: zettel-b (rank 2)
+
+────────────────────────────────────────────────────────────
+Quote: "Search is the new register. Full-text search replaces hand-curated entry points."
+— Modern Zettelkasten practice (Roam, Obsidian)
+────────────────────────────────────────────────────────────
+Principle: Full-text search: the system finds relevant notes automatically, no register needed.
+────────────────────────────────────────────────────────────
+
+
+Type register keyword: Authority
+
+Register keyword: Authority
+Type priority rank: 3
+Priority rank (1-4): 3
+
+✓ Registered 'zettel-3' under 'Authority' (rank 3).
+Run 'zk trainer nextstep' to complete this dataset.
+
+>>> Completing dataset
+
+✓ Dataset 3 complete!
+No more datasets. Run 'zk trainer reset' to replay.
+
+────────────────────────────────────────────────────────────
+  Level 2: Radial Linking & Septic Tank
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+Quote: "Backlinks are the modern equivalent of radial linking. Every note knows what links to it."
+— Modern Zettelkasten practice (Roam, Obsidian)
+────────────────────────────────────────────────────────────
+Principle: Bidirectional links: links are automatically reciprocal. No need to manually add reverse links.
+────────────────────────────────────────────────────────────
+
+
+Radial linking: one zettel links to MANY others.
+Type 'zettel-a' as the source, then 'zettel-b,zettel-c,zettel-d' as targets.
+
+Source zettel: zettel-a
+Target zettels (comma-separated): zettel-b,zettel-c,zettel-d
+  ✓ Linked zettel-a -> zettel-b
+  ✓ Linked zettel-a -> zettel-c
+  ✓ Linked zettel-a -> zettel-d
+
+'zettel-a' is now stored in 3 places via links.
+
+────────────────────────────────────────────────────────────
+Quote: "In modern systems, no note is ever deleted. Search finds everything, even orphans."
+— Modern Zettelkasten practice
+────────────────────────────────────────────────────────────
+Principle: No septic tank: all notes are kept. Search and tags make orphans findable.
+────────────────────────────────────────────────────────────
+
+
+Septic tank: checking for unconnected zettels...
+  ⚠ Flagged: zettel-orphan has no incoming or outgoing links.
+    This zettel would be filtered by the septic tank principle.
+
+────────────────────────────────────────────────────────────
+  Level 3: Query Traversal & Surprise
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────
+Quote: "Gravitas scoring ranks notes by importance. High-gravitas notes surface first."
+— Semantic Hologram project documentation
+────────────────────────────────────────────────────────────
+Principle: Gravitas: local/inherited/total scores rank notes by their connection weight.
+────────────────────────────────────────────────────────────
+
+
+Query traversal: given a keyword, walk the link graph.
+
+Enter a keyword to search (try 'Authority'): Authority
+
+Register entries for 'Authority':
+  zettel-1 (rank 1)
+  zettel-2 (rank 2)
+    -> zettel-1 :: Grenze des Gehorsams
+  zettel-3 (rank 3)
+    -> zettel-1 :: Informelle Widerstand
+  zettel-a (rank 1)
+    -> zettel-b :: Radial link
+    -> zettel-c :: Radial link
+    -> zettel-d :: Radial link
+
+────────────────────────────────────────────────────────────
+Quote: "Graph view shows connections you didn't know existed. The visualization IS the surprise."
+— Semantic Hologram project documentation
+────────────────────────────────────────────────────────────
+Principle: Graph visualization: the hologram renders connections spatially, making hidden links visible.
+────────────────────────────────────────────────────────────
+
+
+The zettelkasten surfaced connections you didn't explicitly make.
+This is the 'surprise' — the box thinks differently than you.
+
+============================================================
+  Level 3 Complete!
+============================================================
+
+Run 'zk trainer status' to see your work.
+Run 'zk trainer reset' to replay.
+
+============================================================
+SOURCES (for further research)
+============================================================
+- Luhmann, N. (1968). 'Zettelkasten' manuscript. Niklas Luhmann Archive.
+  https://niklas-luhmann-archiv.de
+- Luhmann, N. (1981). 'Kommunikation mit Zettelkästen.' In: Universitat Bielefeld.
+- Luhmann, N. (1987). Interview about the Zettelkasten. (Translated notes, ZK 2 9/8.)
+- Luhmann, N. ZK 2 9/8. Translated notes. Niklas Luhmann Archive.
+  https://v0.api.niklas-luhmann-archiv.de
+- Schmidt, J. F. K. (2015). 'Der Zettelkasten Niklas Luhmanns als Proto-Hypertext.' In: HyperKult.
+- Ahrens, S. (2017). 'How to Take Smart Notes.' CreateSpace Independent Publishing.
+- Semantic Hologram project documentation (AGENTS.md, docs/).
+  https://github.com/obsidian-semantic-hologram-plugin
+- Modern Zettelkasten practice (Roam Research, Obsidian community).
+

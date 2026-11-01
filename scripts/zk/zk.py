@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """zk — Zettelkasten Trainer CLI. Teaches Luhmann's system (1952) and Semantic Hologram (2026)."""
-import argparse, json, os, sqlite3, subprocess, sys, time
+import argparse, json, os, sqlite3, subprocess, sys, time, shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +21,9 @@ from quotes import get_quote, get_sources, format_quote
 
 _LOG_FILE = None
 _MODE = "luhmann"
+_NO_PAGER = False
+PAGE_LINES = 24
+SCREEN_WIDTH = 80
 
 
 def set_mode(mode):
@@ -30,6 +33,23 @@ def set_mode(mode):
 
 def get_mode():
     return _MODE
+
+def set_no_pager(val):
+    global _NO_PAGER
+    _NO_PAGER = val
+
+def print_page(text):
+    if _NO_PAGER:
+        tprint(text)
+        return
+    lines = text.splitlines()
+    for i in range(0, len(lines), PAGE_LINES):
+        chunk = "\n".join(lines[i:i+PAGE_LINES])
+        tprint(chunk)
+        if i + PAGE_LINES < len(lines):
+            ans = ask("-- More -- (Enter=continue, q=quit): ").strip()
+            if ans.lower() == 'q':
+                break
 
 
 def tprint(msg=""):
@@ -321,16 +341,15 @@ def cmd_intake(args):
     tprint(f"\nPrompt: Read the following text. Write ONE atomic zettel in your own words.")
     tprint(f"\nText:\n{data['text']}")
     tprint(f"\nHint: {data['hint']}")
-    tprint(f"\nType this (or your own synthesis):")
-    tprint(f"> {data['ideal']}")
+    tprint(f"\nType this exactly:\n> {data['ideal']}")
     show_quote("intake")
 
     while True:
         body = ask("\nEnter your synthesized zettel body: ").strip()
         if handle_chat_input(body):
             continue
-        if len(body.split()) < 20:
-            tprint("Error: Body must be at least 20 words.")
+        if body != data['ideal']:
+            tprint(f"Error: Mismatch. Type the exact text:\n> {data['ideal']}")
             continue
         break
 
@@ -377,7 +396,8 @@ def cmd_filing(args):
         for r in rows:
             tprint(f"  {r['id']}  ({r['path']})")
 
-    tprint(f"\nType this path: /{ds}/")
+    expected_path = "/" + f"{ds}/" if ds == 1 else ("/1/a/" if ds == 2 else "/1/a/1/")
+    tprint(f"\nType this exact path:\n> {expected_path}")
     show_quote("filing")
 
     while True:
@@ -386,6 +406,9 @@ def cmd_filing(args):
             continue
         if not path.startswith("/"):
             path = "/" + path
+        if path != expected_path:
+            tprint(f"Error: Mismatch. Type the exact path:\n> {expected_path}")
+            continue
         break
 
     conn.execute("UPDATE zettels SET path = ? WHERE id = ?", (path, zettel_id))
@@ -425,6 +448,11 @@ def cmd_link(args):
         for r in rows:
             tprint(f"  {r['id']}  ({r['path']})")
 
+    expected_target = "zettel-1" if ds > 1 else "none"
+    expected_label = "Grenze des Gehorsams" if ds == 2 else ("Informelle Widerstand" if ds == 3 else "")
+    if ds > 1:
+        tprint(f"\nType this exact target ID:\n> {expected_target}")
+        tprint(f"Type this exact context label:\n> {expected_label}")
     show_quote("linking")
 
     if ds == 1:
@@ -435,6 +463,9 @@ def cmd_link(args):
     while True:
         target = ask("\nTarget zettel ID (or 'none' to skip): ").strip()
         if handle_chat_input(target):
+            continue
+        if ds > 1 and target != expected_target:
+            tprint(f"Error: Mismatch. Type exact target:\n> {expected_target}")
             continue
         break
 
@@ -449,17 +480,17 @@ def cmd_link(args):
         tprint(f"Error: Target '{target}' not found.")
         return
 
-    if ds == 2:
-        tprint("\nType thematic context: Grenze des Gehorsams")
-    elif ds == 3:
-        tprint("\nType thematic context: Informelle Widerstand")
-    else:
-        tprint("\nType a 2-5 word thematic context.")
+    expected_label = "Grenze des Gehorsams" if ds == 2 else ("Informelle Widerstand" if ds == 3 else "")
+    if expected_label:
+        tprint(f"\nType this exact context label:\n> {expected_label}")
     show_quote("linking")
 
     while True:
         label = ask("Thematic link context (2-5 words): ").strip()
         if handle_chat_input(label):
+            continue
+        if expected_label and label != expected_label:
+            tprint(f"Error: Mismatch. Type exact label:\n> {expected_label}")
             continue
         if not label or len(label.split()) < 2:
             tprint("Error: Link context must be at least 2 words.")
@@ -507,20 +538,20 @@ def cmd_query(args):
         for r in rows:
             tprint(f"  {r['keyword']}: {r['zettel_id']} (rank {r['priority_rank']})")
 
+    expected_keyword = "Authority"
+    expected_rank = ds
+    tprint(f"\nType this exact keyword:\n> {expected_keyword}")
+    tprint(f"Type this exact priority rank:\n> {expected_rank}")
     show_quote("query")
-
-    tprint(f"\nType register keyword: Authority")
 
     while True:
         keyword = ask("\nRegister keyword: ").strip()
         if handle_chat_input(keyword):
             continue
-        if not keyword:
-            tprint("Error: Keyword required.")
+        if keyword != expected_keyword:
+            tprint(f"Error: Mismatch. Type exact keyword:\n> {expected_keyword}")
             continue
         break
-
-    tprint(f"Type priority rank: {ds}")
 
     while True:
         rank_str = ask("Priority rank (1-4): ").strip()
@@ -528,8 +559,9 @@ def cmd_query(args):
             continue
         try:
             rank = int(rank_str)
-            if rank < 1 or rank > 4:
-                raise ValueError
+            if rank != expected_rank or rank < 1 or rank > 4:
+                tprint(f"Error: Mismatch. Type exact rank:\n> {expected_rank}")
+                continue
             break
         except ValueError:
             tprint("Error: Rank must be an integer 1-4.")
@@ -752,8 +784,9 @@ def cmd_browse(args):
     conn.close()
 
 
-def run_level(level, mode, log_path, demo):
+def run_level(level, mode, log_path, demo, no_pager=False):
     set_mode(mode)
+    set_no_pager(no_pager)
     if log_path:
         open_log(log_path, level, mode)
 
@@ -924,8 +957,32 @@ def run_level(level, mode, log_path, demo):
     tprint(f"\n{'=' * 60}")
     tprint(f"  Level {level} Complete!")
     tprint(f"{'=' * 60}")
-    tprint(f"\nRun 'zk trainer status' to see your work.")
-    tprint(f"Run 'zk trainer reset' to replay.")
+    tprint("\nRun 'zk trainer status' to see your work.")
+    tprint("Run 'zk trainer reset' to replay.\n")
+
+    tprint("=" * 60)
+    tprint("CLI COMMAND SUMMARY")
+    tprint("=" * 60)
+    tprint("  zk trainer level1 : Run Level 1 training session")
+    tprint("  zk trainer level2 : Run Level 2 training session")
+    tprint("  zk trainer level3 : Run Level 3 training session")
+    tprint("  zk trainer level4 : Run Level 4 training session")
+    tprint("  zk add \"body\"     : Create a new scratch zettel")
+    tprint("  zk file <id> <p>  : Assign a materialized path to a zettel")
+    tprint("  zk link <s> <t> <c>: Add a cross-reference with thematic context")
+    tprint("  zk register <k> <i: Add a register entry point")
+    tprint("  zk query <kw>     : Traverse links and show register entries")
+    tprint("  zk browse         : Interactive zettelkasten card catalog browser")
+
+    tprint("\n" + "=" * 60)
+    tprint("SOURCES & LOCAL DOCUMENTATION")
+    tprint("=" * 60)
+    tprint("- Luhmann Archive: https://niklas-luhmann-archiv.de")
+    tprint("  Local docs: docs/functional/luhmann-zettelkasten-digital-alchemy.md")
+    tprint("- Luhmann ZK 2 9/8 API: https://v0.api.niklas-luhmann-archiv.de")
+    tprint("  Local docs: docs/functional/semantic-hologram-user-guide.md")
+    tprint("- Schmidt, J. F. K. (2015). 'Der Zettelkasten Niklas Luhmanns als Proto-Hypertext.'")
+    tprint("  Local docs: ~/.config/opencode/skills/zettelkasten/SKILL.md")
 
     close_log()
 
@@ -948,6 +1005,8 @@ def main():
                       help="Enable logging")
         p.add_argument("--demo", action="store_true", default=False,
                       help="Demo mode (pre-canned answers)")
+        p.add_argument("--no-pager", action="store_true", default=False,
+                      help="Disable pagination")
 
     trainer_sub.add_parser("reset", help="Reset training data only")
 

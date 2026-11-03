@@ -317,6 +317,28 @@ INTAKE_TEXTS = {
 }
 
 
+def render_ascii_zettel(zettel_id, path, body, citekey=None):
+    width = 76
+    border = "─" * width
+    tprint(f"┌{border}┐")
+    tprint(f"│ ZETTEL: {zettel_id:<63} │")
+    tprint(f"│ PATH:   {path:<63} │")
+    if citekey:
+        tprint(f"│ CITE:   {citekey:<63} │")
+    tprint(f"├{border}┤")
+    words = body.split()
+    line = ""
+    for w in words:
+        if len(line) + len(w) + 1 <= width - 4:
+            line = (line + " " + w).strip()
+        else:
+            tprint(f"│  {line:<72} │")
+            line = w
+    if line:
+        tprint(f"│  {line:<72} │")
+    tprint(f"└{border}┘")
+
+
 def show_quote(key):
     q = format_quote(key, get_mode())
     if q:

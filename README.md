@@ -410,7 +410,36 @@ Configuration lives under **Settings → Semantic Hologram**:
 
 ---
 
-## Development
+## Zettelkasten CLI & Trainer
+
+For users wanting to master Niklas Luhmann's traditional Zettelkasten slip-box method, the project includes a dedicated command-line trainer located under `scripts/zk/`.
+
+### Getting Started with the ZK Trainer
+
+The trainer walks you through the four core workflow areas of Luhmann's methodology:
+1. **Intake (Exzerpieren)**: Harvesting atomic thoughts from external source texts in your own words (Septic Tank Principle).
+2. **Filing (Folgezettel Placement)**: Placing slips radially adjacent to conceptual neighbors with permanent branch addresses.
+3. **Linking (Verweisungstechnik)**: Connecting related ideas with mandatory 2–5 word thematic context justifications.
+4. **Query (The Register / Abt. 4)**: Curating entry-point index entries and priority ranks.
+
+#### Commands & Usage
+- **Interactive Training (Level 1–4)**:
+  ```bash
+  python3 scripts/zk/zk.py trainer level1
+  ```
+  *(Default runs dataset 1; add `--all` to run all datasets in a level).*
+- **Orientation Mode**:
+  ```bash
+  python3 scripts/zk/zk.py trainer orientation
+  ```
+  *(Explores Luhmann's methodology, system purpose, and standalone CLI commands).*
+- **Demo Mode (Non-Interactive)**:
+  ```bash
+  python3 scripts/zk/zk.py trainer level1 --demo --luhmann
+  ```
+  *(Feeds pre-canned answers automatically for testing or cheat-sheet generation).*
+
+---
 
 Requires Node.js 18+.
 

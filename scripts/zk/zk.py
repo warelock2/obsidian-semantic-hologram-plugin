@@ -22,6 +22,14 @@ from quotes import get_quote, get_sources, format_quote
 _LOG_FILE = None
 _MODE = "luhmann"
 _NO_PAGER = False
+_DEMO_MODE = False
+_CURRENT_IDEAL = ""
+_CURRENT_EXPECTED_PATH = ""
+_CURRENT_EXPECTED_TARGET = "none"
+_CURRENT_EXPECTED_LABEL = ""
+_CURRENT_EXPECTED_KEYWORD = "Authority"
+_CURRENT_EXPECTED_RANK = 1
+
 PAGE_LINES = 24
 SCREEN_WIDTH = 80
 
@@ -37,6 +45,13 @@ def get_mode():
 def set_no_pager(val):
     global _NO_PAGER
     _NO_PAGER = val
+
+def set_demo(val):
+    global _DEMO_MODE
+    _DEMO_MODE = val
+
+def get_demo():
+    return _DEMO_MODE
 
 def print_page(text):
     if _NO_PAGER:
@@ -60,12 +75,42 @@ def tprint(msg=""):
 
 
 def ask(prompt):
+    global _DEMO_MODE, _CURRENT_IDEAL, _CURRENT_EXPECTED_PATH, _CURRENT_EXPECTED_TARGET, _CURRENT_EXPECTED_LABEL, _CURRENT_EXPECTED_KEYWORD, _CURRENT_EXPECTED_RANK
+    # Prefix interactive command prompts and logged instructions with `$ `
+    prompt = f"$ {prompt}"
     sys.stdout.write(prompt)
     sys.stdout.flush()
     if _LOG_FILE:
         _LOG_FILE.write(prompt)
         _LOG_FILE.flush()
-    answer = input()
+    
+    if _DEMO_MODE:
+        if "-- More --" in prompt:
+            answer = ""
+        elif "zettel body" in prompt:
+            answer = _CURRENT_IDEAL or "Synthesized zettel body."
+        elif "materialized path" in prompt or "Luhmann index" in prompt:
+            answer = _CURRENT_EXPECTED_PATH or "/1/"
+        elif "Target zettel ID" in prompt:
+            answer = _CURRENT_EXPECTED_TARGET or "none"
+        elif "Thematic link context" in prompt:
+            answer = _CURRENT_EXPECTED_LABEL or "Informelle Widerstand"
+        elif "Register keyword" in prompt:
+            answer = _CURRENT_EXPECTED_KEYWORD or "Authority"
+        elif "Priority rank" in prompt:
+            answer = str(_CURRENT_EXPECTED_RANK or 1)
+        elif "Source zettel" in prompt:
+            answer = "zettel-1"
+        elif "Target zettels" in prompt:
+            answer = "zettel-b,zettel-c,zettel-d"
+        elif "keyword to search" in prompt:
+            answer = "Authority"
+        else:
+            answer = "resume"
+    else:
+        answer = input()
+
+    print(answer)
     if _LOG_FILE:
         _LOG_FILE.write(answer + "\n")
         _LOG_FILE.flush()
@@ -318,25 +363,25 @@ INTAKE_TEXTS = {
 
 
 def render_ascii_zettel(zettel_id, path, body, citekey=None):
-    width = 76
-    border = "─" * width
-    tprint(f"┌{border}┐")
-    tprint(f"│ ZETTEL: {zettel_id:<63} │")
-    tprint(f"│ PATH:   {path:<63} │")
+    mode = get_mode()
+    # No outline borders — clean plain text to eliminate alignment issues
+    inner = 74
+    tprint(f"ZETTEL: {zettel_id}")
+    if mode != 'luhmann':
+        tprint(f"PATH:   {path}")
     if citekey:
-        tprint(f"│ CITE:   {citekey:<63} │")
-    tprint(f"├{border}┤")
+        tprint(f"CITE:   {citekey}")
     words = body.split()
     line = ""
     for w in words:
-        if len(line) + len(w) + 1 <= width - 4:
-            line = (line + " " + w).strip()
+        next_line = (line + " " + w).strip() if line else w
+        if len(next_line) <= inner:
+            line = next_line
         else:
-            tprint(f"│  {line:<72} │")
+            tprint("  " + line)
             line = w
     if line:
-        tprint(f"│  {line:<72} │")
-    tprint(f"└{border}┘")
+        tprint("  " + line)
 
 
 def show_quote(key):
@@ -346,6 +391,7 @@ def show_quote(key):
 
 
 def cmd_intake(args):
+    global _CURRENT_IDEAL
     conn = init_db()
     state = sess_mod.load_session()
     if state["step"] != "intake":
@@ -358,15 +404,30 @@ def cmd_intake(args):
         tprint("No more datasets. Run 'zk trainer reset' to replay.")
         return
 
+    _CURRENT_IDEAL = data['ideal']
     mode = get_mode()
     tprint(f"\n=== {data['title']} ===")
-    tprint(f"\nPrompt: Read the following text. Write ONE atomic zettel in your own words.")
+    tprint("\nYou are Niklas Luhmann, researcher at your desk.")
+    tprint("You sit down with a book. You are reading with an open, receptive mind,")
+    tprint("letting the text provoke friction, surprise, or new questions.")
+    tprint("You take out a blank slip of paper and a pencil.")
+    tprint("\n--- Contemplation ---")
+    tprint("As you read, you encounter a passage that captures a core truth or paradox.")
+    tprint("You ask yourself: 'What is the single atomic idea here that I must capture'")
+    tprint("in my own words, so it becomes part of my permanent thinking engine?'")
+    
+    tprint(f"\nPrompt: Read the source text below.")
     tprint(f"\nText:\n{data['text']}")
     tprint(f"\nHint: {data['hint']}")
-    tprint(f"\nType this exactly:\n> {data['ideal']}")
+    
+    tprint(f"\nTo capture this as your first draft on paper, type these exact words:")
+    tprint(f"> \033[30;107m{data['ideal']}\033[0m")
     show_quote("intake")
 
     while True:
+        tprint("[Why: The zettel must be atomic to pass verification.]")
+        tprint(f"[What to type: \033[30;107m{data['ideal']}\033[0m]")
+        tprint("[Expected: '✓ Zettel created' with word count.]")
         body = ask("\nEnter your synthesized zettel body: ").strip()
         if handle_chat_input(body):
             continue
@@ -390,10 +451,21 @@ def cmd_intake(args):
     conn.close()
 
     tprint(f"\n✓ Zettel '{zettel_id}' created. Body: {len(body.split())} words.")
+    tprint("\nZETTEL SLIP:")
+    tprint("")
+    tprint("─" * 40)
+    render_ascii_zettel(zettel_id, path, body, data.get('citekey'))
+    tprint("─" * 40)
+    tprint("")
+
+    tprint("Commands used (without trainer):")
+    tprint("  zk add \"<body>\"  → creates zettel; zk file <id> <path>→assigns path manually")
     tprint("Run 'zk trainer nextstep' to advance to Filing.")
+    ask("\nThis section is done. Press enter to continue: ")
 
 
 def cmd_filing(args):
+    global _CURRENT_EXPECTED_PATH
     conn = init_db()
     state = sess_mod.load_session()
     if state["step"] != "filing":
@@ -408,29 +480,79 @@ def cmd_filing(args):
         return
 
     mode = get_mode()
-    tprint(f"\n=== Filing: {zettel_id} ===")
-    tprint(f"Current path: /{ds}/")
+    tprint(f"\n{'=' * 60}")
+    tprint(f"  STEP 2: FILING (Folgezettel Placement) — Dataset {ds}")
+    tprint(f"{'=' * 60}")
+    tprint("\nYou hold the fresh slip of paper in your hand.")
+    tprint("You ask yourself: 'Where does this slip belong in my wooden box?'")
+    tprint("Luhmann did not use top-down folders. Instead, he placed each new note")
+    tprint("radially — physically adjacent to its closest conceptual neighbor.")
+    tprint("If expanding a thought, he gave it a branch address (Folgezettel, e.g. 1a1).")
+    
+    tprint(f"\nBEFORE (Blank address):")
+    tprint("")
+    tprint("─" * 40)
+    render_ascii_zettel(zettel_id, "", note['body'], note.get('citekey'))
+    tprint("─" * 40)
+    tprint("")
+    
     tprint(f"Body: {note['body'][:100]}...")
 
     rows = conn.execute("SELECT id, path FROM zettels WHERE training=1 ORDER BY path").fetchall()
     if rows:
         tprint("\nExisting zettels:")
         for r in rows:
-            tprint(f"  {r['id']}  ({r['path']})")
+            if mode == 'luhmann':
+                # In Luhmann mode show only zettel IDs; materialized paths hidden
+                tprint(f"  {r['id']}")
+            else:
+                tprint(f"  {r['id']}  ({r['path']})")
 
+    # Luhmann index / materialized path derived from dataset
+    luhmann_index = f"{ds}" if ds == 1 else (f"1{chr(96+ds)}{ds}" if ds <= 3 else f"1a{ds}")
     expected_path = "/" + f"{ds}/" if ds == 1 else ("/1/a/" if ds == 2 else "/1/a/1/")
-    tprint(f"\nType this exact path:\n> {expected_path}")
+    
+    tprint("\n--- Contemplation ---")
+    tprint("You ask yourself: 'What is the address of this slip?'")
+    tprint("You write the index at the top of the slip — this is its permanent home.")
+    tprint("The address encodes where it sits in relation to its neighbors.")
+    tprint("Luhmann never renumbered; the address is fixed forever.")
+
+    if mode == 'luhmann':
+        tprint(f"\nLuhmann Index:")
+        tprint(f"> \033[30;107m{luhmann_index}\033[0m")
+        _CURRENT_EXPECTED_PATH = luhmann_index
+        prompt_text = f"\nEnter the Luhmann index (e.g., {luhmann_index}): "
+    else:
+        tprint(f"\nMaterialized path:")
+        tprint(f"> \033[30;107m{expected_path}\033[0m")
+        _CURRENT_EXPECTED_PATH = expected_path
+        prompt_text = f"\nEnter the materialized path (e.g., {expected_path}): "
+    
     show_quote("filing")
 
     while True:
-        path = ask("\nEnter the materialized path (e.g., /1/a/1): ").strip()
-        if handle_chat_input(path):
+        tprint("[Why: Filing assigns a materialized path derived from the Luhmann index.]")
+        tprint("[What to type the Luhmann index:]")
+        tprint(f"\033[30;107m{luhmann_index}\033[0m")
+        tprint(f"[Expected result: Zettel filed with index mapped to /{ds}/ (internal storage).]")
+        path_input = ask(prompt_text).strip()
+        if handle_chat_input(path_input):
             continue
-        if not path.startswith("/"):
-            path = "/" + path
-        if path != expected_path:
-            tprint(f"Error: Mismatch. Type the exact path:\n> {expected_path}")
-            continue
+        
+        # In luhmann mode, we expect the index, map it to the path for storage
+        if mode == 'luhmann':
+            if path_input != luhmann_index:
+                tprint(f"Error: Mismatch. Type the exact Luhmann index:\n> {luhmann_index}")
+                continue
+            path = expected_path
+        else:
+            if not path_input.startswith("/"):
+                path_input = "/" + path_input
+            if path_input != expected_path:
+                tprint(f"Error: Mismatch. Type the exact path:\n> {expected_path}")
+                continue
+            path = path_input
         break
 
     conn.execute("UPDATE zettels SET path = ? WHERE id = ?", (path, zettel_id))
@@ -442,11 +564,34 @@ def cmd_filing(args):
     atomic_write_json(conn, zettel_id, f"Filing: {zettel_id} -> {path}")
     conn.close()
 
-    tprint(f"\n✓ Zettel '{zettel_id}' filed at path '{path}'.")
-    tprint("Run 'zk trainer nextstep' to advance to Linking.")
+    if mode == 'luhmann':
+        tprint(f"\n✓ Zettel '{zettel_id}' filed with Luhmann index: {luhmann_index}.")
+    else:
+        tprint(f"\n✓ Zettel '{zettel_id}' filed at path '{path}'.")
+    
+    tprint("\n--- Contemplation ---")
+    tprint("You now write the index at the top of the slip and place it in the box.")
+    tprint("The address is permanent: you will never renumber or move this slip.")
+    tprint("Structure emerges from where slips sit next to each other, not from folders.")
+    
+    tprint("\nAFTER (Filed slip with address written at top):")
+    tprint("")
+    tprint("─" * 40)
+    render_ascii_zettel(zettel_id, path, note['body'], note.get('citekey'))
+    tprint("─" * 40)
+    tprint("")
+    
+    tprint("Commands used (without trainer):")
+    tprint("  zk file zettel-N <path>  → files zettel; zk add \"<body>\" → creates it")
+    if ds > 1:
+        tprint("Run 'zk trainer nextstep' to advance to Linking.")
+    else:
+        tprint("Run 'zk trainer nextstep' to advance to Query.")
+    ask("\nThis section is done. Press enter to continue: ")
 
 
 def cmd_link(args):
+    global _CURRENT_EXPECTED_TARGET, _CURRENT_EXPECTED_LABEL
     conn = init_db()
     state = sess_mod.load_session()
     if state["step"] != "linking":
@@ -461,32 +606,63 @@ def cmd_link(args):
         return
 
     mode = get_mode()
-    tprint(f"\n=== Linking: {zettel_id} ===")
-    tprint(f"Your zettel: {note['body'][:100]}...")
-
-    rows = conn.execute("SELECT id, path FROM zettels WHERE training=1 ORDER BY path").fetchall()
-    if rows:
-        tprint("\nAvailable targets:")
-        for r in rows:
-            tprint(f"  {r['id']}  ({r['path']})")
 
     expected_target = "zettel-1" if ds > 1 else "none"
     expected_label = "Grenze des Gehorsams" if ds == 2 else ("Informelle Widerstand" if ds == 3 else "")
+    _CURRENT_EXPECTED_TARGET = expected_target
+    _CURRENT_EXPECTED_LABEL = expected_label
+
+    tprint(f"\n{'=' * 60}")
+    tprint(f"  STEP 3: LINKING (Verweisungstechnik) — Dataset {ds}")
+    tprint(f"{'=' * 60}")
+    tprint(f"\nYou hold two slips of paper: the new {zettel_id} and a prior note.")
+    tprint("You ask yourself: 'How does this new thought relate to what I already know?'")
+    tprint("Luhmann bridged distant branches with cross-references (vgl.), and crucially,")
+    tprint("he attached a mandatory thematic context — 2-5 words explaining *why* the link exists.")
+    tprint("A bare link is just a pointer; a justified link creates knowledge.")
+    
+    tprint(f"\nYour zettel: {note['body'][:100]}...")
+
+    rows = conn.execute("SELECT id, path FROM zettels WHERE training=1 AND id != ? ORDER BY path", (zettel_id,)).fetchall()
+    if rows:
+        tprint("\nAvailable targets:")
+        for r in rows:
+            if mode == 'luhmann':
+                tprint(f"  {r['id']}")
+            else:
+                tprint(f"  {r['id']}  ({r['path']})")
+
     if ds > 1:
-        tprint(f"\nType this exact target ID:\n> {expected_target}")
-        tprint(f"Type this exact context label:\n> {expected_label}")
+        tprint("\n--- Contemplation ---")
+        tprint("You ask yourself: 'Which existing slip does this new slip belong next to?'")
+        tprint("You place your finger on the target zettel and write the cross-reference.")
+        tprint("But you don't stop there — you must justify *why* you connect them.")
+        tprint("You type the target ID and then a 2-5 word thematic context label.")
+    
+    if ds > 1:
+        tprint(f"\nType this exact target ID:\n> \033[30;107m{expected_target}\033[0m")
+        tprint(f"Type this exact context label:\n> \033[30;107m{expected_label}\033[0m")
     show_quote("linking")
 
     if ds == 1:
-        tprint("\nType 'none' to skip (no targets yet).")
+        tprint("\nAs this is your first zettel, there are no existing targets to link to.")
+        tprint("Type 'none' to skip linking for now.")
     elif ds in (2, 3):
         tprint(f"\nType 'zettel-1' to link to your first note.")
 
     while True:
+        tprint("[Why: Radial linking connects this zettel to a previous one; target must exist.]")
+        if ds == 1:
+            tprint("[What to type to skip linking:]")
+            tprint(f"\033[30;107mnone\033[0m")
+        else:
+            tprint("[What to type target ID:]")
+            tprint(f"\033[30;107m{expected_target}\033[0m")
+        tprint("[Expected result: '✓ Linked ... :: label' or 'Skipped linking'.]")
         target = ask("\nTarget zettel ID (or 'none' to skip): ").strip()
         if handle_chat_input(target):
             continue
-        if ds > 1 and target != expected_target:
+        if target != expected_target:
             tprint(f"Error: Mismatch. Type exact target:\n> {expected_target}")
             continue
         break
@@ -494,6 +670,8 @@ def cmd_link(args):
     if target.lower() == "none":
         state["notes"][zettel_id]["edges"] = state["notes"][zettel_id].get("edges", [])
         sess_mod.save_session(state)
+        tprint("Commands used (without trainer):")
+        tprint("  zk link <source> <target> <context> → creates link with label")
         tprint("Skipped linking (no edges). Run 'zk trainer nextstep' to advance to Query.")
         return
 
@@ -508,6 +686,10 @@ def cmd_link(args):
     show_quote("linking")
 
     while True:
+        tprint("[Why: Link context justifies the connection (Luhmann's mandatory justification).]")
+        tprint("[What to type thematic link context:]")
+        tprint(f"\033[30;107m{expected_label}\033[0m")
+        tprint("[Expected result: '✓ Linked ... :: label'.]")
         label = ask("Thematic link context (2-5 words): ").strip()
         if handle_chat_input(label):
             continue
@@ -533,10 +715,20 @@ def cmd_link(args):
     conn.close()
 
     tprint(f"\n✓ Linked '{zettel_id}' -> '{target}' :: '{label}'.")
+    
+    tprint("\n--- Contemplation ---")
+    tprint("You now have two slips in conversation with each other.")
+    tprint("Knowledge is created not by the slip itself, but by the link between slips.")
+    tprint("Luhmann called his Zettelkasten his 'communication partner' — the links are where thinking happens.")
+
+    tprint("Commands used (without trainer):")
+    tprint("  zk link <source> <target-id> \"label\"  → target = existing zettel ID (e.g., zettel-1)")
     tprint("Run 'zk trainer nextstep' to advance to Query.")
+    ask("\nThis section is done. Press enter to continue: ")
 
 
 def cmd_query(args):
+    global _CURRENT_EXPECTED_KEYWORD, _CURRENT_EXPECTED_RANK
     conn = init_db()
     state = sess_mod.load_session()
     if state["step"] != "query":
@@ -551,8 +743,16 @@ def cmd_query(args):
         return
 
     mode = get_mode()
-    tprint(f"\n=== Query: {zettel_id} ===")
-    tprint(f"Your zettel: {note['body'][:100]}...")
+
+    tprint(f"\n{'=' * 60}")
+    tprint(f"  STEP 4: QUERY (The Register / Abt. 4) — Dataset {ds}")
+    tprint(f"{'=' * 60}")
+    tprint(f"\nYou step back from your wooden box and look at the whole system.")
+    tprint("You ask yourself: 'Given a keyword, which central entry-point slips does this point to?'")
+    tprint("Luhmann's Register was not an exhaustive Google-style index — it pointed to only")
+    tprint("1-4 curated entry-point zettels per keyword, acting like a directory of starting points.")
+    
+    tprint(f"\nYour zettel: {note['body'][:100]}...")
 
     rows = conn.execute("SELECT * FROM register_entries ORDER BY keyword").fetchall()
     if rows:
@@ -562,11 +762,25 @@ def cmd_query(args):
 
     expected_keyword = "Authority"
     expected_rank = ds
-    tprint(f"\nType this exact keyword:\n> {expected_keyword}")
-    tprint(f"Type this exact priority rank:\n> {expected_rank}")
+    _CURRENT_EXPECTED_KEYWORD = expected_keyword
+    _CURRENT_EXPECTED_RANK = expected_rank
+
+    tprint("\n--- Contemplation ---")
+    tprint("You consult your index box: which slips are central to 'Authority'?")
+    tprint("You register your new slip as an entry point with a priority rank.")
+    tprint("The register is curated — only the most important entry points per keyword.")
+
+    tprint(f"\nType this exact keyword:")
+    tprint(f"> \033[30;107m{expected_keyword}\033[0m")
+    tprint(f"Type this exact priority rank:")
+    tprint(f"> \033[30;107m{expected_rank}\033[0m")
     show_quote("query")
 
     while True:
+        tprint("[Why: Register is a curated entry point, not an exhaustive index (max 4 per keyword).]")
+        tprint("[What to type register keyword:]")
+        tprint(f"\033[30;107m{expected_keyword}\033[0m")
+        tprint("[Expected result: Registered under keyword with assigned priority rank.]")
         keyword = ask("\nRegister keyword: ").strip()
         if handle_chat_input(keyword):
             continue
@@ -576,6 +790,10 @@ def cmd_query(args):
         break
 
     while True:
+        tprint("[Why: Priority rank orders the 1-4 register entries (derived from dataset sequence).]")
+        tprint("[What to type priority rank:]")
+        tprint(f"\033[30;107m{expected_rank}\033[0m")
+        tprint("[Expected result: '✓ Registered ... (rank N)'.]")
         rank_str = ask("Priority rank (1-4): ").strip()
         if handle_chat_input(rank_str):
             continue
@@ -601,7 +819,16 @@ def cmd_query(args):
     conn.close()
 
     tprint(f"\n✓ Registered '{zettel_id}' under '{keyword}' (rank {rank}).")
+    
+    tprint("\n--- Contemplation ---")
+    tprint("Your slip is now a curated entry point in the Register box.")
+    tprint("You can find this thought again by keyword — the Register is your directory.")
+    tprint("Like Luhmann's 'communication partner,' the box now helps you compose original thought.")
+
+    tprint("Commands used (without trainer):")
+    tprint("  zk register <keyword> <zettel-id> → adds curated register entry; query traverses graph")
     tprint("Run 'zk trainer nextstep' to complete this dataset.")
+    ask("\nThis section is done. Press enter to continue: ")
 
 
 def cmd_nextstep(args):
@@ -761,6 +988,37 @@ def cmd_query_scratch(args):
     conn.close()
 
 
+def cmd_orientation(args):
+    tprint("\n" + "=" * 60)
+    tprint("  ZK Trainer — Orientation")
+    tprint("=" * 60)
+    tprint("\n[1/3] THE LUHMANN FOUNDATION")
+    tprint("Niklas Luhmann (1927-1998) worked on his Zettelkasten for over 40 years.")
+    tprint("It grew to over 73,000 notes and served as the communication partner")
+    tprint("that allowed him to produce over 40 books and hundreds of papers.")
+    tprint("He did not just 'organize' knowledge; he built a hypermedia thinking engine.")
+
+    tprint("\n[2/3] SYSTEM & PURPOSE")
+    tprint("This is an advanced note-taking system. Luhmann created the Zettelkasten")
+    tprint("not as a file cabinet, but to manage complexity and handle the paradoxes")
+    tprint("of social systems. It captures interrelated concepts in a 'second brain'")
+    tprint("that works through associative memory.")
+    tprint("Our software translates his physical workflows (Intake, Filing, Linking,")
+    tprint("Query) into a digital graph, turning your notes into a collaborative")
+    tprint("partner that helps you compose original thought.")
+    tprint("Linking connects one zettel to another by its zettel-ID (e.g., zettel-1).")
+
+    tprint("\n[3/3] GETTING STARTED")
+    tprint("To begin interactively:  'python3 scripts/zk/zk.py trainer level1'")
+    tprint("(Omit --demo until you want to observe a replay; --demo feeds pre-canned")
+    tprint("answers and creates the reference 'cheat-sheet' logs automatically.)")
+    tprint("If you get stuck, the trainer guides you. You can also view previous")
+    tprint("trainer sessions (cheat sheets) here:")
+    tprint("  scripts/zk/logs/cheat-sheet/")
+    tprint("\nGood luck. The machine is now listening.")
+    tprint("=" * 60 + "\n")
+
+
 def cmd_browse(args):
     conn = init_db()
     tprint("\n=== Card Catalog Browser ===")
@@ -806,9 +1064,10 @@ def cmd_browse(args):
     conn.close()
 
 
-def run_level(level, mode, log_path, demo, no_pager=False):
+def run_level(level, mode, log_path, demo, no_pager=False, all_datasets=False):
     set_mode(mode)
     set_no_pager(no_pager)
+    set_demo(demo)
     if log_path:
         open_log(log_path, level, mode)
 
@@ -856,10 +1115,11 @@ def run_level(level, mode, log_path, demo, no_pager=False):
 
     sess_mod.reset_session()
 
-    # Run through all 3 datasets
-    for ds in range(1, 4):
+    # Determine dataset count
+    dataset_count = 3 if all_datasets else 1
+    for ds in range(1, dataset_count + 1):
         tprint(f"\n{'─' * 60}")
-        tprint(f"  Dataset {ds} of 3")
+        tprint(f"  Dataset {ds} of {dataset_count}")
         tprint(f"{'─' * 60}")
 
         tprint("\n>>> Step 1: Intake")
@@ -871,20 +1131,53 @@ def run_level(level, mode, log_path, demo, no_pager=False):
         tprint("\n>>> Step 2: Filing")
         cmd_filing(None)
 
-        tprint("\n>>> Advancing to Linking")
-        cmd_nextstep(None)
+        if ds > 1:
+            tprint("\n>>> Advancing to Linking")
+            cmd_nextstep(None)
 
-        tprint("\n>>> Step 3: Linking")
-        cmd_link(None)
+            tprint("\n>>> Step 3: Linking")
+            cmd_link(None)
 
-        tprint("\n>>> Advancing to Query")
-        cmd_nextstep(None)
+            tprint("\n>>> Advancing to Query")
+            cmd_nextstep(None)
+        else:
+            st = sess_mod.load_session()
+            if "filing" not in st["completed"]:
+                st["completed"].append("filing")
+            st["step"] = "query"
+            sess_mod.save_session(st)
 
         tprint("\n>>> Step 4: Query")
         cmd_query(None)
 
+        # Review: render the finalized paper-slip equivalent for this dataset
+        tprint(f"\n{'─' * 60}")
+        tprint(f"  Dataset {ds} Review: Final Zettel Slip")
+        tprint(f"{'─' * 60}")
+        conn = init_db()
+        zettel_id = f"zettel-{ds}"
+        zrow = conn.execute("SELECT * FROM zettels WHERE id = ?", (zettel_id,)).fetchone()
+        if zrow:
+            render_ascii_zettel(zrow['id'], zrow['path'], zrow['body'], None)
+        conn.close()
+        tprint(f"{'─' * 60}\n")
+
+        ask("\nThis section is done. Press enter to continue: ")
+
         tprint("\n>>> Completing dataset")
         cmd_nextstep(None)
+
+        if ds < dataset_count:
+            tprint(f"\n[Command to reach next dataset ({ds+1}):")
+            mode_flag = "--semantic-hologram" if mode == "semantic-hologram" else "--luhmann"
+            tprint(f"  python3 scripts/zk/zk.py trainer level{level} {mode_flag}")
+            tprint("] Run that command to continue learning.\n")
+        elif ds == 1 and dataset_count == 1:
+            # Default single-dataset: prompt to continue to dataset 2
+            tprint(f"\n[Continue to Dataset 2: run the same command again, or use --all for full session]")
+            mode_flag = "--semantic-hologram" if mode == "semantic-hologram" else "--luhmann"
+            tprint(f"  python3 scripts/zk/zk.py trainer level{level} {mode_flag}")
+            tprint("] The session state advances; run again to resume at Dataset 2.\n")
 
     # Level-specific additional steps
     if level >= 2:
@@ -893,7 +1186,7 @@ def run_level(level, mode, log_path, demo, no_pager=False):
         tprint(f"{'─' * 60}")
         show_quote("radial")
         tprint("\nRadial linking: one zettel links to MANY others.")
-        tprint("Type 'zettel-a' as the source, then 'zettel-b,zettel-c,zettel-d' as targets.")
+        tprint("Type \033[30;107mzettel-a\033[0m as the source, then \033[30;107mzettel-b,zettel-c,zettel-d\033[0m as targets.")
 
         while True:
             src = ask("\nSource zettel: ").strip()
@@ -935,6 +1228,7 @@ def run_level(level, mode, log_path, demo, no_pager=False):
         else:
             tprint("  No orphaned zettels found.")
         conn.close()
+        ask("\nThis section is done. Press enter to continue: ")
 
     if level >= 3:
         tprint(f"\n{'─' * 60}")
@@ -961,6 +1255,7 @@ def run_level(level, mode, log_path, demo, no_pager=False):
         else:
             tprint(f"  No register entries for '{kw}'.")
         conn.close()
+        ask("\nThis section is done. Press enter to continue: ")
         show_quote("surprise")
         tprint("\nThe zettelkasten surfaced connections you didn't explicitly make.")
         tprint("This is the 'surprise' — the box thinks differently than you.")
@@ -981,6 +1276,7 @@ def run_level(level, mode, log_path, demo, no_pager=False):
     tprint(f"{'=' * 60}")
     tprint("\nRun 'zk trainer status' to see your work.")
     tprint("Run 'zk trainer reset' to replay.\n")
+    ask("Press Enter to finish level: ")
 
     tprint("=" * 60)
     tprint("CLI COMMAND SUMMARY")
@@ -1029,6 +1325,8 @@ def main():
                       help="Demo mode (pre-canned answers)")
         p.add_argument("--no-pager", action="store_true", default=False,
                       help="Disable pagination")
+        p.add_argument("--all", action="store_true", default=False,
+                      dest="all_datasets", help="Run all 3 datasets (default: dataset 1 only)")
 
     trainer_sub.add_parser("reset", help="Reset training data only")
 
@@ -1050,6 +1348,7 @@ def main():
     sub.add_parser("status", help="Show current session state")
     sub.add_parser("reset", help="Reset everything")
     sub.add_parser("browse", help="Browse the card catalog")
+    sub.add_parser("orientation", help="Orientation: learn about Luhmann and the Zettelkasten system")
 
     # Scratch mode
     add_p = sub.add_parser("add", help="Create a zettel")
@@ -1074,7 +1373,8 @@ def main():
             level = int(args.trainer_command.replace("level", ""))
             log_path = args.log if hasattr(args, "log") else False
             demo = args.demo if hasattr(args, "demo") else False
-            run_level(level, mode, log_path, demo)
+            all_datasets = args.all_datasets if hasattr(args, "all_datasets") else False
+            run_level(level, mode, log_path, demo, all_datasets=all_datasets)
         elif args.trainer_command == "reset":
             cmd_reset(args)
         elif args.trainer_command == "mcp":
@@ -1103,6 +1403,8 @@ def main():
         cmd_reset(args)
     elif args.command == "browse":
         cmd_browse(args)
+    elif args.command == "orientation":
+        cmd_orientation(args)
     elif args.command == "add":
         cmd_add(args)
     elif args.command == "file":

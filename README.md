@@ -69,19 +69,41 @@ Zettelkasten](https://zettelkasten.de/introduction/), or read the overview on
 
 ## Installation
 
-Semantic Hologram is an **Obsidian plugin**.
+Semantic Hologram can be installed either via **Obsidian42 - BRAT** (recommended for automatic beta updates) or **manually**.
 
-1. Open Obsidian and go to **Settings → Community plugins**.
-2. Select **Browse** to open the community plugin list.
-3. Search for **Semantic Holograms**.
-4. Select the plugin and choose **Install**, then **Enable**.
+### Option 1: Via Obsidian42 - BRAT (Recommended)
 
-That is all that is required. Open the hologram from the ribbon icon
-(**waypoints**), or run the command **“Open Semantic Hologram graph”** from the
-command palette.
+BRAT allows you to install and automatically receive updates for beta plugins directly from GitHub:
 
-> Requires a desktop or mobile Obsidian that supports community plugins. The plugin
-> is not desktop-only.
+1. Install the **Obsidian42 - BRAT** plugin from Obsidian's Community Plugins directory:
+   - Go to **Settings** → **Community plugins** → **Browse**.
+   - Search for **Obsidian42 - BRAT**, click **Install**, then **Enable**.
+2. Open the command palette (`Ctrl+P` / `Cmd+P`) and run:
+   - `BRAT: Add a beta plugin for testing`
+   - *(Or go to **Settings** → **BRAT** → click **Add Beta plugin**)*.
+3. Paste the repository URL:
+   ```text
+   https://github.com/warelock/obsidian-semantic-hologram-plugin
+   ```
+4. Click **Add Plugin**. BRAT will download the latest release and prompt you to enable it.
+
+### Option 2: Manual Installation
+
+If you prefer not to use BRAT:
+
+1. Download the latest release files (`main.js`, `manifest.json`, and `styles.css`) from the [GitHub Releases](https://github.com/warelock/obsidian-semantic-hologram-plugin/releases) page.
+2. In your Obsidian vault folder, navigate to `.obsidian/plugins/` (create the directory if it doesn't exist).
+3. Create a new folder named `semantic-hologram`:
+   ```text
+   <YourVault>/.obsidian/plugins/semantic-hologram/
+   ```
+4. Place `main.js`, `manifest.json`, and `styles.css` into that `semantic-hologram/` folder.
+5. In Obsidian, go to **Settings** → **Community plugins** → click **Reload plugins** (or restart Obsidian).
+6. Find **Semantic Hologram** in the list and toggle it **On**.
+
+---
+
+Once installed, open the hologram from the ribbon icon (**waypoints**), or run the command **“Open Semantic Hologram graph”** from the command palette.
 
 ---
 
